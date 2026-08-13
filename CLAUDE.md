@@ -63,6 +63,10 @@ python -m quantscraper jobstream              # poll Sweden's delta feed
 ```
 
 ```bash
+python -m quantscraper alerts                 # flag sources that broke quietly
+```
+
+```bash
 python -m unittest discover -s tests          # regression tests
 ```
 
@@ -110,6 +114,7 @@ registries/*.py  ->  employers table  ->  resolve.py  ->  firms table
 - `ats.py` — Layer 2: domain -> `(ats, token)` by fingerprint, else tier B/C
 - `extract.py` — Layer 3: one function per ATS format; postings land in `jobs`
 - `jobstream.py` — Layer 4: Sweden's national delta feed, cursor in `feed_state`
+- `alerts.py` — per-source volume anomaly detection over the `runs` history
 - `registries/` — one module per source
 
 `roster.csv` is the *audit set*, never the universe. A firm's absence from it

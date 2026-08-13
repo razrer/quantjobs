@@ -48,7 +48,7 @@ nothing in the near-term plan now waits on a human.
 | 5 | Layer 2 — ATS resolution | **in progress** — 4,386 tiered, 12,100 queued |
 | 6 | Layer 3 — ATS extraction | **done** — all 10 formats landing, 16,124 jobs |
 | 7 | Layer 4 — JobTech JobStream (Sweden) | **done** — delta polling live |
-| 8 | Silent-failure alerting | not started |
+| 8 | Silent-failure alerting | **done** — `alerts`, distributional |
 | 9 | Layer 3B — Tier B change detection | not started |
 | 10 | Coverage measurement | not started |
 | 11 | Layer 5 — job tagging | designed, not started — `TAGGING.md` |
@@ -586,14 +586,41 @@ registry.
 
 ---
 
-## Stage 8 — Silent-failure alerting
+## Stage 8 — Silent-failure alerting *(done)*
 
-Per-source volume anomaly detection on the `runs` history, and assert-non-empty
-everywhere. `MIN_EXPECTED` is the crude version of this and already exists;
-this stage makes it distributional rather than a fixed floor.
+`alerts.py` plus `python -m quantscraper alerts`, which exits non-zero so a
+scheduled run fails visibly rather than scrolling past.
 
-**Exit criterion:** deliberately breaking a parser produces an alert rather than
-a quiet zero.
+**Exit criterion — met.** Breaking the Cboe parser live produced
+`fail cboe_europe: Cboe Europe trading firms list not found` and exit 1;
+restoring it returned `all sources healthy` and exit 0.
+
+**Why a fixed floor was not enough.** `MIN_EXPECTED` only catches catastrophe.
+Finanstilsynet normally returns 26,495 rows and declares a floor of 15,000 — a
+parser that breaks and returns 16,000 clears the floor while having lost 40% of
+the register, and nothing announces it. The check is now distributional:
+compare a run against what that source has historically returned.
+
+**Median, not mean.** Volumes are small samples and one bad run poisons a mean:
+a source returning 0 today drags its own baseline down and looks healthy
+tomorrow. The median is unmoved by a single outlier, so a breakage cannot
+quietly become the new normal. There is a test for exactly that.
+
+Four conditions, each a real way a source has failed or could: `fail` (the
+fetch raised), `empty` (zero rows, no error), `shrank` (materially below the
+historical median), `stale` (no successful run in 30 days). Plus `unrun` — a
+registry that was added and never wired into a schedule, which from inside
+`runs` is indistinguishable from a healthy one because it has no rows to be
+wrong.
+
+A source with fewer than two prior runs is not judged. One run is not a
+baseline, and inventing one produces noise on exactly the sources that are
+newest and least verified.
+
+**A bug this stage found in itself:** `runs.started_at` has one-second
+resolution, so two runs inside the same second ordered arbitrarily and the
+check could pick the wrong one as "latest" — reporting the broken run as
+history and the healthy one as current. Ordering now breaks ties on `id`.
 
 ---
 

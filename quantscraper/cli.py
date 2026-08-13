@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from . import ats, audit, db, domains, extract, fca, jobstream, resolve
+from . import alerts, ats, audit, db, domains, extract, fca, jobstream, resolve
 from .registries import REGISTRIES
 
 # The registries covering the focus hubs. Domain resolution starts here because
@@ -157,6 +157,24 @@ def _jobstream(database: str) -> int:
     return 0
 
 
+def _alerts(database: str) -> int:
+    connection = db.connect(database)
+    found = alerts.check(connection)
+    never_run = alerts.coverage(connection)
+
+    for alert in found:
+        print(alert, file=sys.stderr)
+    for source in never_run:
+        print(f"{'unrun':8s} {source:20s} registered but never fetched", file=sys.stderr)
+
+    if not found and not never_run:
+        print("all sources healthy")
+        return 0
+    # Non-zero so a scheduled run fails visibly instead of scrolling past.
+    print(f"{len(found) + len(never_run)} alert(s)", file=sys.stderr)
+    return 1
+
+
 def _stats(database: str) -> int:
     connection = db.connect(database)
 
@@ -248,7 +266,13 @@ def main(argv: list[str] | None = None) -> int:
         "jobstream", help="poll Sweden's JobTech delta feed (Layer 4)"
     )
 
+    commands.add_parser(
+        "alerts", help="flag sources that broke quietly (Layer 0 health)"
+    )
+
     args = parser.parse_args(argv)
+    if args.command == "alerts":
+        return _alerts(args.db)
     if args.command == "jobstream":
         return _jobstream(args.db)
     if args.command == "jobs":
