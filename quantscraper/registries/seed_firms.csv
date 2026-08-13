@@ -1,0 +1,19 @@
+name,city,country,category,website
+# ── Amsterdam: sponsored-access / MiFID II Art. 2(1)(d) exempt firms ──────────
+# Da Vinci trades through another firm's exchange membership and appears in no
+# public register (not AFM, not FIA EPTA, not Eurex, not Euronext).
+Da Vinci Derivatives,Amsterdam,NL,Prop trading firm,https://davinciderivatives.com
+# Small options / market-making shops with no known licence registration.
+Maverick Derivatives,Amsterdam,NL,Prop trading firm,
+ORA Traders,Amsterdam,NL,Prop trading firm,
+Nino Options,Amsterdam,NL,Prop trading firm,
+# US/Australian firms with Amsterdam operations unlikely to be in EU registries.
+Five Rings,Amsterdam,NL,Prop trading firm,https://fiverings.com
+VivCourt Trading,Amsterdam,NL,Prop trading firm,https://vivcourt.com
+# ── Stockholm: AP buffer funds (governed by AP-fondlagen, not FI-supervised) ──
+# AP7 is FI-supervised and appears in fi_se; AP1-AP4 and AP6 do not.
+AP1 (Första AP-fonden),Stockholm,SE,Pension fund,https://www.ap1.se
+AP2 (Andra AP-fonden),Gothenburg,SE,Pension fund,https://www.ap2.se
+AP3 (Tredje AP-fonden),Stockholm,SE,Pension fund,https://www.ap3.se
+AP4 (Fjärde AP-fonden),Stockholm,SE,Pension fund,https://www.ap4.se
+AP6 (Sjätte AP-fonden),Gothenburg,SE,Pension fund,https://www.ap6.se

@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from . import db, resolve
+from . import audit, db, resolve
 from .registries import REGISTRIES
 
 
@@ -41,6 +41,17 @@ def _resolve(database: str) -> int:
     connection = db.connect(database)
     firms, rows = resolve.build_firms(connection)
     print(f"resolved {rows:,d} employer rows into {firms:,d} firms")
+    return 0
+
+
+def _audit(database: str, verbose: bool) -> int:
+    connection = db.connect(database)
+    if not connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'firms'"
+    ).fetchone():
+        print("no firms table -- run `resolve` first", file=sys.stderr)
+        return 1
+    print(audit.format_report(audit.run(connection, audit.load_roster()), verbose))
     return 0
 
 
@@ -97,12 +108,20 @@ def main(argv: list[str] | None = None) -> int:
     )
     commands.add_parser("resolve", help="group employer rows into firms")
     commands.add_parser("stats", help="show what is in the database")
+    audit_command = commands.add_parser(
+        "audit", help="check the universe against the named roster"
+    )
+    audit_command.add_argument(
+        "-v", "--verbose", action="store_true", help="list what each hit matched"
+    )
 
     args = parser.parse_args(argv)
     if args.command == "stats":
         return _stats(args.db)
     if args.command == "resolve":
         return _resolve(args.db)
+    if args.command == "audit":
+        return _audit(args.db, args.verbose)
     return _fetch(args.registries or list(REGISTRIES), args.db)
 
 

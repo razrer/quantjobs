@@ -36,8 +36,8 @@ nothing in the near-term plan now waits on a human.
 |---|---|---|
 | 0 | Employer universe — raw collection | done |
 | 1 | Employer identity (entity resolution) | done |
-| 2 | Coverage audit harness | **next** |
-| 3 | Close audit-flagged gaps | not started |
+| 2 | Coverage audit harness | done |
+| 3 | Close audit-flagged gaps | **next** |
 | 4 | Layer 2 — domain resolution | not started |
 | 5 | Layer 2 — ATS resolution | not started |
 | 6 | Layer 3 — ATS extraction | not started |
@@ -116,48 +116,79 @@ after Stage 4 costs nothing.
 
 ---
 
-## Stage 2 — Coverage audit harness
+## Stage 2 — Coverage audit harness *(done)*
 
-**The problem.** Coverage has been checked with ad-hoc `grep`s typed fresh each
-time. That is not repeatable, and it is the direct cause of at least one
+**The problem.** Coverage had been checked with ad-hoc `grep`s typed fresh each
+time. That is not repeatable, and it was the direct cause of at least one
 overstated claim about which firms were missing.
 
-**Build.** The methodology's named roster (~130 firms across 11 hubs) as a
-checked-in fixture, plus `python -m quantscraper audit` reporting present/missing
-per hub, matched through Stage 1's resolution.
+**Built.** `quantscraper/roster.csv` — 163 entries across 11 hubs, expanded from
+the methodology's named roster — plus `python -m quantscraper audit`, matching
+through Stage 1's resolution.
 
-The roster is the *audit set*, never the universe — it measures coverage, it
-does not define it. Keep the deprioritized hubs in the fixture but report them
-separately, so London and the US measure coverage without competing for
-attention with the hubs that matter.
+The roster is the *audit set*, never the universe. Deprioritized hubs stay in
+the fixture but report separately, so London and the US measure coverage without
+competing for attention with the hubs that matter.
 
-**Exit criteria:**
-- [ ] `audit` runs and reports per-hub hit rate
-- [ ] every miss **in a focus hub** is either fixed or recorded with a reason
-- [ ] known-stale roster entries (IPM) are marked so they stop reading as bugs
+**Exit criteria — all met:**
+- [x] `audit` runs and reports per-hub hit rate
+- [x] every miss in a focus hub is recorded with a reason, printed by `audit`
+- [x] stale entries (IPM) and never-real entries (AP5) are marked and excluded
+
+**Focus-hub result:** Stockholm 19/20, Amsterdam 12/13, Switzerland 9/11,
+Copenhagen 5/7, Singapore 7/10, Hong Kong 9/9, Dubai 3/7.
+
+**What this stage found.** Reporting one number per hub would have been
+misleading, so the audit reports two: *present* (in the universe under some
+name) and *local* (some row places the firm in that hub's country).
+
+1. **Hong Kong reads 9/9 present but 1 local.** Every HK roster firm except HSBC
+   is visible only through a US registration. A single hit-rate would have
+   declared Hong Kong solved while no HK register had been ingested at all.
+   Dubai is the same story at 3/7 present, 0 local.
+2. **A false hit hides a miss**, which makes it worse than a false miss here. A
+   bare `Grasshopper` roster entry matched `GRASSHOPPER ESCAPEMENT, LLC` and
+   reported Singapore one firm better covered than it was. Caught by printing
+   the employer names each entry matched, which `-v` now always does; roster
+   names are kept specific for the same reason.
+3. **Two focus-hub misses are fixable bugs, not missing registries** — see
+   Stage 3 items 1 and 2 below. Both were invisible before this stage.
+4. **Three Shanghai firms were found via Hong Kong** — Mingshi, Lingjun and
+   Tianyan hold HK entities in `sec_adv`. A hub can be partly covered from a
+   neighbour, which is only visible with a repeatable check.
 
 ---
 
 ## Stage 3 — Close audit-flagged gaps
 
-Only now add sources, and only the ones Stage 2 proves are needed. Ordered by
-the geographic priority above:
+Only now add sources, and only the ones Stage 2 proved are needed. The first two
+are new — the audit found them, and they are cheap because the registry already
+exists:
 
-1. **Finanstilsynet** (DK) — Copenhagen, the largest uncovered focus hub
-2. **FINMA** (CH) — Switzerland
-3. **SFC** (HK) and **MAS** (SG) — both publish public registers
-4. **DFSA** (DIFC) and **FSRA** (ADGM) — Dubai and Abu Dhabi
-5. **Nasdaq Stockholm** and **Cboe Europe** participant lists — same shape as
-   `eurex`; Cboe is also the best remaining shot at sponsored-access firms
-6. Hand-maintained seed file for firms no public list carries (AP1–AP6, Da Vinci)
+1. **`fi_se` category walk is incomplete** (SE, Stockholm). It walks 20 of FI's
+   139 categories. Alecta — Sweden's largest occupational pension manager — is a
+   mutual (*ömsesidigt*) undertaking, not a `Tjänstepensionsaktiebolag`, so it
+   falls outside all 20. One line in `CATEGORIES` per category added.
+2. **DNB register** (NL, Amsterdam). Dutch pension asset managers are
+   DNB-supervised, not AFM. PGGM is absent entirely; APG survives only through
+   its US entity. The methodology names this register; it was never built.
+3. **Finanstilsynet** (DK) — Copenhagen, 5/7 present and 3 local
+4. **FINMA** (CH) — Switzerland, 9/11 present but only 5 local
+5. **SFC** (HK) and **MAS** (SG) — the two hubs the audit shows are covered in
+   name only
+6. **DFSA** (DIFC) and **FSRA** (ADGM) — Dubai, the weakest focus hub at 3/7
+7. **Seed file additions** — sovereign wealth funds (ADIA, ADQ, Mubadala, GIC,
+   Temasek) appear in no financial register anywhere and no registry will ever
+   reach them. Five lines in `seed_firms.csv` closes five focus-hub misses.
+8. **Nasdaq Stockholm** participant list — same shape as `eurex`
 
 Deferred with the deprioritized regions: BaFin (DE), FCA (UK), AMAC (CN), and
 the US state-adviser tail. Each is a known gap with a written reason, not an
 oversight — pick them up if the focus hubs run dry.
 
-**Exit criterion:** audit miss list for focus hubs is empty, or every remaining
-miss has a written reason and an entry in `ACTION-REQUIRED.md` if it needs a
-human.
+**Exit criterion:** `audit` reports no focus-hub miss without a written reason,
+and every miss that a buildable source would fix is fixed. Item 7 is the cheapest
+and should go first.
 
 ---
 

@@ -34,6 +34,12 @@ python -m quantscraper resolve   # group raw rows into firms
 python -m quantscraper stats     # what is in the database
 ```
 
+```bash
+python -m quantscraper audit     # check the universe against the named roster
+```
+
+`run.ps1` / `run.sh` wrap these with the correct interpreter (see below).
+
 **Interpreter gotcha — this will waste your time otherwise.** Bare `python`
 here resolves to the msys2 build, which ships without a CA bundle, so every
 HTTPS request dies with `CERTIFICATE_VERIFY_FAILED`. Use the Windows Python:
@@ -50,7 +56,10 @@ raise `UnicodeEncodeError` on this console.
 ```
 registries/*.py  ->  employers table  ->  resolve.py  ->  firms table
    (one module         (raw, never          (grouping)      (deduplicated)
-    per source)         edited)
+    per source)         edited)                                  |
+                                            audit.py  <----------+
+                                          (measures coverage
+                                           against roster.csv)
 ```
 
 - `models.py` — `Employer`, the one record type registries produce
@@ -58,7 +67,14 @@ registries/*.py  ->  employers table  ->  resolve.py  ->  firms table
 - `parsing.py` — minimal HTML table helper for registries that publish web pages
 - `db.py` — SQLite schema and upserts
 - `resolve.py` — entity resolution
+- `audit.py` — coverage measurement against `roster.csv`; reads only
 - `registries/` — one module per source
+
+`roster.csv` is the *audit set*, never the universe. A firm's absence from it
+says nothing about whether it belongs. When adding entries, keep names specific:
+a bare `Grasshopper` matched an unrelated `GRASSHOPPER ESCAPEMENT, LLC` and
+reported a hub better covered than it was. A false hit hides a miss, so it is
+worse than a false miss — the same bias as principle 3 below.
 
 **No third-party dependencies.** Standard library only, so there is nothing to
 install. Keep it that way unless there is a strong reason not to.

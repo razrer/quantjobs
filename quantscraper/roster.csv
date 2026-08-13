@@ -1,0 +1,202 @@
+# The methodology's named roster, as a checked-in audit fixture.
+#
+# THIS IS NOT THE UNIVERSE. It is the *audit set*: a hand-named list used to
+# measure whether the employer universe found firms we already know exist. It
+# never gates ingestion, and a firm's absence from this file says nothing.
+#
+# Columns
+#   hub       office city or region, as the methodology groups them
+#   priority  focus | deprioritized -- reported separately so the deprioritized
+#             hubs cannot drown out the ones that matter
+#   name      the roster name, verbatim where possible
+#   aliases   '|'-separated alternative names; a match on any one counts
+#   status    active | stale | absent
+#               stale  -- the firm is gone; a miss is correct, not a bug
+#               absent -- the roster entry never named a real firm
+#   note      why, for anything not plainly active
+#
+# Prose entries in the methodology ("plus all bulge-bracket banks", "plus the
+# DIFC/ADGM registers", "Optiver-adjacent market makers", "plus domestic quant
+# funds via AMAC") are expanded into named firms where they name any, and
+# dropped where they do not -- an unenumerable entry cannot be audited.
+#
+# A hub label is where the *office* is. Matching is on the firm, not the
+# office: Optiver appears under five hubs and one match satisfies all five.
+# Office-level presence is not verifiable until Layer 2 resolves careers feeds,
+# so read a hub's hit rate as "these firms are in the universe", never as "we
+# have their local entity".
+hub,priority,name,aliases,status,note
+# ── Stockholm ────────────────────────────────────────────────────────────────
+Stockholm,focus,Lynx Asset Management,Lynx Hedge,active,
+Stockholm,focus,Brummer & Partners,Brummer|Nektar Asset Management,active,
+Stockholm,focus,IPM,Informed Portfolio Management,stale,Wound down December 2021. Absence is correct.
+Stockholm,focus,Nordkinn,Nordkinn Asset Management,active,
+Stockholm,focus,Captor,Captor Fund Management,active,
+Stockholm,focus,Coeli,Coeli Asset Management,active,
+Stockholm,focus,Norron,Norron Asset Management,active,Fund management business being sold to Simplicity AB (announced July 2026).
+Stockholm,focus,Atlant,Atlant Fonder,active,
+Stockholm,focus,AP1,Första AP-fonden,active,Not FI-supervised; carried by the seed registry.
+Stockholm,focus,AP2,Andra AP-fonden,active,Not FI-supervised; carried by the seed registry.
+Stockholm,focus,AP3,Tredje AP-fonden,active,Not FI-supervised; carried by the seed registry.
+Stockholm,focus,AP4,Fjärde AP-fonden,active,Not FI-supervised; carried by the seed registry.
+Stockholm,focus,AP5,Femte AP-fonden,absent,No Femte AP-fonden exists. The buffer funds are AP1-AP4 and AP6; AP7 runs the premium pension default.
+Stockholm,focus,AP6,Sjätte AP-fonden,active,Not FI-supervised; carried by the seed registry.
+Stockholm,focus,AP7,Sjunde AP-fonden,active,
+Stockholm,focus,Nasdaq Stockholm,Nasdaq Clearing|Nasdaq,active,
+Stockholm,focus,SEB,Skandinaviska Enskilda Banken,active,
+Stockholm,focus,Handelsbanken,Svenska Handelsbanken,active,
+Stockholm,focus,Swedbank,,active,
+Stockholm,focus,Nordea,Nordea Bank,active,
+Stockholm,focus,Alecta,Alecta Tjänstepension,active,MISS: fi_se walks 20 of FI's 139 categories and Alecta is a mutual (ömsesidigt) occupational pension undertaking, which is not one of them. Fixable by adding the category.
+Stockholm,focus,AMF,AMF Fonder|AMF Pensionsförsäkring,active,
+# ── Copenhagen ───────────────────────────────────────────────────────────────
+Copenhagen,focus,Danske Bank,Danske Invest,active,
+Copenhagen,focus,Nordea DK,Nordea Danmark|Nordea Bank,active,Same group as the Stockholm entry; one match satisfies both.
+Copenhagen,focus,ATP,Arbejdsmarkedets Tillægspension,active,MISS: no Danish register ingested. Finanstilsynet is the first Stage 3 source.
+Copenhagen,focus,PFA,PFA Pension,active,MISS: no Danish register ingested. Finanstilsynet is the first Stage 3 source.
+Copenhagen,focus,Saxo Bank,Saxo,active,
+Copenhagen,focus,Jyske,Jyske Bank,active,
+Copenhagen,focus,Maj Invest,,active,
+# ── Amsterdam ────────────────────────────────────────────────────────────────
+Amsterdam,focus,Optiver,,active,
+Amsterdam,focus,IMC,IMC Trading|IMC Financial Markets,active,
+Amsterdam,focus,Flow Traders,,active,
+Amsterdam,focus,Da Vinci,Da Vinci Derivatives,active,Sponsored access; in no public register. Carried by the seed registry.
+Amsterdam,focus,Webb Traders,,active,Being acquired by Marex Group (announced February 2026). May stop appearing under its own name.
+Amsterdam,focus,All Options,,active,
+Amsterdam,focus,Mako,Mako Global|Mako Financial Markets,active,
+Amsterdam,focus,Vivienne,Vivienne Investeringen|Vivienne Court Trading,active,
+Amsterdam,focus,323 Trading,323 Trading Group,active,
+Amsterdam,focus,ABN AMRO,,active,
+Amsterdam,focus,Robeco,,active,
+Amsterdam,focus,APG,APG Asset Management,active,
+Amsterdam,focus,PGGM,PGGM Vermogensbeheer,active,MISS: Dutch pension asset managers are DNB-supervised and only the AFM register is ingested. Same reason APG is present only through its US entity.
+# ── Switzerland ──────────────────────────────────────────────────────────────
+Switzerland,focus,UBS,,active,
+Switzerland,focus,Pictet,,active,
+Switzerland,focus,Lombard Odier,,active,
+Switzerland,focus,Julius Baer,Julius Bär,active,MISS: no Swiss register ingested. FINMA is the second Stage 3 source.
+Switzerland,focus,Vontobel,,active,
+Switzerland,focus,Zürcher Kantonalbank,Zurcher Kantonalbank|ZKB,active,
+Switzerland,focus,Unigestion,,active,
+Switzerland,focus,Systematica,Systematica Investments,active,
+Switzerland,focus,GAM,GAM Holding|GAM Investments,active,Systematic arm effectively wound down 2024-2025. Keep but rank low.
+Switzerland,focus,Swiss Re,,active,Markets side only.
+Switzerland,focus,Zurich Insurance,Zurich Insurance Group,active,MISS: no Swiss register ingested. Markets side only. FINMA is the second Stage 3 source.
+# ── Dubai ────────────────────────────────────────────────────────────────────
+Dubai,focus,DRW,DRW Trading|DRW Investments,active,
+Dubai,focus,Millennium,Millennium Management,active,
+Dubai,focus,Balyasny,Balyasny Asset Management,active,
+Dubai,focus,ADIA,Abu Dhabi Investment Authority,active,MISS: sovereign wealth fund; appears in no financial register and is unlikely to be reachable except through the seed file.
+Dubai,focus,ADQ,,active,MISS: sovereign wealth fund; appears in no financial register and is unlikely to be reachable except through the seed file.
+Dubai,focus,Mubadala,Mubadala Investment Company,active,MISS: sovereign wealth fund; appears in no financial register and is unlikely to be reachable except through the seed file.
+Dubai,focus,Emirates NBD,,active,MISS: no Gulf register ingested. DFSA (DIFC) and FSRA (ADGM) are the fourth Stage 3 source.
+# ── Hong Kong ────────────────────────────────────────────────────────────────
+Hong Kong,focus,Optiver,,active,
+Hong Kong,focus,Jump Trading,Jump,active,
+Hong Kong,focus,Tower Research Capital,Tower Research|Latour Trading,active,
+Hong Kong,focus,Jane Street,,active,
+Hong Kong,focus,Millennium,Millennium Management,active,
+Hong Kong,focus,Point72,Point72 Asset Management,active,
+Hong Kong,focus,HSBC,,active,
+Hong Kong,focus,Goldman Sachs,,active,
+Hong Kong,focus,Citadel Securities,,active,
+# ── Singapore ────────────────────────────────────────────────────────────────
+Singapore,focus,Optiver,,active,
+Singapore,focus,Jane Street,,active,
+Singapore,focus,Flow Traders,,active,
+Singapore,focus,Jump Trading,Jump,active,
+Singapore,focus,Tower Research Capital,Tower Research|Latour Trading,active,
+Singapore,focus,GIC,GIC Private,active,MISS: sovereign wealth fund; appears in no financial register and is unlikely to be reachable except through the seed file.
+Singapore,focus,Temasek,,active,MISS: sovereign wealth fund; appears in no financial register and is unlikely to be reachable except through the seed file.
+Singapore,focus,DBS,DBS Bank,active,
+Singapore,focus,Grasshopper Asia,,active,MISS: no Singapore register ingested. MAS is the third Stage 3 source. Deliberately not aliased to a bare "Grasshopper" -- that matched an unrelated GRASSHOPPER ESCAPEMENT LLC and reported Singapore as covered when it was not.
+Singapore,focus,Vivienne,Vivienne Court Trading,active,
+# ── London ───────────────────────────────────────────────────────────────────
+London,deprioritized,Jane Street,,active,
+London,deprioritized,Citadel,Citadel Advisors,active,Separate employer from Citadel Securities; separate careers page.
+London,deprioritized,Citadel Securities,,active,
+London,deprioritized,Man AHL,AHL Partners|Man Group|Man Investments,active,
+London,deprioritized,Marshall Wace,,active,
+London,deprioritized,GSA,GSA Capital,active,
+London,deprioritized,Squarepoint,Squarepoint Capital|Squarepoint Ops,active,
+London,deprioritized,Qube,Qube Research & Technologies,active,
+London,deprioritized,XTX Markets,XTX,active,
+London,deprioritized,G-Research,G Research,active,MISS: no UK register ingested. FCA is deferred with the deprioritized regions and needs credentials.
+London,deprioritized,Millennium,Millennium Management,active,
+London,deprioritized,Balyasny,Balyasny Asset Management,active,
+London,deprioritized,Point72,Point72 Asset Management,active,
+London,deprioritized,DRW,DRW Trading,active,
+London,deprioritized,Jump Trading,Jump,active,
+London,deprioritized,Optiver,,active,
+London,deprioritized,Quadrature,Quadrature Capital,active,
+London,deprioritized,Aspect,Aspect Capital,active,
+London,deprioritized,Winton,Winton Capital|Winton Group,active,
+London,deprioritized,Goldman Sachs,,active,Bulge bracket.
+London,deprioritized,Morgan Stanley,,active,Bulge bracket.
+London,deprioritized,JPMorgan,J.P. Morgan|JP Morgan|JPMorgan Chase,active,Bulge bracket.
+London,deprioritized,Bank of America,BofA Securities|Merrill Lynch,active,Bulge bracket.
+London,deprioritized,Citigroup,Citibank|Citigroup Global Markets,active,Bulge bracket.
+London,deprioritized,Barclays,Barclays Capital,active,Bulge bracket.
+London,deprioritized,Deutsche Bank,,active,Bulge bracket.
+London,deprioritized,UBS,UBS Securities,active,Bulge bracket.
+London,deprioritized,HSBC,,active,Bulge bracket.
+London,deprioritized,BNP Paribas,,active,Bulge bracket.
+London,deprioritized,Société Générale,Societe Generale,active,Bulge bracket.
+London,deprioritized,Nomura,,active,Bulge bracket.
+# ── Frankfurt ────────────────────────────────────────────────────────────────
+Frankfurt,deprioritized,Deutsche Bank,,active,
+Frankfurt,deprioritized,DWS,DWS Group|DWS Investment,active,
+Frankfurt,deprioritized,Commerzbank,,active,
+Frankfurt,deprioritized,DekaBank,Deka Investment,active,
+Frankfurt,deprioritized,Deutsche Börse,Deutsche Boerse|Eurex,active,
+Frankfurt,deprioritized,Union Investment,,active,
+# ── Shanghai ─────────────────────────────────────────────────────────────────
+Shanghai,deprioritized,Optiver,,active,
+Shanghai,deprioritized,Flow Traders,,active,
+Shanghai,deprioritized,Tower Research Capital,Tower Research,active,
+Shanghai,deprioritized,Ubiquant,九坤|Ubiquant Investment,active,MISS: domestic-only; needs AMAC, which is deferred with the deprioritized regions.
+Shanghai,deprioritized,High-Flyer,幻方|High Flyer Quant,active,MISS: domestic-only; needs AMAC, which is deferred with the deprioritized regions.
+Shanghai,deprioritized,Mingshi,明汯|Minghong,active,Domestic; needs AMAC, which is deferred.
+Shanghai,deprioritized,Lingjun,灵均|Lingjun Investment,active,Domestic; needs AMAC, which is deferred.
+Shanghai,deprioritized,Zhicheng,致诚,active,MISS: domestic-only; needs AMAC, which is deferred with the deprioritized regions.
+Shanghai,deprioritized,Tianyan,天演|Tianyan Capital,active,Domestic; needs AMAC, which is deferred.
+# ── US centers ───────────────────────────────────────────────────────────────
+US centers,deprioritized,Jane Street,,active,
+US centers,deprioritized,Citadel,Citadel Advisors,active,
+US centers,deprioritized,Citadel Securities,,active,
+US centers,deprioritized,Hudson River Trading,HRT Financial|HRT,active,
+US centers,deprioritized,Two Sigma,,active,
+US centers,deprioritized,DE Shaw,D. E. Shaw|D E Shaw,active,
+US centers,deprioritized,Renaissance Technologies,Renaissance Technologies LLC,active,
+US centers,deprioritized,Jump Trading,Jump,active,
+US centers,deprioritized,DRW,DRW Trading|DRW Holdings,active,
+US centers,deprioritized,IMC,IMC Chicago|IMC Financial Markets,active,
+US centers,deprioritized,Optiver,,active,
+US centers,deprioritized,Susquehanna,SIG|Susquehanna International Group,active,
+US centers,deprioritized,Old Mission,Old Mission Capital,active,
+US centers,deprioritized,Belvedere,Belvedere Trading,active,
+US centers,deprioritized,Peak6,PEAK6 Investments,active,
+US centers,deprioritized,Akuna,Akuna Capital,active,
+US centers,deprioritized,Wolverine,Wolverine Trading,active,
+US centers,deprioritized,Group One,Group One Trading,active,
+US centers,deprioritized,CTC,Chicago Trading Company,active,
+US centers,deprioritized,Transmarket,TransMarket Group,active,MISS: US hub is deprioritized; not chased.
+US centers,deprioritized,XR Trading,,active,
+US centers,deprioritized,Tower Research Capital,Tower Research|Latour Trading,active,
+US centers,deprioritized,Virtu Financial,Virtu,active,
+US centers,deprioritized,Millennium,Millennium Management,active,
+US centers,deprioritized,Point72,Point72 Asset Management,active,
+US centers,deprioritized,Balyasny,Balyasny Asset Management,active,
+US centers,deprioritized,ExodusPoint,ExodusPoint Capital,active,
+US centers,deprioritized,Schonfeld,Schonfeld Strategic Advisors,active,
+US centers,deprioritized,Verition,Verition Fund Management,active,
+US centers,deprioritized,Squarepoint,Squarepoint Capital|Squarepoint Ops,active,
+US centers,deprioritized,PDT,PDT Partners,active,
+US centers,deprioritized,Voleon,The Voleon Group|Voleon Capital,active,
+US centers,deprioritized,Qube,Qube Research & Technologies,active,
+US centers,deprioritized,Goldman Sachs,,active,Bulge bracket.
+US centers,deprioritized,Morgan Stanley,,active,Bulge bracket.
+US centers,deprioritized,JPMorgan,J.P. Morgan|JP Morgan|JPMorgan Chase,active,Bulge bracket.
+US centers,deprioritized,Bank of America,BofA Securities|Merrill Lynch,active,Bulge bracket.
+US centers,deprioritized,Citigroup,Citibank|Citigroup Global Markets,active,Bulge bracket.

@@ -25,8 +25,17 @@ python -m quantscraper resolve
 python -m quantscraper stats
 ```
 
+```bash
+python -m quantscraper audit
+```
+
 `resolve` groups the raw registry rows into real-world firms; run it after
 `fetch`. It rebuilds from scratch every time, so it is safe to re-run.
+
+`audit` checks the universe against the named roster in
+`quantscraper/roster.csv` and reports, per hub, how many of those firms it
+found. `-v` lists what each hit actually matched, which is how a wrong match
+gets caught — see [Coverage audit](#coverage-audit).
 
 `fetch` takes optional registry names (`python -m quantscraper fetch fi_se`).
 Data lands in `employers.sqlite3`; override with `--db`.
@@ -104,17 +113,30 @@ holes, not bugs:
   prompted the fix, is still missing**: it is in neither AFM register, neither
   EPTA, and is a direct member of neither venue, most likely trading via
   sponsored access under someone else's membership. Sponsored-access firms are
-  a residual hole that no public list closes. Realistic fixes are the Cboe
-  Europe participant list, the AFM's separate own-account-trader notification
-  list, or accepting a small hand-maintained seed file.
+  a residual hole that no public list closes. **Partly closed since:**
+  `cboe_europe` adds the 52 Cboe European trading participants, and `seed`
+  carries a hand-maintained file (`registries/seed_firms.csv`) that Da Vinci and
+  five other Amsterdam shops now come from. The structural hole remains — the
+  seed file only contains firms someone thought to name.
 - **State-registered US advisers are absent.** The ADV bulk file is SEC
   registrants only (`Firm Type` is uniformly `Registered`); advisers under
   roughly $110M AUM register with their state. This resolves the plan's open
   verification question — the answer is no, and the sub-$110M US tail needs a
   separate source.
-- **AP1–AP4 and AP6 are absent.** Only AP7 is FI-supervised; the other buffer
-  funds are governed by their own act and appear in no FI category. They are
-  significant Stockholm employers and need seeding separately.
+- **AP1–AP4 and AP6 appear in no FI category.** Only AP7 is FI-supervised; the
+  other buffer funds are governed by their own act. **Closed since** — they come
+  from `seed`.
+- **`fi_se` walks 20 of FI's 139 categories**, and the omissions are not all
+  funds. Alecta, Sweden's largest occupational pension manager, is a mutual
+  (*ömsesidigt*) undertaking rather than a `Tjänstepensionsaktiebolag`, so it
+  falls outside every category walked. Found by the coverage audit; fixable by
+  adding the category.
+- **Dutch pension asset managers are DNB-supervised, not AFM.** PGGM is absent
+  entirely and APG is present only through its US entity, because only the AFM
+  register is ingested. The methodology names the DNB register; it is not built.
+- **Sovereign wealth funds appear in no financial register.** ADIA, ADQ,
+  Mubadala, GIC and Temasek are all significant quant employers and none is
+  reachable by any registry. The seed file is the only realistic route.
 - **IPM is absent, and that is correct** — the firm wound down. The plan's
   named roster is slightly stale here.
 - **The UK is not covered.** Every FCA route — register API, bulk download —
@@ -144,9 +166,51 @@ here is a false merge: a duplicate costs a second of reading, a wrong merge
 silently deletes an employer. Citadel and Citadel Securities are kept separate
 for exactly this reason — different employers, different careers pages.
 
-Current state: 30,527 rows → 28,713 firms. The collapse is modest because most
+Current state: 30,590 rows → 28,747 firms. The collapse is modest because most
 rows carry no website; Stage 4 (domain resolution) is what will improve it, and
 `firms` is rebuilt from scratch on demand so re-running then is free.
+
+## Coverage audit
+
+`python -m quantscraper audit` checks the universe against the methodology's
+named roster — 163 entries across 11 hubs, checked in as
+`quantscraper/roster.csv`. **The roster measures coverage; it never defines it.**
+A firm's absence from that file says nothing about whether it belongs in the
+universe, and the audit reads no table it can write to.
+
+Two numbers per hub, because the first one is easy to overstate:
+
+| | |
+|---|---|
+| **present** | the firm is in the universe under some name |
+| **local** | some row places the firm in that hub's country |
+
+Hong Kong is why both are reported. All nine of its roster firms are *present*
+and exactly one is *local*: the rest are visible only through US registrations,
+so a single number would have claimed Hong Kong was solved when no HK register
+has been ingested at all.
+
+Current focus-hub results:
+
+| Hub | Present | Local |
+|---|---|---|
+| Stockholm | 19/20 | 19 |
+| Amsterdam | 12/13 | 11 |
+| Switzerland | 9/11 | 5 |
+| Copenhagen | 5/7 | 3 |
+| Singapore | 7/10 | 2 |
+| Hong Kong | 9/9 | 1 |
+| Dubai | 3/7 | 0 |
+
+Every miss carries a written reason in the roster's `note` column, and the audit
+prints it, so a miss is never just a blank. Stale entries (IPM, wound down in
+2021) and entries that never named a real firm (AP5 — there is no *Femte
+AP-fonden*) are marked and excluded from the rates, so they stop reading as bugs.
+
+**A false hit is the failure this guards against**, because it hides a miss.
+`-v` prints the employer names each entry actually matched: a bare
+`Grasshopper` matching `GRASSHOPPER ESCAPEMENT, LLC` reported Singapore as
+covered when it was not, and was only visible because the matched name is shown.
 
 ## Adding a registry
 

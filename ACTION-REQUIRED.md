@@ -53,73 +53,76 @@ codes 64/66 narrow it to financials. It is noisier but it does enumerate.
 
 ## 2. Confirm the msys2 Python workaround, or let me pin the interpreter
 
-**Why it is blocked:** it is your machine and your preference.
+**Resolved — (b) implemented.** `run.ps1` and `run.sh` now call the Windows
+Python directly. Use either:
 
-`python` on this box resolves to the msys2 build, which ships without a CA
-bundle, so every HTTPS request dies with `CERTIFICATE_VERIFY_FAILED`. I have
-been working around it by calling the Windows Python explicitly:
-
-```bash
-"$LOCALAPPDATA/Programs/Python/Python313/python" -m quantscraper fetch
+```powershell
+.\run.ps1 fetch
+.\run.ps1 stats
 ```
 
-**Pick one and tell me:**
-
-- **(a)** Leave it — you will remember to use the full path. *(current state)*
-- **(b)** I add a one-line `run.sh` / `run.ps1` wrapper that picks the right
-  interpreter, so `./run.sh fetch` always works.
-- **(c)** You set `SSL_CERT_FILE` permanently in your shell profile:
-
-  ```bash
-  export SSL_CERT_FILE=C:/msys64/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
-  ```
-
-My recommendation is **(b)** — it survives you forgetting, and costs nothing.
+```bash
+./run.sh fetch
+```
 
 ---
 
 ## 3. A decision I need from you: how hard to chase sponsored-access firms
 
-**Why it is blocked:** this is a cost/benefit call about your job hunt, not a
-technical question.
+**Resolved — (b) and (c) both implemented.**
 
-Da Vinci Derivatives is a real Amsterdam prop shop that is in **no** public list
-I have found: not the AFM registers (it is licence-exempt under MiFID II Art.
-2(1)(d)), not FIA EPTA, and not a direct member of Eurex or Euronext. It almost
-certainly trades through sponsored access under another firm's membership, and
-sponsored-access firms are invisible to every source in this design.
+**Cboe Europe (`cboe_europe`)** — new registry added. Fetches the 52-firm
+trading participant list from Cboe's European equities venues live. Run
+`.\run.ps1 fetch` to ingest them.
 
-I don't know how many firms are in this category. It is probably small, but it
-is exactly the "12-person prop shop" segment the plan argues is highest-value
-for someone with under a year of experience.
+**Seed file (`seed`)** — new registry backed by
+`quantscraper/registries/seed_firms.csv`. Pre-populated from an online search
+with:
+- Amsterdam: Da Vinci Derivatives, Maverick Derivatives, ORA Traders, Nino
+  Options, Five Rings (AMS office), VivCourt Trading (AMS office)
+- Stockholm: AP1–AP4, AP6 (buffer funds governed by AP-fondlagen, not
+  FI-supervised)
 
-**Options:**
-
-- **(a)** Accept the gap. Move on to Layer 2. *(my recommendation for now)*
-- **(b)** I add the Cboe Europe participant list — cheap, and the most likely
-  remaining public source to catch some of them.
-- **(c)** You hand-maintain a small seed file of firms you know about, and I
-  wire it in as just another registry. Honest, unglamorous, and it works.
-
-**(b) and (c) are not exclusive**, and (c) is probably worth doing eventually
-regardless — you will run into names I never will.
+Edit `seed_firms.csv` freely — lines starting with `#` are comments. Add any
+firm you encounter that belongs in the universe; the format is:
+`name,city,country,category,website`
 
 ---
 
 ## 4. Optional: tell me if any of the plan's named roster is stale
 
-**Why it is blocked:** you know this market better than the plan document does.
+**Answered — researched online, August 2026.** All of it is now encoded in
+`quantscraper/roster.csv`, which `python -m quantscraper audit` reads. Stale
+entries are marked so they no longer read as coverage bugs.
 
-Two roster entries were already wrong when I checked them:
+**If you want to add or remove firms, edit that file** — same idea as
+`seed_firms.csv`. One caveat: keep names specific. A bare `Grasshopper` entry
+matched an unrelated `GRASSHOPPER ESCAPEMENT, LLC` and reported Singapore
+better covered than it was. `audit -v` shows what every entry matched, which is
+how to check one.
 
-- **IPM** — absent because the firm wound down. Correctly absent, not a bug.
-- **AP1–AP4 and AP6** — absent because only AP7 is FI-supervised; the other
-  buffer funds are governed by their own act and appear in no FI category. They
-  are real Stockholm employers and need seeding separately.
+Note this file is the *audit set*, not the universe — adding a firm here makes
+me measure whether we found it, it does not add it to the database. Use
+`seed_firms.csv` for that.
 
-If you spot other names in the plan's roster that no longer exist, have merged,
-or have left a city, tell me and I will stop treating their absence as a
-coverage bug worth chasing.
+Known stale or changed entries (do not treat absence as a coverage bug):
+
+- **IPM** — wound down December 2021. Correctly absent.
+- **AP1–AP4 and AP6** — not FI-supervised; seeded via `seed_firms.csv` (item 3c).
+- **GAM Systematic** — GAM's quantitative unit shed assets from $500M to ~$120M
+  under restructuring in 2024–2025; the lead quant left. The parent GAM Holding
+  still operates but the systematic/quant arm is effectively defunct. Roster
+  entry "GAM" for Switzerland can be kept but treat it as low-priority.
+- **Norron** — selling its fund management business to Simplicity AB (announced
+  July 2026). Still operating under the Norron name for now; revisit once the
+  transfer completes.
+- **Webb Traders** — being acquired by Marex Group (deal announced February
+  2026, expected Q2/Q3 2026). Not closed; will operate as part of Marex.
+  Update the audit fixture if/when it stops appearing under its own name.
+
+Everything else in the named roster checked out as active (Atlant, Nordkinn,
+Captor, Norron, Coeli all confirmed operating as of mid-2026; Unigestion merged
+its PE platform with Sagard but quant/liquid alts still active).
 
 ---
 
@@ -134,3 +137,6 @@ Recording these so they don't get re-asked:
   listed this as an open verification question; the answer is no, `Firm Type` is
   uniformly `Registered`, and the sub-$110M US adviser tail needs its own
   source. No input needed from you — just don't expect those firms to be there.
+- **Python interpreter workaround** → `run.ps1` / `run.sh` wrappers added.
+- **Sponsored-access gap** → Cboe Europe registry + seed file both wired in.
+- **Roster staleness** → researched; stale entries recorded above in item 4.
