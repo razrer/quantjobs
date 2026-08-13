@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from . import db
+from . import db, resolve
 from .registries import REGISTRIES
 
 
@@ -37,6 +37,13 @@ def _fetch(names: list[str], database: str) -> int:
     return failures
 
 
+def _resolve(database: str) -> int:
+    connection = db.connect(database)
+    firms, rows = resolve.build_firms(connection)
+    print(f"resolved {rows:,d} employer rows into {firms:,d} firms")
+    return 0
+
+
 def _stats(database: str) -> int:
     connection = db.connect(database)
 
@@ -49,6 +56,18 @@ def _stats(database: str) -> int:
         print(
             f"  {row['source']:10s} {row['jurisdiction']:3s} {row['n']:7,d}"
             f"  ({row['with_site']:,d} with a website)"
+        )
+
+    firms = connection.execute(
+        "SELECT COUNT(*) AS n, SUM(row_count > 1) AS merged,"
+        " SUM(source_count > 1) AS cross_source FROM firms"
+    ).fetchone()
+    if firms["n"]:
+        rows = connection.execute("SELECT COUNT(*) FROM employers").fetchone()[0]
+        print(
+            f"\nresolved into {firms['n']:,d} firms from {rows:,d} rows"
+            f" ({rows - firms['n']:,d} collapsed;"
+            f" {firms['cross_source']:,d} seen by more than one registry)"
         )
 
     print("\nlast run per source")
@@ -76,11 +95,14 @@ def main(argv: list[str] | None = None) -> int:
         choices=[*REGISTRIES, []],
         help="registries to fetch (default: all)",
     )
+    commands.add_parser("resolve", help="group employer rows into firms")
     commands.add_parser("stats", help="show what is in the database")
 
     args = parser.parse_args(argv)
     if args.command == "stats":
         return _stats(args.db)
+    if args.command == "resolve":
+        return _resolve(args.db)
     return _fetch(args.registries or list(REGISTRIES), args.db)
 
 

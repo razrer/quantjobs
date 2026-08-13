@@ -18,8 +18,15 @@ python -m quantscraper fetch
 ```
 
 ```bash
+python -m quantscraper resolve
+```
+
+```bash
 python -m quantscraper stats
 ```
+
+`resolve` groups the raw registry rows into real-world firms; run it after
+`fetch`. It rebuilds from scratch every time, so it is safe to re-run.
 
 `fetch` takes optional registry names (`python -m quantscraper fetch fi_se`).
 Data lands in `employers.sqlite3`; override with `--db`.
@@ -118,9 +125,28 @@ holes, not bugs:
   principal` permission on firms found elsewhere), not a registry. London is
   currently reachable only via `sec_adv`/`fia_epta` entities.
 
-**Entity resolution is the next real problem.** Firms hide behind legal names:
-Tower Research trades as `LATOUR TRADING LLC`, HRT as `HRT FINANCIAL LP`. Name
-matching across sources will need the alias table the plan describes.
+- **Thousands of Form ADV filers give a social page as their website.** Over
+  4,000 list a LinkedIn URL in the `Website Address` field, plus ~2,000 more on
+  Facebook, X and Instagram. They are kept as-is in `employers` (raw data is
+  never edited) but they are useless for Layer 2 domain resolution, and they are
+  excluded from identity matching — see `resolve.py`.
+
+## Firm identity
+
+`employers` holds raw registry rows; one company can occupy several. `resolve`
+groups them into `firms` using deterministic keys — LEI, SEC CRD, domain,
+normalized name — plus a small hand-curated table for corporate groups whose
+legal names share nothing, like Tower Research trading as `LATOUR TRADING LLC`.
+
+Normalization strips legal forms (`AB`, `B.V.`, `LLC`) and **nothing else**, and
+the curated prefixes are deliberately specific, because the expensive mistake
+here is a false merge: a duplicate costs a second of reading, a wrong merge
+silently deletes an employer. Citadel and Citadel Securities are kept separate
+for exactly this reason — different employers, different careers pages.
+
+Current state: 30,527 rows → 28,713 firms. The collapse is modest because most
+rows carry no website; Stage 4 (domain resolution) is what will improve it, and
+`firms` is rebuilt from scratch on demand so re-running then is free.
 
 ## Adding a registry
 
