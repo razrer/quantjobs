@@ -51,6 +51,7 @@ nothing in the near-term plan now waits on a human.
 | 8 | Silent-failure alerting | not started |
 | 9 | Layer 3B — Tier B change detection | not started |
 | 10 | Coverage measurement | not started |
+| 11 | Layer 5 — job tagging | designed, not started — `TAGGING.md` |
 
 ---
 
@@ -532,6 +533,32 @@ this stage makes it distributional rather than a fixed floor.
 
 **Exit criterion:** deliberately breaking a parser produces an alert rather than
 a quiet zero.
+
+---
+
+## Stage 11 — Layer 5, job tagging
+
+Designed in **`TAGGING.md`**: twenty dimensions across the posting, the firm and
+the fit, stored in a derived `job_tags` table that rebuilds from `jobs`, with
+evidence and a strong/weak grade on every tag.
+
+Two things that design turned up and that the rest of the plan should know:
+
+- **92% of postings have no description.** The list endpoints Workday, Breezy,
+  BambooHR, Personio and SmartRecruiters publish carry title, location and date
+  only. `CLAUDE.md` forbids classifying on a title alone, so a per-posting
+  backfill is the real prerequisite. Workday's detail endpoint is verified —
+  `/wday/cxs/{tenant}/{site}{externalPath}` returned 6,207 characters of
+  `jobDescription` for an LSEG posting, plus `timeType` and `country`.
+- **Substring matching on titles fails the same way the roster did.** A sweep
+  for quant words over the 7,735 titles returns 884 hits, and the most frequent
+  are `Corporate Administrator` (admini**strat**or) and `Alpha Account Services
+  Data Analyst` (State Street's platform is named Alpha). Token boundaries, not
+  `in`.
+
+**Exit criterion:** in `TAGGING.md` — a hand-labelled sample of 100 postings,
+every posting carrying a value in every dimension, and no false rejection in
+the sample.
 
 ---
 
