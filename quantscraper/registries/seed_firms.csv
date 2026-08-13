@@ -17,3 +17,12 @@ AP2 (Andra AP-fonden),Gothenburg,SE,Pension fund,https://www.ap2.se
 AP3 (Tredje AP-fonden),Stockholm,SE,Pension fund,https://www.ap3.se
 AP4 (Fjärde AP-fonden),Stockholm,SE,Pension fund,https://www.ap4.se
 AP6 (Sjätte AP-fonden),Gothenburg,SE,Pension fund,https://www.ap6.se
+# ── Sovereign wealth funds ───────────────────────────────────────────────────
+# State-owned investors are not licensed financial firms, so they appear in no
+# regulator's register anywhere -- not DFSA, not MAS, not the SEC. All five run
+# large in-house quantitative teams. The seed file is the only route to them.
+ADIA (Abu Dhabi Investment Authority),Abu Dhabi,AE,Sovereign wealth fund,https://www.adia.ae
+ADQ,Abu Dhabi,AE,Sovereign wealth fund,https://www.adq.ae
+Mubadala Investment Company,Abu Dhabi,AE,Sovereign wealth fund,https://www.mubadala.com
+GIC,Singapore,SG,Sovereign wealth fund,https://www.gic.com.sg
+Temasek,Singapore,SG,Sovereign wealth fund,https://www.temasek.com.sg

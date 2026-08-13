@@ -23,15 +23,20 @@ URL = "https://www.fi.se/sv/vara-register/foretagsregistret/index"
 
 _ORG_NUMBER = re.compile(r"^\d{6}-\d{4}$")
 
-# FI publishes 139 categories. These are the ones whose members are *firms
-# that employ people in markets roles*.
+# FI's register exposes 495 codes, most of which are permissions and
+# notifications rather than company types. These are the ones whose members are
+# *firms that employ people in markets roles*.
 #
-# Two kinds of category are deliberately left out, and both are reversible by
+# Three kinds of category are deliberately left out, and each is reversible by
 # adding a line here:
 #   - funds and sub-funds (Fond, Specialfond, delfonder) -- a fund is a
 #     product, not an employer; its manager is already listed separately.
 #   - payments, consumer credit, crypto, insurance distribution -- these are
 #     out of the role scope rather than merely low-signal.
+#   - corporate pension foundations (STISTO/STIMEL/STISMA, 807 of them) -- an
+#     asset pool ring-fencing one employer's pension liability, not a firm.
+#     "Apoteket AB:s Pensionsstiftelse" hires nobody; its capital is managed
+#     under mandate by managers already listed here. Same reasoning as funds.
 # Everything that survives stays in the universe permanently; category only
 # ever sets polling frequency later, never membership.
 CATEGORIES = {
@@ -45,7 +50,14 @@ CATEGORIES = {
     "SPAR": "Sparbank",
     "MBANK": "Medlemsbank",
     "APFOND": "AP-fond",
+    # Occupational pension undertakings come in three legal forms and FI files
+    # each under its own code. Walking only the aktiebolag form missed Alecta,
+    # Sweden's largest occupational pension manager, which is a mutual --
+    # found by the coverage audit, not by reading the category list.
     "TJPAB": "Tjänstepensionsaktiebolag",
+    "TJPÖMS": "Ömsesidigt tjänstepensionsbolag",
+    "TJPE": "Tjänstepensionsförening",
+    "UTLTJP": "Utländskt tjänstepensionsinstitut",
     "BÖRS": "Börs",
     "CLEAR": "Clearingorganisation",
     "CCP": "Central motpart",

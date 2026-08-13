@@ -158,35 +158,43 @@ def country_code(row: sqlite3.Row) -> str | None:
 
 
 def _index(rows: list[sqlite3.Row]) -> dict[str, list[tuple[str, sqlite3.Row]]]:
-    """Employer rows bucketed by the first token of their normalized name.
+    """Employer rows bucketed by each token of their normalized name.
 
-    Prefix matching has to scan candidates, and bucketing keeps that scan to the
-    handful of rows that could possibly match rather than all 30,000.
+    Matching has to scan candidates, and bucketing keeps that scan to the rows
+    that could possibly match rather than all 58,000. A row appears under every
+    one of its tokens because a roster name can start at any of them.
     """
     buckets: dict[str, list[tuple[str, sqlite3.Row]]] = {}
     for row in rows:
         normalized = normalize_name(row["name"])
-        if normalized:
-            buckets.setdefault(normalized.split(" ", 1)[0], []).append((normalized, row))
+        for token in set(normalized.split()):
+            buckets.setdefault(token, []).append((normalized, row))
     return buckets
 
 
 def _matches(
     candidate: str, buckets: dict[str, list[tuple[str, sqlite3.Row]]]
 ) -> list[sqlite3.Row]:
-    """Rows whose name is, or begins with, `candidate` at a token boundary.
+    """Rows whose name contains `candidate` as a whole run of tokens.
 
-    "Captor" must find "Captor Fund Management AB", but the boundary is what
-    keeps "Jump" off "Jumpstart Capital".
+    Not anchored to the start, because registries prepend qualifiers to legal
+    names and anchoring silently loses them: `Bank Julius Bär & Co. AG` was in
+    the universe from the day Eurex was added, and an anchored match reported
+    Julius Baer missing for all of it. Same for `Fondsmæglerselskabet Maj
+    Invest A/S`.
+
+    Token alignment is what keeps this honest -- "Jump" finds "Jump Trading"
+    but not "Jumpstart Capital".
     """
     normalized = normalize_name(candidate)
     if not normalized:  # a name that survives no ASCII, e.g. the Chinese aliases
         return []
-    bucket = buckets.get(normalized.split(" ", 1)[0], ())
+    tokens = normalized.split()
+    needle = f" {normalized} "
     return [
         row
-        for name, row in bucket
-        if name == normalized or name.startswith(f"{normalized} ")
+        for name, row in buckets.get(tokens[0], ())
+        if needle in f" {name} "
     ]
 
 
@@ -254,7 +262,13 @@ def format_report(results: list[Result], verbose: bool = False) -> str:
                     lines.append(f"    miss  {result.entry.name:<24s} {reason}")
             if verbose:
                 for result in sorted(present, key=lambda r: r.entry.name):
-                    names = ", ".join(sorted(set(result.firms.values()))[:3])
+                    # Shortest first, not alphabetical. A big group's matches are
+                    # mostly funds carrying the house name ("AMUNDI ETF
+                    # NASDAQ-100"), and the shortest name is almost always the
+                    # operating entity -- which is the one worth eyeballing.
+                    names = ", ".join(
+                        sorted(set(result.firms.values()), key=lambda n: (len(n), n))[:3]
+                    )
                     # A high entity count is usually correct, not a false split:
                     # Stage 1 deliberately keeps UBS's 44 legal entities apart.
                     entities = f"  [{len(result.firms)} entities]" if len(result.firms) > 1 else ""

@@ -17,8 +17,10 @@ employers we lack, never the primary content source.
 - **Execution order and exit criteria:** `PLAN.md`
 - **Work blocked on the user:** `ACTION-REQUIRED.md`
 
+Make sure to wrote to `ACTION-REQUIRED.md` when something needs to be reviewed or manual input is needed, and remmove it when it has been resolved.
+
 Read `PLAN.md` before starting work. It says which stage is next and how that
-stage knows it is finished.
+stage knows it is finished. When you finish a stage, make sure to update the plan.
 
 ## Running it
 
@@ -63,8 +65,8 @@ registries/*.py  ->  employers table  ->  resolve.py  ->  firms table
 ```
 
 - `models.py` — `Employer`, the one record type registries produce
-- `http.py` — throttled, retrying GET; standard library only
-- `parsing.py` — minimal HTML table helper for registries that publish web pages
+- `http.py` — throttled, retrying GET and form POST, sharing one cookie jar
+- `parsing.py` — minimal HTML table and `.xlsx` readers, standard library only
 - `db.py` — SQLite schema and upserts
 - `resolve.py` — entity resolution
 - `audit.py` — coverage measurement against `roster.csv`; reads only
@@ -118,10 +120,15 @@ Priority affects **what to build next**, not what to ingest. Never drop
 collected data for being out of area — the methodology is explicit that
 geography ranks results rather than gating the universe.
 
-- **Focus:** Stockholm, Copenhagen, Amsterdam, Switzerland, Dubai, Hong Kong,
+- **Focus:** Stockholm, Copenhagen, Amsterdam, Switzerland, Hong Kong,
   Singapore
-- **Deprioritized:** Germany, US, London/UK, China. Existing US data
+- **Deprioritized:** Germany, US, London/UK, China, Dubai. Existing US data
   (`sec_adv`, `sec_bd`) stays; it is simply not where the next effort goes.
+
+All seven focus hubs are at 100% of the audit roster *present*. The number that
+still varies is *local* — whether a registry covering that hub reported the firm,
+rather than it being visible only through a foreign registration. Dubai (3/7) is
+the weak one and is blocked on a human; Switzerland (6/11) would need FINMA.
 
 ## Scope discipline
 
@@ -153,6 +160,24 @@ Each of these silently produced wrong results before being caught:
   (`bd-070124.txt`, `bd080126.txt`, `bd080122_1_0.txt`, plus malformed
   seven-digit ones). Read the link off the index page; never construct a URL.
 - **AFM** exports are semicolon-delimited and cp1252-encoded, neither declared.
+- **AFM's CSV exports are not the whole register.** The AIFM manager registers
+  are published only as `.xlsx` files further down the same page, while the CSV
+  export link sits at the top and looks complete. Missing them cost PGGM and APG
+  Asset Management. Always scroll the register page for spreadsheet links.
+- **FI publishes 495 category codes**, not the 139 an earlier note claimed, and
+  most are permissions rather than company types. Occupational pension
+  undertakings are filed under *three* separate codes by legal form — walking
+  only `TJPAB` misses Alecta, which is a mutual (`TJPÖMS`).
+- **Finanstilsynet (DK) has no enumerable endpoint.** Six service operations,
+  none of them a listing; the site's own "list extract" and "explore data" pages
+  render empty shells. `searchVUT` matches a substring, so the register is swept
+  by single letters and unioned. Saturation is the completeness evidence.
+- **SFC (HK) returns `totalCount: 0` rather than an error** when the session
+  cookie or the `nameStartLetter` field is missing. Both are required. Fetch the
+  search page first; `http.post_form` shares one cookie jar for this.
+- **MAS (SG) ignores every page-size parameter** — ten rows per page, no
+  override. An out-of-range page returns zero rows rather than wrapping to the
+  first, which is what makes the walk terminate correctly.
 - **Form ADV covers SEC registrants only.** Advisers under roughly $110M AUM
   register with their state and are absent.
 

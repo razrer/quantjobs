@@ -60,15 +60,20 @@ export SSL_CERT_FILE=C:/msys64/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
 
 | Registry | Jurisdiction | Firms | Notes |
 |---|---|---|---|
+| `finanstilsynet_dk` | DK | ~26,500 | Danish FSA; swept by letter, see the design note |
 | `sec_adv` | US | ~23,300 | SEC Form ADV monthly bulk CSV, registered + exempt reporting |
+| `afm_nl` | NL | ~3,700 | AFM investment firms, fund managers, and both AIFM registers |
+| `sfc_hk` | HK | ~3,600 | SFC licensed corporations, by regulated activity |
 | `sec_bd` | US | ~3,300 | SEC active broker-dealers; this is where the US prop firms are |
-| `afm_nl` | NL | ~2,700 | AFM investment firms + fund managers, via CSV export |
-| `fi_se` | SE | ~650 | Finansinspektionen, enumerated by regulatory category |
+| `mas_sg` | SG | ~2,000 | MAS Financial Institutions Directory, by category |
+| `fi_se` | SE | ~660 | Finansinspektionen, enumerated by regulatory category |
 | `eurex` | EU | ~330 | Eurex admitted exchange participants, via CSV |
 | `euronext` | EU | ~280 | Euronext trading members (AMS/BRU/DUB/LIS/MIL/OSL/PAR) |
+| `cboe_europe` | EU | 52 | Cboe Europe equities trading participants |
 | `fia_epta` | EU | 20 | European Principal Traders Association members |
+| `seed` | manual | 16 | Firms no public register carries; hand-maintained CSV |
 
-About 30,500 employers in total.
+About 63,700 employers in total, resolving to 58,600 firms.
 
 `sec_adv` supplies a website for ~92% of its firms and `euronext` for ~36% of
 its own, which is most of Layer 2's domain resolution for free.
@@ -78,15 +83,22 @@ reachable only through exchange membership**, among them 3Red Partners,
 AlphaGrep, ABC Arbitrage, Transtrend and Mint Tower Capital. See the gap note
 on licence-exempt firms for why.
 
-Coverage of the plan's named roster is good: `sec_bd` has Jane Street, HRT,
-Jump, DRW, Citadel Securities, Optiver, SIG, XTX and Virtu; `afm_nl` has the
-Amsterdam cluster (Optiver V.O.F., IMC, Flow Traders, Webb, All Options, 323
-Trading, Mako, Maven, Tower Research Europe, Jane Street Netherlands).
+All seven focus hubs now hold every firm on the audit roster — see
+[Coverage audit](#coverage-audit) for what that does and does not mean.
 
 ## Design notes
 
-**Enumerate, never query.** FI is walked category by category rather than
-searched, so coverage does not depend on guessing the right keyword.
+**Enumerate, never query.** FI is walked category by category, MAS by category,
+SFC by regulated activity, rather than searched — coverage should not depend on
+guessing the right keyword.
+
+Denmark is the exception that proves the rule. Finanstilsynet exposes six
+service operations and none of them lists anything; its own "list extract" page
+renders an empty shell. So `finanstilsynet_dk` sweeps: its search matches a
+**substring**, so querying "a" returns every name containing an "a", and the
+union over the alphabet is the whole register. The union **saturates** part way
+through — the digits and Danish letters that follow add nothing — and that is
+the evidence it is complete rather than capped.
 
 **Never filter membership.** Every firm a registry returns is kept forever, and
 rows are never deleted. `category` is stored verbatim so later layers can use
@@ -126,17 +138,35 @@ holes, not bugs:
 - **AP1–AP4 and AP6 appear in no FI category.** Only AP7 is FI-supervised; the
   other buffer funds are governed by their own act. **Closed since** — they come
   from `seed`.
-- **`fi_se` walks 20 of FI's 139 categories**, and the omissions are not all
-  funds. Alecta, Sweden's largest occupational pension manager, is a mutual
-  (*ömsesidigt*) undertaking rather than a `Tjänstepensionsaktiebolag`, so it
-  falls outside every category walked. Found by the coverage audit; fixable by
-  adding the category.
-- **Dutch pension asset managers are DNB-supervised, not AFM.** PGGM is absent
-  entirely and APG is present only through its US entity, because only the AFM
-  register is ingested. The methodology names the DNB register; it is not built.
 - **Sovereign wealth funds appear in no financial register.** ADIA, ADQ,
   Mubadala, GIC and Temasek are all significant quant employers and none is
-  reachable by any registry. The seed file is the only realistic route.
+  reachable by any registry, anywhere. **Closed** via the seed file, which is
+  the only realistic route and will stay that way.
+- **Dubai has no local register.** The DFSA puts its public register behind a
+  reCAPTCHA, so it is not reachable here. Dubai reads 7/7 present but 3 local:
+  Emirates NBD is visible only through its *Singapore* banking licence. This is
+  the one open item in `ACTION-REQUIRED.md`.
+- **Switzerland has no local register.** 11/11 present, 6 local — the rest come
+  from Dutch, Danish and US registrations. FINMA would fix it and is not built.
+- **Denmark carries no company type or city.** The Danish register gives a name
+  and a GUID; type and city need one request per company, which is 26,000
+  requests for a register enumerable in 39. Deferred deliberately — the rows are
+  in the universe and the attribute can be backfilled without re-scraping.
+- **Corporate pension foundations are excluded** (807 Swedish ones). An asset
+  pool ring-fencing one employer's pension liability is not a firm; its capital
+  is managed under mandate by managers already listed. Same rule as funds.
+
+Two gaps listed here previously turned out to be wrong, which is worth recording
+because both were plausible:
+
+- **"Dutch pension managers are DNB-supervised."** They are not, and DNB's
+  register does not contain PGGM at all. The real cause was `afm_nl` reading
+  only AFM's two CSV exports while the AIFM manager registers are published as
+  spreadsheets on the same page. Fixed.
+- **"Julius Baer is missing because there is no Swiss register."** It was never
+  missing — `Bank Julius Bär & Co. AG` had been in `eurex` from the start. The
+  audit's matching was anchored to the start of the name, and the registry name
+  begins with "Bank". Fixed in `audit.py`, not by adding a source.
 - **IPM is absent, and that is correct** — the firm wound down. The plan's
   named roster is slightly stale here.
 - **The UK is not covered.** Every FCA route — register API, bulk download —
@@ -166,7 +196,7 @@ here is a false merge: a duplicate costs a second of reading, a wrong merge
 silently deletes an employer. Citadel and Citadel Securities are kept separate
 for exactly this reason — different employers, different careers pages.
 
-Current state: 30,590 rows → 28,747 firms. The collapse is modest because most
+Current state: 63,724 rows → 58,638 firms. The collapse is modest because most
 rows carry no website; Stage 4 (domain resolution) is what will improve it, and
 `firms` is rebuilt from scratch on demand so re-running then is free.
 
@@ -190,22 +220,32 @@ and exactly one is *local*: the rest are visible only through US registrations,
 so a single number would have claimed Hong Kong was solved when no HK register
 has been ingested at all.
 
-Current focus-hub results:
+Current focus-hub results — every hub holds every roster firm, and *local* is
+now where the remaining work is:
 
 | Hub | Present | Local |
 |---|---|---|
-| Stockholm | 19/20 | 19 |
-| Amsterdam | 12/13 | 11 |
-| Switzerland | 9/11 | 5 |
-| Copenhagen | 5/7 | 3 |
-| Singapore | 7/10 | 2 |
-| Hong Kong | 9/9 | 1 |
-| Dubai | 3/7 | 0 |
+| Stockholm | 20/20 | 20 |
+| Copenhagen | 7/7 | 7 |
+| Amsterdam | 13/13 | 13 |
+| Singapore | 10/10 | 7 |
+| Hong Kong | 9/9 | 8 |
+| Switzerland | 11/11 | 6 |
+| Dubai | 7/7 | 3 |
 
 Every miss carries a written reason in the roster's `note` column, and the audit
 prints it, so a miss is never just a blank. Stale entries (IPM, wound down in
 2021) and entries that never named a real firm (AP5 — there is no *Femte
 AP-fonden*) are marked and excluded from the rates, so they stop reading as bugs.
+
+**A recorded reason is a hypothesis until someone checks it.** Two of the
+reasons written during Stage 2 were wrong — see the last two bullets under
+[Known coverage gaps](#known-coverage-gaps). Both are kept in the file, corrected
+rather than deleted.
+
+Matching is **token-aligned anywhere in the name**, not anchored to the start.
+Registries prepend qualifiers to legal names — `Bank Julius Bär & Co. AG`,
+`Fondsmæglerselskabet Maj Invest A/S` — and anchoring silently loses them.
 
 **A false hit is the failure this guards against**, because it hides a miss.
 `-v` prints the employer names each entry actually matched: a bare

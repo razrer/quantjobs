@@ -7,9 +7,36 @@ Nothing here is urgent — the project runs fine without any of it. These are th
 places where I hit a wall that needed a human, not a decision I should make for
 you.
 
-**Since deprioritizing Germany, the US, London and China, nothing in the
-near-term plan is blocked at all.** Item 1 was the only true blocker and it is
-now optional. Item 2 is a small convenience and item 3 is a judgement call.
+**One new blocker: item 0, the Dubai register.** Everything else here is
+optional or already resolved.
+
+---
+
+## 0. DFSA public register — the only thing blocking Dubai
+
+**Why it is blocked:** the DFSA's public register at
+https://www.dfsa.ae/public-register puts its search behind a Google reCAPTCHA.
+I don't complete CAPTCHAs, so I can't reach it.
+
+Dubai currently reads 7/7 firms *present* but only 3 *local* — ADIA, ADQ and
+Mubadala come from the hand-maintained seed file, and Emirates NBD is visible
+only through its **Singapore** banking licence. No Gulf-registered row exists
+for any of them.
+
+**What would help, in rough order of usefulness:**
+
+1. **Check whether the DFSA publishes a bulk list** anywhere that isn't behind
+   the CAPTCHA — an Excel or PDF "list of authorised firms". If you find one,
+   put the URL here and I'll write the adapter.
+2. **ADGM (Abu Dhabi)** — https://www.adgm.com/public-registers. I found no
+   export link, but I did not get far. Worth a look if you're in there anyway.
+3. If neither pans out, say so and I'll fall back to extending
+   `seed_firms.csv` by hand for the DIFC firms that matter. That is a real
+   answer, not a cop-out: the Gulf universe of quant employers is small and
+   nameable, unlike the Nordics.
+
+Nothing else waits on this — Dubai is the last focus hub without a local
+register, and the other six are all at 100%.
 
 ---
 

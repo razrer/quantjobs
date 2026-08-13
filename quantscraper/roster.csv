@@ -42,18 +42,18 @@ Stockholm,focus,AP4,Fjärde AP-fonden,active,Not FI-supervised; carried by the s
 Stockholm,focus,AP5,Femte AP-fonden,absent,No Femte AP-fonden exists. The buffer funds are AP1-AP4 and AP6; AP7 runs the premium pension default.
 Stockholm,focus,AP6,Sjätte AP-fonden,active,Not FI-supervised; carried by the seed registry.
 Stockholm,focus,AP7,Sjunde AP-fonden,active,
-Stockholm,focus,Nasdaq Stockholm,Nasdaq Clearing|Nasdaq,active,
+Stockholm,focus,Nasdaq Stockholm,Nasdaq Clearing,active,No bare "Nasdaq" alias -- it matches every index fund tracking the Nasdaq-100. Note "Nasdaq AB" is also unsafe: normalization strips AB as a legal form and leaves the bare token.
 Stockholm,focus,SEB,Skandinaviska Enskilda Banken,active,
 Stockholm,focus,Handelsbanken,Svenska Handelsbanken,active,
 Stockholm,focus,Swedbank,,active,
 Stockholm,focus,Nordea,Nordea Bank,active,
-Stockholm,focus,Alecta,Alecta Tjänstepension,active,MISS: fi_se walks 20 of FI's 139 categories and Alecta is a mutual (ömsesidigt) occupational pension undertaking, which is not one of them. Fixable by adding the category.
+Stockholm,focus,Alecta,Alecta Tjänstepension,active,Was missing because fi_se walked only the aktiebolag form of occupational pension undertaking. Alecta is a mutual, filed under TJPÖMS; that category is now walked.
 Stockholm,focus,AMF,AMF Fonder|AMF Pensionsförsäkring,active,
 # ── Copenhagen ───────────────────────────────────────────────────────────────
 Copenhagen,focus,Danske Bank,Danske Invest,active,
 Copenhagen,focus,Nordea DK,Nordea Danmark|Nordea Bank,active,Same group as the Stockholm entry; one match satisfies both.
-Copenhagen,focus,ATP,Arbejdsmarkedets Tillægspension,active,MISS: no Danish register ingested. Finanstilsynet is the first Stage 3 source.
-Copenhagen,focus,PFA,PFA Pension,active,MISS: no Danish register ingested. Finanstilsynet is the first Stage 3 source.
+Copenhagen,focus,ATP,Arbejdsmarkedets Tillægspension,active,Was missing until finanstilsynet_dk was added.
+Copenhagen,focus,PFA,PFA Pension,active,Was missing until finanstilsynet_dk was added.
 Copenhagen,focus,Saxo Bank,Saxo,active,
 Copenhagen,focus,Jyske,Jyske Bank,active,
 Copenhagen,focus,Maj Invest,,active,
@@ -70,30 +70,30 @@ Amsterdam,focus,323 Trading,323 Trading Group,active,
 Amsterdam,focus,ABN AMRO,,active,
 Amsterdam,focus,Robeco,,active,
 Amsterdam,focus,APG,APG Asset Management,active,
-Amsterdam,focus,PGGM,PGGM Vermogensbeheer,active,MISS: Dutch pension asset managers are DNB-supervised and only the AFM register is ingested. Same reason APG is present only through its US entity.
+Amsterdam,focus,PGGM,PGGM Vermogensbeheer,active,Was missing because afm_nl read only AFM's two CSV exports; the AIFM manager registers are published as spreadsheets on the same page. Not a DNB gap -- DNB's register does not contain PGGM at all.
 # ── Switzerland ──────────────────────────────────────────────────────────────
 Switzerland,focus,UBS,,active,
 Switzerland,focus,Pictet,,active,
 Switzerland,focus,Lombard Odier,,active,
-Switzerland,focus,Julius Baer,Julius Bär,active,MISS: no Swiss register ingested. FINMA is the second Stage 3 source.
+Switzerland,focus,Julius Baer,Julius Bär,active,Never actually missing: eurex has carried Bank Julius Bär & Co. AG since it was added. The audit reported it absent because matching was anchored to the start of the name, and the registry name begins with Bank.
 Switzerland,focus,Vontobel,,active,
 Switzerland,focus,Zürcher Kantonalbank,Zurcher Kantonalbank|ZKB,active,
 Switzerland,focus,Unigestion,,active,
 Switzerland,focus,Systematica,Systematica Investments,active,
 Switzerland,focus,GAM,GAM Holding|GAM Investments,active,Systematic arm effectively wound down 2024-2025. Keep but rank low.
 Switzerland,focus,Swiss Re,,active,Markets side only.
-Switzerland,focus,Zurich Insurance,Zurich Insurance Group,active,MISS: no Swiss register ingested. Markets side only. FINMA is the second Stage 3 source.
+Switzerland,focus,Zurich Insurance,Zurich Insurance Group,active,Markets side only. Reached through Zurich Insurance Europe AG in the Danish register; still no Swiss register of our own.
 # ── Dubai ────────────────────────────────────────────────────────────────────
 Dubai,focus,DRW,DRW Trading|DRW Investments,active,
 Dubai,focus,Millennium,Millennium Management,active,
 Dubai,focus,Balyasny,Balyasny Asset Management,active,
-Dubai,focus,ADIA,Abu Dhabi Investment Authority,active,MISS: sovereign wealth fund; appears in no financial register and is unlikely to be reachable except through the seed file.
-Dubai,focus,ADQ,,active,MISS: sovereign wealth fund; appears in no financial register and is unlikely to be reachable except through the seed file.
-Dubai,focus,Mubadala,Mubadala Investment Company,active,MISS: sovereign wealth fund; appears in no financial register and is unlikely to be reachable except through the seed file.
-Dubai,focus,Emirates NBD,,active,MISS: no Gulf register ingested. DFSA (DIFC) and FSRA (ADGM) are the fourth Stage 3 source.
+Dubai,focus,ADIA,Abu Dhabi Investment Authority,active,Sovereign wealth fund; appears in no financial register anywhere. Carried by the seed registry.
+Dubai,focus,ADQ,,active,Sovereign wealth fund; appears in no financial register anywhere. Carried by the seed registry.
+Dubai,focus,Mubadala,Mubadala Investment Company,active,Sovereign wealth fund; appears in no financial register anywhere. Carried by the seed registry.
+Dubai,focus,Emirates NBD,,active,Present only through its Singapore banking licence -- hence not local. No Gulf register is ingested; DFSA puts its public register behind a CAPTCHA.
 # ── Hong Kong ────────────────────────────────────────────────────────────────
 Hong Kong,focus,Optiver,,active,
-Hong Kong,focus,Jump Trading,Jump,active,
+Hong Kong,focus,Jump Trading,Jump Trading Europe,active,
 Hong Kong,focus,Tower Research Capital,Tower Research|Latour Trading,active,
 Hong Kong,focus,Jane Street,,active,
 Hong Kong,focus,Millennium,Millennium Management,active,
@@ -105,12 +105,12 @@ Hong Kong,focus,Citadel Securities,,active,
 Singapore,focus,Optiver,,active,
 Singapore,focus,Jane Street,,active,
 Singapore,focus,Flow Traders,,active,
-Singapore,focus,Jump Trading,Jump,active,
+Singapore,focus,Jump Trading,Jump Trading Europe,active,
 Singapore,focus,Tower Research Capital,Tower Research|Latour Trading,active,
-Singapore,focus,GIC,GIC Private,active,MISS: sovereign wealth fund; appears in no financial register and is unlikely to be reachable except through the seed file.
-Singapore,focus,Temasek,,active,MISS: sovereign wealth fund; appears in no financial register and is unlikely to be reachable except through the seed file.
+Singapore,focus,GIC,GIC Private,active,Sovereign wealth fund; appears in no financial register anywhere. Carried by the seed registry.
+Singapore,focus,Temasek,,active,Sovereign wealth fund; appears in no financial register anywhere. Carried by the seed registry.
 Singapore,focus,DBS,DBS Bank,active,
-Singapore,focus,Grasshopper Asia,,active,MISS: no Singapore register ingested. MAS is the third Stage 3 source. Deliberately not aliased to a bare "Grasshopper" -- that matched an unrelated GRASSHOPPER ESCAPEMENT LLC and reported Singapore as covered when it was not.
+Singapore,focus,Grasshopper Asset Management,,active,Named for the MAS-licensed entity rather than a bare "Grasshopper" -- that matched an unrelated GRASSHOPPER ESCAPEMENT LLC and reported Singapore as covered when it was not.
 Singapore,focus,Vivienne,Vivienne Court Trading,active,
 # ── London ───────────────────────────────────────────────────────────────────
 London,deprioritized,Jane Street,,active,
@@ -127,7 +127,7 @@ London,deprioritized,Millennium,Millennium Management,active,
 London,deprioritized,Balyasny,Balyasny Asset Management,active,
 London,deprioritized,Point72,Point72 Asset Management,active,
 London,deprioritized,DRW,DRW Trading,active,
-London,deprioritized,Jump Trading,Jump,active,
+London,deprioritized,Jump Trading,Jump Trading Europe,active,
 London,deprioritized,Optiver,,active,
 London,deprioritized,Quadrature,Quadrature Capital,active,
 London,deprioritized,Aspect,Aspect Capital,active,
@@ -155,8 +155,8 @@ Frankfurt,deprioritized,Union Investment,,active,
 Shanghai,deprioritized,Optiver,,active,
 Shanghai,deprioritized,Flow Traders,,active,
 Shanghai,deprioritized,Tower Research Capital,Tower Research,active,
-Shanghai,deprioritized,Ubiquant,九坤|Ubiquant Investment,active,MISS: domestic-only; needs AMAC, which is deferred with the deprioritized regions.
-Shanghai,deprioritized,High-Flyer,幻方|High Flyer Quant,active,MISS: domestic-only; needs AMAC, which is deferred with the deprioritized regions.
+Shanghai,deprioritized,Ubiquant,九坤|Ubiquant Investment,active,Reached through its Hong Kong entity in sfc_hk. The mainland entity still needs AMAC.
+Shanghai,deprioritized,High-Flyer,幻方|High Flyer Quant,active,Reached through its Hong Kong entity in sfc_hk. The mainland entity still needs AMAC.
 Shanghai,deprioritized,Mingshi,明汯|Minghong,active,Domestic; needs AMAC, which is deferred.
 Shanghai,deprioritized,Lingjun,灵均|Lingjun Investment,active,Domestic; needs AMAC, which is deferred.
 Shanghai,deprioritized,Zhicheng,致诚,active,MISS: domestic-only; needs AMAC, which is deferred with the deprioritized regions.
@@ -169,7 +169,7 @@ US centers,deprioritized,Hudson River Trading,HRT Financial|HRT,active,
 US centers,deprioritized,Two Sigma,,active,
 US centers,deprioritized,DE Shaw,D. E. Shaw|D E Shaw,active,
 US centers,deprioritized,Renaissance Technologies,Renaissance Technologies LLC,active,
-US centers,deprioritized,Jump Trading,Jump,active,
+US centers,deprioritized,Jump Trading,Jump Trading Europe,active,
 US centers,deprioritized,DRW,DRW Trading|DRW Holdings,active,
 US centers,deprioritized,IMC,IMC Chicago|IMC Financial Markets,active,
 US centers,deprioritized,Optiver,,active,

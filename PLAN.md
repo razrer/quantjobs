@@ -37,8 +37,8 @@ nothing in the near-term plan now waits on a human.
 | 0 | Employer universe — raw collection | done |
 | 1 | Employer identity (entity resolution) | done |
 | 2 | Coverage audit harness | done |
-| 3 | Close audit-flagged gaps | **next** |
-| 4 | Layer 2 — domain resolution | not started |
+| 3 | Close audit-flagged gaps | done |
+| 4 | Layer 2 — domain resolution | **next** |
 | 5 | Layer 2 — ATS resolution | not started |
 | 6 | Layer 3 — ATS extraction | not started |
 | 7 | Layer 4 — JobTech JobStream (Sweden) | not started |
@@ -159,36 +159,67 @@ name) and *local* (some row places the firm in that hub's country).
 
 ---
 
-## Stage 3 — Close audit-flagged gaps
+## Stage 3 — Close audit-flagged gaps *(done)*
 
-Only now add sources, and only the ones Stage 2 proved are needed. The first two
-are new — the audit found them, and they are cheap because the registry already
-exists:
+**Exit criteria — met:** `audit` reports **no focus-hub miss at all**, and every
+miss a buildable source would fix is fixed. The one source that would fix a
+remaining *local* gap is blocked on a human (DFSA, see `ACTION-REQUIRED.md`).
 
-1. **`fi_se` category walk is incomplete** (SE, Stockholm). It walks 20 of FI's
-   139 categories. Alecta — Sweden's largest occupational pension manager — is a
-   mutual (*ömsesidigt*) undertaking, not a `Tjänstepensionsaktiebolag`, so it
-   falls outside all 20. One line in `CATEGORIES` per category added.
-2. **DNB register** (NL, Amsterdam). Dutch pension asset managers are
-   DNB-supervised, not AFM. PGGM is absent entirely; APG survives only through
-   its US entity. The methodology names this register; it was never built.
-3. **Finanstilsynet** (DK) — Copenhagen, 5/7 present and 3 local
-4. **FINMA** (CH) — Switzerland, 9/11 present but only 5 local
-5. **SFC** (HK) and **MAS** (SG) — the two hubs the audit shows are covered in
-   name only
-6. **DFSA** (DIFC) and **FSRA** (ADGM) — Dubai, the weakest focus hub at 3/7
-7. **Seed file additions** — sovereign wealth funds (ADIA, ADQ, Mubadala, GIC,
-   Temasek) appear in no financial register anywhere and no registry will ever
-   reach them. Five lines in `seed_firms.csv` closes five focus-hub misses.
-8. **Nasdaq Stockholm** participant list — same shape as `eurex`
+| Hub | Before | After | Local |
+|---|---|---|---|
+| Stockholm | 19/20 | **20/20** | 20 |
+| Copenhagen | 5/7 | **7/7** | 7 |
+| Amsterdam | 12/13 | **13/13** | 13 |
+| Switzerland | 9/11 | **11/11** | 6 |
+| Dubai | 3/7 | **7/7** | 3 |
+| Hong Kong | 9/9 | **9/9** | 8 *(was 1)* |
+| Singapore | 7/10 | **10/10** | 7 |
 
-Deferred with the deprioritized regions: BaFin (DE), FCA (UK), AMAC (CN), and
-the US state-adviser tail. Each is a known gap with a written reason, not an
-oversight — pick them up if the focus hubs run dry.
+The universe went from 30,590 rows to 63,724, and three new registries were
+added: `finanstilsynet_dk`, `mas_sg`, `sfc_hk`.
 
-**Exit criterion:** `audit` reports no focus-hub miss without a written reason,
-and every miss that a buildable source would fix is fixed. Item 7 is the cheapest
-and should go first.
+**What was done, in the order it was done:**
+
+1. **`fi_se` category walk was incomplete.** It walked 20 of FI's 495 codes, and
+   the omissions were not all funds: Alecta, Sweden's largest occupational
+   pension manager, is a *mutual* undertaking filed under `TJPÖMS`, not a
+   `Tjänstepensionsaktiebolag`. Added that plus the association and foreign
+   forms. Corporate pension foundations (807 of them) stay excluded, now with a
+   written reason.
+2. **`afm_nl` read only two of AFM's registers.** The AIFM manager registers are
+   published as **spreadsheets** on the same page as the CSV export links, and
+   only as spreadsheets. That cost PGGM Vermogensbeheer and APG Asset
+   Management. Needed a minimal stdlib `.xlsx` reader (`parsing.xlsx_rows`).
+3. **`finanstilsynet_dk`** — Copenhagen. 26,495 entities.
+4. **Seed file** — the five sovereign wealth funds. Five lines, five misses.
+5. **`mas_sg`** — Singapore. 1,992 institutions across 21 categories.
+6. **`sfc_hk`** — Hong Kong. 3,623 licensed corporations. Took HK from 1 local
+   to 8, and incidentally found Ubiquant and High-Flyer, two Shanghai misses,
+   through their Hong Kong entities.
+
+**What this stage found that the plan did not predict:**
+
+- **The DNB register was the wrong answer.** Stage 2 recorded "Dutch pension
+  managers are DNB-supervised" as the reason PGGM was missing. Reconnaissance
+  disproved it — DNB's register does not contain PGGM at all. The real cause was
+  `afm_nl` reading two of AFM's registers. A recorded reason is a hypothesis
+  until someone checks it, and the fixture now says so.
+- **Julius Baer was never missing.** `Bank Julius Bär & Co. AG` had been in
+  `eurex` since the day it was added. The audit reported it absent because
+  matching was anchored to the *start* of the name, and the registry name begins
+  with "Bank". Same bug would have hidden `Fondsmæglerselskabet Maj Invest A/S`.
+  Matching is now token-aligned anywhere in the name, which is what makes the
+  Switzerland and Copenhagen numbers above trustworthy.
+- **Denmark has no enumerable endpoint**, so `finanstilsynet_dk` sweeps a
+  substring search over single letters and unions the result. It saturates part
+  way through the alphabet, which is the evidence it is complete.
+- **The DFSA register is behind a CAPTCHA.** Dubai is the one focus hub with no
+  local register and it needs a human. See `ACTION-REQUIRED.md`.
+
+**Deferred, each with a written reason rather than an oversight:** DNB (real
+source, fixes no audit miss — 147 pension funds and 786 banks if it is ever
+wanted), FINMA (Switzerland is 11/11 present but 6 local), Nasdaq Stockholm
+participants, BaFin, FCA, AMAC, and the US state-adviser tail.
 
 ---
 

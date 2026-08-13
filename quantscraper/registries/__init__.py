@@ -17,9 +17,35 @@ from __future__ import annotations
 
 from types import ModuleType
 
-from . import afm_nl, cboe_europe, eurex, euronext, fi_se, fia_epta, sec_adv, sec_bd, seed
+from . import (
+    afm_nl,
+    cboe_europe,
+    eurex,
+    euronext,
+    fi_se,
+    fia_epta,
+    finanstilsynet_dk,
+    mas_sg,
+    sec_adv,
+    sec_bd,
+    seed,
+    sfc_hk,
+)
 
 REGISTRIES: dict[str, ModuleType] = {
     module.NAME: module
-    for module in (fi_se, afm_nl, sec_adv, sec_bd, fia_epta, eurex, euronext, cboe_europe, seed)
+    for module in (
+        fi_se,
+        afm_nl,
+        finanstilsynet_dk,
+        mas_sg,
+        sfc_hk,
+        sec_adv,
+        sec_bd,
+        fia_epta,
+        eurex,
+        euronext,
+        cboe_europe,
+        seed,
+    )
 }

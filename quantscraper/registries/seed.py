@@ -1,9 +1,11 @@
 """Hand-curated seed list of firms that appear in no public registry.
 
-Covers two categories:
+Covers three categories:
   - Sponsored-access / MiFID II Art. 2(1)(d) exempt firms (Amsterdam prop shops
     that trade through another member's exchange membership)
   - Firms governed by their own legislation rather than FI (AP1-AP4, AP6)
+  - Sovereign wealth funds (ADIA, ADQ, Mubadala, GIC, Temasek), which are state
+    entities rather than licensed firms and so appear in no register anywhere
 
 Edit seed_firms.csv to add or remove entries. Lines beginning with '#' and
 blank lines are silently skipped.
