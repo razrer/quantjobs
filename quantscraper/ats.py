@@ -60,7 +60,17 @@ ATS_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("greenhouse", re.compile(r"boards-api\.greenhouse\.io/v\d+/boards/([a-z0-9_-]+)", re.I)),
     ("greenhouse", re.compile(r"(?:job-)?boards\.greenhouse\.io/(?:embed/job_board\?for=)?([a-z0-9_-]+)", re.I)),
     ("lever", re.compile(r"jobs\.lever\.co/([a-z0-9_-]+)", re.I)),
-    ("workday", re.compile(r"([a-z0-9-]+)\.(?:wd\d+\.)?myworkdayjobs\.com", re.I)),
+    # Workday needs three things to be pollable -- tenant, data-centre number
+    # and site -- so the token is compound. Capturing the tenant alone reads
+    # like success and leaves the board unreachable.
+    (
+        "workday",
+        re.compile(
+            r"([a-z0-9-]+)\.(wd\d+)\.myworkdayjobs\.com"
+            r"(?:/wday/cxs/[^/\"']+)?(?:/[a-z]{2}-[A-Z]{2})?/([A-Za-z0-9_-]+)",
+            re.I,
+        ),
+    ),
     ("ashby", re.compile(r"jobs\.ashbyhq\.com/([a-z0-9_.-]+)", re.I)),
     ("smartrecruiters", re.compile(r"(?:careers|jobs)\.smartrecruiters\.com/([a-z0-9_-]+)", re.I)),
     ("workable", re.compile(r"(?:apply|jobs)\.workable\.com/([a-z0-9_-]+)", re.I)),
@@ -126,9 +136,19 @@ def fingerprint(markup: str) -> tuple[str, str | None, str] | None:
     """
     for name, pattern in ATS_PATTERNS:
         for match in pattern.finditer(markup):
-            token = next((g for g in match.groups() if g), None)
-            if token and token.casefold() in _NOT_A_TOKEN:
+            groups = [g for g in match.groups() if g]
+            # Workday's three captures are all needed; everything else takes
+            # the first non-empty group as its board token.
+            token = "|".join(groups) if name == "workday" else (groups[0] if groups else None)
+            if token and any(part.casefold() in _NOT_A_TOKEN for part in token.split("|")):
                 continue  # infrastructure host; keep looking for a real board
+            # A purely numeric token is not a board name. `jobs.lever.co/500`
+            # on an error page produced board "500", which then 404s on every
+            # poll -- a firm that looks resolved and yields nothing forever.
+            if token and name != "workday" and token.isdigit():
+                continue
+            if name == "workday" and len(groups) != 3:
+                continue  # tenant without a site is not pollable
             return name, token, match.group(0)[:120]
     # Second pass: the ATS is present but every match was infrastructure.
     for name, pattern in ATS_PATTERNS:

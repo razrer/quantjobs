@@ -37,6 +37,24 @@ CREATE TABLE IF NOT EXISTS employers (
     PRIMARY KEY (source, source_id)
 );
 
+CREATE TABLE IF NOT EXISTS jobs (
+    ats          TEXT NOT NULL,   -- greenhouse, workday, teamtailor, ...
+    token        TEXT NOT NULL,   -- that ATS's board identifier
+    job_id       TEXT NOT NULL,   -- the ATS's own posting id
+    domain       TEXT,            -- firm domain this board was reached from
+    title        TEXT NOT NULL,
+    url          TEXT,
+    location     TEXT,
+    department   TEXT,
+    posted_at    TEXT,
+    description  TEXT,
+    first_seen   TEXT NOT NULL,
+    last_seen    TEXT NOT NULL,
+    PRIMARY KEY (ats, token, job_id)
+);
+
+CREATE INDEX IF NOT EXISTS jobs_by_domain ON jobs (domain);
+
 CREATE TABLE IF NOT EXISTS runs (
     id          INTEGER PRIMARY KEY,
     source      TEXT NOT NULL,
@@ -95,6 +113,54 @@ def upsert_employers(
                 country   = excluded.country,
                 website   = COALESCE(excluded.website, employers.website),
                 last_seen = excluded.last_seen
+            """,
+            rows,
+        )
+    return len(rows)
+
+
+def upsert_jobs(
+    connection: sqlite3.Connection, domain: str | None, jobs: Iterable["object"]
+) -> int:
+    """Insert or refresh postings. Returns the number of rows written.
+
+    A posting that disappears keeps its row and stops having `last_seen`
+    refreshed, the same rule `employers` follows: deleting is how a listing
+    goes missing without anything announcing it.
+    """
+    timestamp = now()
+    rows = [
+        (
+            job.ats,
+            job.token,
+            job.job_id,
+            domain,
+            job.title,
+            job.url,
+            job.location,
+            job.department,
+            job.posted_at,
+            job.description,
+            timestamp,
+            timestamp,
+        )
+        for job in jobs
+    ]
+    with connection:
+        connection.executemany(
+            """
+            INSERT INTO jobs (ats, token, job_id, domain, title, url, location,
+                              department, posted_at, description,
+                              first_seen, last_seen)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (ats, token, job_id) DO UPDATE SET
+                title       = excluded.title,
+                url         = excluded.url,
+                location    = excluded.location,
+                department  = excluded.department,
+                posted_at   = excluded.posted_at,
+                description = COALESCE(excluded.description, jobs.description),
+                last_seen   = excluded.last_seen
             """,
             rows,
         )

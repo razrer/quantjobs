@@ -144,6 +144,22 @@ def get_text(url: str, *, encoding: str = "utf-8", **kwargs) -> str:
     return get(url, **kwargs).decode(encoding, errors="replace")
 
 
+def post_json(
+    url: str, body: bytes, *, timeout: int = 60, retries: int = 3
+) -> bytes:
+    """POST a JSON body. Workday's CXS endpoint is the reason this exists."""
+    request = urllib.request.Request(
+        url,
+        data=body,
+        headers={
+            "User-Agent": USER_AGENT,
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        },
+    )
+    return _send(request, timeout, retries)
+
+
 def post_form(
     url: str, fields: dict[str, str], *, timeout: int = 60, retries: int = 3
 ) -> bytes:

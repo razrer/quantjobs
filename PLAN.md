@@ -46,7 +46,7 @@ nothing in the near-term plan now waits on a human.
 | 4 | Layer 2 — domain resolution | **in progress** — mechanism built, queue long |
 | 4b | Switzerland (FINMA) | done |
 | 5 | Layer 2 — ATS resolution | **in progress** — fingerprinter built |
-| 6 | Layer 3 — ATS extraction | not started |
+| 6 | Layer 3 — ATS extraction | **in progress** — 10 formats, jobs landing |
 | 7 | Layer 4 — JobTech JobStream (Sweden) | not started |
 | 8 | Silent-failure alerting | not started |
 | 9 | Layer 3B — Tier B change detection | not started |
@@ -396,17 +396,51 @@ assigned tier B/C. No firm left untiered.
 
 ---
 
-## Stage 6 — Layer 3, ATS extraction
+## Stage 6 — Layer 3, ATS extraction *(in progress)*
 
-The eight global endpoint formats plus the Nordic group (Teamtailor, Talentech,
-Varbi, Jobylon, Emply) — without the Nordic set Stockholm is not exhaustive.
+`extract.py`. Stage 5 resolved firms to `(ats, token)`; each ATS publishes one
+endpoint shape, so this is one small function per format rather than one scraper
+per firm. That is the payoff the employer-first architecture was bought for.
 
-**Workday must be handled explicitly:** `limit` above 20 returns an empty array
-with HTTP 200, which is indistinguishable from "no jobs" unless asserted on.
-This one gets a regression test, not a comment.
+Ten formats implemented and verified against live boards: **greenhouse, lever,
+ashby, smartrecruiters, workable, recruitee, bamboohr, breezy, personio,
+workday**. First run: **473 postings from 30 boards across 8 formats.**
 
-**Exit criterion:** jobs land in the database from at least one firm per ATS
-format, and the Workday trap has a test that fails if the assertion is removed.
+Postings land in `jobs`, unclassified. Whether a posting is a quant role is a
+read-time question — titles are not comparable across firms ("Strat" at Goldman,
+"Trader" at Jane Street, "kvantitativ analytiker" in Stockholm) and a classifier
+that runs at write time cannot be re-run over history.
+
+### The Workday trap, and the correction
+
+The plan recorded that `limit` above 20 returns an empty `jobPostings` array
+with HTTP 200. Against the tenants here it returns **HTTP 400** — loud, not
+silent. The note was half right, and the half that matters was somewhere else.
+
+**The real trap is `total`.** Workday reports the true count on the first page
+and **`total: 0` on every page after it**. Stopping when `len(jobs) >= total`
+therefore truncates every board at 20 postings, returns no error, and looks like
+a complete result. `abrdn` has 24 openings; that reader would have found 20 and
+never known. Every large bank publishes through Workday.
+
+The extractor caps the page size at 20, pages by `offset`, and stops only on a
+short page. `tests/test_workday.py` covers all three. Both protections were
+mutation-tested: raising the cap fails 5 of 6 tests, and reintroducing the
+`total` stop fails the test written for it.
+
+### Two token bugs this stage exposed in Stage 5
+
+Both produced boards that look resolved and yield nothing forever:
+
+- **Workday needs `tenant|wdN|site`**, not just the tenant. A tenant alone
+  builds a URL that 404s on every poll. Fingerprinting now requires all three
+  and refuses the match otherwise.
+- **`jobs.lever.co/500`** on an error page produced the board token `"500"`.
+  Purely numeric tokens are now rejected.
+
+**Exit criterion:** jobs land from at least one firm per implemented ATS format
+*(8 of 10 so far; lever and workday pending re-fingerprint)*, and the Workday
+trap has a test that fails if the protection is removed *(met)*.
 
 ---
 

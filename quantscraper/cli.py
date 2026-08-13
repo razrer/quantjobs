@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from . import ats, audit, db, domains, fca, resolve
+from . import ats, audit, db, domains, extract, fca, resolve
 from .registries import REGISTRIES
 
 # The registries covering the focus hubs. Domain resolution starts here because
@@ -123,6 +123,24 @@ def _ats(database: str, limit: int, workers: int) -> int:
     return 0
 
 
+def _jobs(database: str, limit: int) -> int:
+    connection = db.connect(database)
+    boards, jobs, failures = extract.run(connection, limit)
+    print(f"polled {boards:,d} boards, wrote {jobs:,d} postings")
+    for failure in failures[:10]:
+        print(f"  FAIL {failure}", file=sys.stderr)
+    if len(failures) > 10:
+        print(f"  ... and {len(failures) - 10} more", file=sys.stderr)
+
+    print("\npostings by ATS")
+    for row in connection.execute(
+        "SELECT ats, COUNT(*) AS n, COUNT(DISTINCT token) AS boards"
+        " FROM jobs GROUP BY ats ORDER BY n DESC"
+    ):
+        print(f"  {row['ats']:16s} {row['n']:5,d} from {row['boards']:,d} boards")
+    return 0
+
+
 def _stats(database: str) -> int:
     connection = db.connect(database)
 
@@ -205,7 +223,14 @@ def main(argv: list[str] | None = None) -> int:
     ats_command.add_argument("--limit", type=int, default=500)
     ats_command.add_argument("--workers", type=int, default=12)
 
+    jobs_command = commands.add_parser(
+        "jobs", help="pull postings from resolved ATS boards (Layer 3)"
+    )
+    jobs_command.add_argument("--limit", type=int, default=100)
+
     args = parser.parse_args(argv)
+    if args.command == "jobs":
+        return _jobs(args.db, args.limit)
     if args.command == "ats":
         return _ats(args.db, args.limit, args.workers)
     if args.command == "domains":

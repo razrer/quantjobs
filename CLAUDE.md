@@ -52,6 +52,14 @@ python -m quantscraper fca --limit 300        # enrich domains from the FCA regi
 python -m quantscraper ats --limit 800        # fingerprint careers hosts to an ATS
 ```
 
+```bash
+python -m quantscraper jobs --limit 100       # pull postings from resolved boards
+```
+
+```bash
+python -m unittest discover -s tests          # the Workday regression tests
+```
+
 `fca` needs `FCA_EMAIL` and `FCA_KEY` in `.env` (gitignored, never committed).
 
 `run.ps1` / `run.sh` wrap these with the correct interpreter (see below).
@@ -87,6 +95,7 @@ registries/*.py  ->  employers table  ->  resolve.py  ->  firms table
 - `domains.py` — Layer 2: firm name -> domain, guessed then verified
 - `fca.py` — Layer 2 enrichment from the FCA register; needs `.env`
 - `ats.py` — Layer 2: domain -> `(ats, token)` by fingerprint, else tier B/C
+- `extract.py` — Layer 3: one function per ATS format; postings land in `jobs`
 - `registries/` — one module per source
 
 `roster.csv` is the *audit set*, never the universe. A firm's absence from it
@@ -142,10 +151,11 @@ geography ranks results rather than gating the universe.
 - **Deprioritized:** Germany, US, London/UK, China, Dubai. Existing US data
   (`sec_adv`, `sec_bd`) stays; it is simply not where the next effort goes.
 
-All seven focus hubs are at 100% of the audit roster *present*. The number that
+All six focus hubs are at 100% of the audit roster *present*. The number that
 still varies is *local* — whether a registry covering that hub reported the firm,
-rather than it being visible only through a foreign registration. Dubai (3/7) is
-the weak one and is blocked on a human; Switzerland (6/11) would need FINMA.
+rather than it being visible only through a foreign registration: Stockholm
+20/20, Copenhagen 7/7, Amsterdam 13/13, Switzerland 9/11, Hong Kong 8/9,
+Singapore 7/10.
 
 ## Scope discipline
 
@@ -165,9 +175,16 @@ proceed methodically rather than opportunistically. Concretely:
 
 Each of these silently produced wrong results before being caught:
 
-- **Workday** returns an empty `jobPostings` array with **HTTP 200** if `limit`
-  exceeds 20 — indistinguishable from "no jobs" unless asserted on. Workday is
-  how most large banks publish. Not yet implemented; do not get this wrong.
+- **Workday's real trap is `total`, not `limit`.** The long-standing note here
+  said `limit > 20` returns an empty array with HTTP 200; against the tenants
+  we poll it returns **HTTP 400**, which is loud. The silent one is that
+  Workday reports the true `total` on the first page and **`total: 0` on every
+  page after it** — so stopping when `len(jobs) >= total` truncates every board
+  at 20 postings with no error at all. Cap the page at 20, page by `offset`,
+  stop only on a short page. `tests/test_workday.py` pins all three; both
+  protections are mutation-tested.
+- **Workday needs `tenant|wdN|site`.** A tenant alone builds a URL that 404s on
+  every poll while the board looks resolved.
 - **ATS board tokens are easy to extract wrongly, and the wrong answer looks
   right.** `boards-api.greenhouse.io/v1/boards/{token}` puts an API version
   before the board, so matching the host alone yields `v1` for every Greenhouse
