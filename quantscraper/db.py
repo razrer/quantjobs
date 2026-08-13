@@ -73,6 +73,12 @@ def now() -> str:
 def connect(path: Path | str = DEFAULT_PATH) -> sqlite3.Connection:
     connection = sqlite3.connect(path)
     connection.row_factory = sqlite3.Row
+    # The long Layer 2 queues are meant to be run side by side -- `domains` and
+    # `ats` are both hours of wall time against different hosts. Their writes
+    # are batched and brief, but the default five-second wait is short enough
+    # that one landing mid-batch aborts a run and loses the work since its last
+    # flush. Waiting is always the better trade here.
+    connection.execute("PRAGMA busy_timeout = 60000")
     connection.executescript(SCHEMA)
     return connection
 

@@ -16,8 +16,13 @@ from unittest import mock
 from quantscraper import extract
 
 
-def _page(postings: int, total: int) -> bytes:
-    """A CXS response with `postings` rows claiming `total` overall."""
+def _page(postings: int, total: int, start: int = 0) -> bytes:
+    """A CXS response with `postings` rows claiming `total` overall.
+
+    `start` numbers the rows, so two pages of a real board differ. Reusing the
+    same ids across pages is what a tenant ignoring `offset` looks like, and
+    the extractor now treats that as a stop condition.
+    """
     return json.dumps(
         {
             "total": total,
@@ -28,7 +33,7 @@ def _page(postings: int, total: int) -> bytes:
                     "locationsText": "London",
                     "postedOn": "Posted Today",
                 }
-                for i in range(postings)
+                for i in range(start, start + postings)
             ],
         }
     ).encode()
@@ -42,7 +47,7 @@ class WorkdayPagingTest(unittest.TestCase):
         board of 24 and no error at all. That is a silent coverage loss, which
         is the one failure this project refuses to accept.
         """
-        pages = [_page(20, 24), _page(4, 0)]
+        pages = [_page(20, 24), _page(4, 0, start=20)]
         with mock.patch.object(extract.http, "post_json", side_effect=pages):
             jobs = extract.workday("tenant|wd3|site")
 
@@ -78,7 +83,7 @@ class WorkdayPagingTest(unittest.TestCase):
         self.assertEqual(post.call_count, 1)
 
     def test_offset_advances_by_the_page_size(self):
-        pages = [_page(20, 40), _page(20, 0), _page(1, 0)]
+        pages = [_page(20, 40), _page(20, 0, start=20), _page(1, 0, start=40)]
         captured = []
 
         def capture(url, body, **kwargs):
@@ -89,6 +94,32 @@ class WorkdayPagingTest(unittest.TestCase):
             extract.workday("tenant|wd3|site")
 
         self.assertEqual(captured, [0, 20, 40])
+
+    def test_reads_past_eight_hundred_postings(self):
+        """The page bound is a guard, not a board size limit.
+
+        It was 40 pages, and LSEG and State Street both came back at exactly
+        800 -- a round number is what a cap looks like from the outside, and
+        nothing in the output said so. Every large bank publishes on Workday,
+        so the boards that hit this are the ones that matter most.
+        """
+        pages = [_page(20, 900, start=n * 20) for n in range(45)]
+        pages.append(_page(3, 0, start=900))
+
+        with mock.patch.object(extract.http, "post_json", side_effect=pages):
+            jobs = extract.workday("tenant|wd3|site")
+
+        self.assertEqual(len(jobs), 903, "paging stopped at the page bound")
+
+    def test_stops_when_a_page_repeats(self):
+        """A tenant that ignores `offset` serves page one forever."""
+        with mock.patch.object(
+            extract.http, "post_json", side_effect=[_page(20, 99)] * 10
+        ) as post:
+            jobs = extract.workday("tenant|wd3|site")
+
+        self.assertEqual(post.call_count, 2)
+        self.assertEqual(len(jobs), 20)
 
     def test_rejects_a_token_that_is_not_pollable(self):
         """A tenant without a site cannot be polled. Failing loudly beats

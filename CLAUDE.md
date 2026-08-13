@@ -22,6 +22,8 @@ Make sure to wrote to `ACTION-REQUIRED.md` when something needs to be reviewed o
 Read `PLAN.md` before starting work. It says which stage is next and how that
 stage knows it is finished. When you finish a stage, make sure to update the plan.
 
+Make sure to not output neccessary text in the GUI, just write result or other important messages.
+
 ## Running it
 
 ```bash
@@ -185,6 +187,30 @@ Each of these silently produced wrong results before being caught:
   protections are mutation-tested.
 - **Workday needs `tenant|wdN|site`.** A tenant alone builds a URL that 404s on
   every poll while the board looks resolved.
+- **A careers page can link to a board that is not the firm's.**
+  `palmersquare.com` linked to `jobs.lever.co/heyrowan` — syndicated content
+  with a Google `srsltid` parameter still attached — and the feed delivered 90
+  jewellery-retail postings under a credit manager's domain. Well-formed token,
+  real ATS, live feed, wrong company. Read the postings, not just the token.
+- **A page-count guard is a silent cap on the boards that matter most.** The
+  Workday reader stopped after 40 pages "as a guard against a broken stop
+  condition", and LSEG and State Street both came back at exactly **800**
+  postings — State Street really has 1,295. A round number in the output is
+  what a cap looks like from the outside, and nothing said so. The bound is
+  1,000 pages now, paging stops on a short page *or* one that repeats the
+  previous (a tenant ignoring `offset` serves page one forever), and both are
+  tested. Whenever a per-board count is suspiciously round, suspect our guard
+  before their register.
+- **A regex over fetched markup is a denial-of-service waiting to happen, and
+  it fails as a *stall*, not an error.** Two `ats` runs sat at 100% CPU for two
+  and a half hours, wrote nothing, and looked exactly like slow network. Two
+  causes, both quadratic: `[^"']*(?:career|jobs|…)[^"']*` over an href that
+  never closes, and `([a-z0-9-]+)\.host\.com` over an inline base64 data URI,
+  which is a long run of label characters containing no dot. Extract hrefs with
+  a bounded pattern and match words in Python; bound every host label to 63
+  characters and prefix it with `(?<![a-z0-9-])` so a label cannot start
+  mid-label. `tests/test_ats.py` times both. Cap fetched markup too — 23
+  patterns over an unbounded body blocks every other thread through the GIL.
 - **ATS board tokens are easy to extract wrongly, and the wrong answer looks
   right.** `boards-api.greenhouse.io/v1/boards/{token}` puts an API version
   before the board, so matching the host alone yields `v1` for every Greenhouse

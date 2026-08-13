@@ -49,6 +49,24 @@ CREATE TABLE IF NOT EXISTS ats_resolution (
 );
 """
 
+# Two bounds, and the host patterns need both.
+#
+# `([a-z0-9-]+)\.host\.com` looks harmless and is quadratic: over a long run
+# with no dot in it the capture swallows everything, backtracks one character
+# at a time, fails, and then the engine restarts the whole exercise one
+# position along. An inline base64 data URI is exactly such a run. A 40 KB
+# image stalled one pattern for minutes; a page carrying a few hung two runs
+# for hours at full CPU, writing nothing and reporting nothing.
+#
+# A DNS label is at most 63 characters, which caps the backtracking. That alone
+# still leaves 63 attempts at every one of two million positions, so the
+# lookbehind does the real work: a label cannot begin mid-label, so inside a
+# base64 blob every position fails on the first check instead of the 63rd. It
+# excludes only the label characters, so `board.host.com` still matches when it
+# appears as `foo.board.host.com`.
+_LABEL = r"([a-z0-9-]{1,63})"
+_HOST_LABEL = r"(?<![a-z0-9-])" + _LABEL
+
 # Each pattern pulls the board token straight out of the ATS's own URL. The
 # Nordic group (Teamtailor, Varbi, Jobylon, Emply, Talentech) is here because
 # without it Stockholm and Copenhagen are not exhaustive -- generic scrapers
@@ -66,7 +84,7 @@ ATS_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "workday",
         re.compile(
-            r"([a-z0-9-]+)\.(wd\d+)\.myworkdayjobs\.com"
+            _HOST_LABEL + r"\.(wd\d+)\.myworkdayjobs\.com"
             r"(?:/wday/cxs/[^/\"']+)?(?:/[a-z]{2}-[A-Z]{2})?/([A-Za-z0-9_-]+)",
             re.I,
         ),
@@ -74,22 +92,22 @@ ATS_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("ashby", re.compile(r"jobs\.ashbyhq\.com/([a-z0-9_.-]+)", re.I)),
     ("smartrecruiters", re.compile(r"(?:careers|jobs)\.smartrecruiters\.com/([a-z0-9_-]+)", re.I)),
     ("workable", re.compile(r"(?:apply|jobs)\.workable\.com/([a-z0-9_-]+)", re.I)),
-    ("teamtailor", re.compile(r"([a-z0-9-]+)\.teamtailor\.com", re.I)),
-    ("varbi", re.compile(r"([a-z0-9-]+)\.varbi\.com", re.I)),
-    ("jobylon", re.compile(r"([a-z0-9-]+)\.jobylon\.com|jobylon\.com/jobs/([a-z0-9-]+)", re.I)),
-    ("emply", re.compile(r"([a-z0-9-]+)\.emply\.(?:com|net)", re.I)),
-    ("recruitee", re.compile(r"([a-z0-9-]+)\.recruitee\.com", re.I)),
-    ("personio", re.compile(r"([a-z0-9-]+)\.jobs\.personio\.(?:de|com)", re.I)),
-    ("bamboohr", re.compile(r"([a-z0-9-]+)\.bamboohr\.com", re.I)),
-    ("icims", re.compile(r"careers-([a-z0-9-]+)\.icims\.com", re.I)),
-    ("taleo", re.compile(r"([a-z0-9-]+)\.taleo\.net", re.I)),
-    ("successfactors", re.compile(r"([a-z0-9-]+)\.jobs\.sap\.com|career\d*\.successfactors\.(?:eu|com)", re.I)),
-    ("eightfold", re.compile(r"([a-z0-9-]+)\.eightfold\.ai", re.I)),
-    ("pinpoint", re.compile(r"([a-z0-9-]+)\.pinpointhq\.com", re.I)),
+    ("teamtailor", re.compile(_HOST_LABEL + r"\.teamtailor\.com", re.I)),
+    ("varbi", re.compile(_HOST_LABEL + r"\.varbi\.com", re.I)),
+    ("jobylon", re.compile(_HOST_LABEL + r"\.jobylon\.com|jobylon\.com/jobs/([a-z0-9-]+)", re.I)),
+    ("emply", re.compile(_HOST_LABEL + r"\.emply\.(?:com|net)", re.I)),
+    ("recruitee", re.compile(_HOST_LABEL + r"\.recruitee\.com", re.I)),
+    ("personio", re.compile(_HOST_LABEL + r"\.jobs\.personio\.(?:de|com)", re.I)),
+    ("bamboohr", re.compile(_HOST_LABEL + r"\.bamboohr\.com", re.I)),
+    ("icims", re.compile(r"careers-" + _LABEL + r"\.icims\.com", re.I)),
+    ("taleo", re.compile(_HOST_LABEL + r"\.taleo\.net", re.I)),
+    ("successfactors", re.compile(_HOST_LABEL + r"\.jobs\.sap\.com|career\d*\.successfactors\.(?:eu|com)", re.I)),
+    ("eightfold", re.compile(_HOST_LABEL + r"\.eightfold\.ai", re.I)),
+    ("pinpoint", re.compile(_HOST_LABEL + r"\.pinpointhq\.com", re.I)),
     ("jobvite", re.compile(r"jobs\.jobvite\.com/([a-z0-9_-]+)", re.I)),
-    ("breezy", re.compile(r"([a-z0-9-]+)\.breezy\.hr", re.I)),
+    ("breezy", re.compile(_HOST_LABEL + r"\.breezy\.hr", re.I)),
     ("join", re.compile(r"join\.com/companies/([a-z0-9_-]+)", re.I)),
-    ("homerun", re.compile(r"([a-z0-9-]+)\.homerun\.co", re.I)),
+    ("homerun", re.compile(_HOST_LABEL + r"\.homerun\.co", re.I)),
 )
 
 # Careers links in the languages of the focus hubs. Missing the Swedish or
@@ -101,11 +119,21 @@ _CAREERS_WORDS = (
     "vacatures", "werken", "werkenbij", "stillinger", "karriere", "ansatte",
     "stellen", "emploi", "empleo", "lavora",
 )
-_CAREERS = re.compile(
-    r'href=["\']([^"\']*(?:' + "|".join(_CAREERS_WORDS) + r')[^"\']*)["\']', re.I
-)
+# Hrefs are extracted first and matched against the word list in Python. The
+# obvious single regex -- `[^"']*(?:career|jobs|...)[^"']*` -- backtracks
+# catastrophically on real markup: an unterminated quote inside inline script
+# leaves the two unbounded runs competing for the same characters, once per
+# word occurrence, and a 500 KB homepage then takes hours at full CPU with no
+# output. Two runs stalled on exactly that. The length bound keeps the failure
+# local even so: an href that never closes costs 2,000 steps, not the page.
+_HREF = re.compile(r'href=["\']([^"\']{0,2000})["\']', re.I)
 
 _MAX_CAREERS_PAGES = 3
+
+# A careers page is HTML, not a media file. Fingerprinting runs 23 patterns
+# over the body twice, so an unbounded one stalls the whole pool -- the GIL
+# means one thread scanning a huge string blocks the other fifteen.
+_MAX_MARKUP = 2_000_000
 
 # Subdomains and path segments that are infrastructure, not a board. Every ATS
 # serves its own assets from hosts that match the same shape, so without this
@@ -161,7 +189,10 @@ def fingerprint(markup: str) -> tuple[str, str | None, str] | None:
 def careers_candidates(markup: str, domain: str) -> list[str]:
     """Careers URLs linked from a homepage, most promising first."""
     found: list[str] = []
-    for href in _CAREERS.findall(markup):
+    for href in _HREF.findall(markup):
+        low = href.casefold()
+        if not any(word in low for word in _CAREERS_WORDS):
+            continue
         url = urllib.parse.urljoin(f"https://{domain}/", href.strip())
         if not url.startswith("http"):
             continue
@@ -183,7 +214,7 @@ def _fetch(url: str) -> str | None:
         return None
     except Exception:  # noqa: BLE001 -- one hostile host must not stop the run
         return None
-    return body.decode("utf-8", errors="replace")
+    return body.decode("utf-8", errors="replace")[:_MAX_MARKUP]
 
 
 def resolve_domain(domain: str) -> Resolution:

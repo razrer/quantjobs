@@ -391,8 +391,42 @@ Both are now filtered against a list of infrastructure hostnames, and a
 recognised ATS with an unusable token is recorded with the ATS and a NULL token
 rather than discarded — knowing the feed *shape* is still worth having.
 
+### The stall that produced no error at all
+
+Two `ats` runs sat at **100% CPU for two and a half hours and wrote nothing**.
+No exception, no partial output, no slow endpoint to blame — from the outside
+it was indistinguishable from a queue of unresponsive hosts, which is what it
+was taken for. Both were stuck inside a regular expression.
+
+Two independent quadratic patterns, and the second is the one worth
+remembering because every host pattern here had it:
+
+- `[^"']*(?:career|jobs|…)[^"']*` over an href that never closes. Real markup
+  ends attributes early all the time — an apostrophe inside inline script does
+  it — and the two unbounded runs then compete for the same characters once per
+  word occurrence. Hrefs are extracted with a bounded pattern now and matched
+  against the word list in Python.
+- `([a-z0-9-]+)\.teamtailor\.com` over an **inline base64 data URI**, which is
+  a long run of label characters containing no dot. The capture swallows the
+  run, backtracks through it, fails, and the engine starts again one character
+  along. A 40 KB image was minutes of CPU in a single pattern; pages carry
+  several. Host labels are bounded to 63 characters — a DNS label cannot be
+  longer — and prefixed with `(?<![a-z0-9-])`, so inside a blob every position
+  fails on the first check rather than the sixty-third.
+
+`tests/test_ats.py` times both, and fetched markup is capped at 2 MB: 23
+patterns over an unbounded body holds up every other worker through the GIL.
+
+This is the same failure class as principle 2 — an implausible result that
+announces nothing — in the one place the plan had not looked for it. A run that
+produces *nothing* is as silent as a run that produces zero rows.
+
 **Exit criterion:** every firm with a domain is either resolved to an ATS or
 assigned tier B/C. No firm left untiered.
+
+**Where it stands:** 1,130 domains tiered — 118 tier A, 390 B, 622 C — against
+a queue of roughly 13,900 domains that `domains.py` has produced so far. Both
+queues are incremental and cached, so this is wall time, not a design problem.
 
 ---
 
@@ -428,6 +462,24 @@ short page. `tests/test_workday.py` covers all three. Both protections were
 mutation-tested: raising the cap fails 5 of 6 tests, and reintroducing the
 `total` stop fails the test written for it.
 
+### And then the guard against that trap became the trap
+
+With the re-fingerprinted tenants in, Workday returned 3,193 postings from 18
+boards — and **LSEG and State Street both returned exactly 800**. A round
+number is what a cap looks like from the outside. It was ours: a 40-page bound
+added as "a guard against a broken stop condition". State Street has **1,295**
+openings, so the guard against silent truncation was silently truncating, on
+the two largest boards in the set and therefore on the firms with the most to
+find. Nothing in the output said so.
+
+The bound is 1,000 pages now, which is a last-ditch stop for a tenant that
+never returns a short page rather than a limit on how big a board may be. A
+second stop condition covers the case the bound existed for: a tenant that
+ignores `offset` serves page one forever, so a page identical to the previous
+one ends the walk. Both are tested, and the old bound fails the new test.
+
+Re-polling lifted the same 18 boards from 3,193 postings to 3,718.
+
 ### Two token bugs this stage exposed in Stage 5
 
 Both produced boards that look resolved and yield nothing forever:
@@ -438,9 +490,28 @@ Both produced boards that look resolved and yield nothing forever:
 - **`jobs.lever.co/500`** on an error page produced the board token `"500"`.
   Purely numeric tokens are now rejected.
 
+### A careers page can link to somebody else's board
+
+The one Lever board resolved so far is `palmersquare.com` → `heyrowan`, and it
+is wrong. Palmer Square Capital Management's careers page carries a single
+`jobs.lever.co/heyrowan` link with a Google `srsltid` tracking parameter on it
+— syndicated content, not their own board — and the 90 postings it yields are
+*Piercing Studio Nurse* and *Store Manager* at a jewellery retailer.
+
+The rows are kept, because raw tables are append-only and read-time
+classification discards these on sight. But it is a new failure shape for
+Stage 5, distinct from the token bugs above: the token is well-formed, the ATS
+is real, the feed is live, and the firm is somebody else. Nothing in the
+markup distinguishes it from a genuine off-site careers link, which is why no
+heuristic is being invented from one example. The durable answer is
+confirmation at Layer 3 — Greenhouse and Lever both publish the board's own
+company name, so the feed can be asked who it belongs to — and that is worth
+doing when a second example turns up rather than before.
+
 **Exit criterion:** jobs land from at least one firm per implemented ATS format
-*(8 of 10 so far; lever and workday pending re-fingerprint)*, and the Workday
-trap has a test that fails if the protection is removed *(met)*.
+*(10 of 10 by format, but the Lever board is the mis-attribution above, so nine
+formats are proven against a firm that actually owns the board)*, and the
+Workday trap has a test that fails if the protection is removed *(met)*.
 
 ---
 

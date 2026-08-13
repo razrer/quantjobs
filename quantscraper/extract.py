@@ -35,7 +35,12 @@ from .models import Job
 
 # Workday rejects anything larger, and on some tenants does so silently.
 _WORKDAY_MAX = 20
-_WORKDAY_PAGES = 40  # 800 postings; a guard against a broken stop condition.
+# A last-ditch bound on a tenant that never returns a short page, not a limit
+# on how big a board may be. It was 40 pages, and LSEG and State Street both
+# came back at exactly 800 postings -- the guard against silent truncation was
+# silently truncating. Paging stops on a short page or a page that repeats the
+# previous one; this only catches a server doing neither.
+_WORKDAY_PAGES = 1_000
 
 _TAGS = re.compile(r"<[^>]+>")
 
@@ -273,6 +278,7 @@ def workday(token: str) -> list[Job]:
 
     url = f"https://{tenant}.{wd}.myworkdayjobs.com/wday/cxs/{tenant}/{site}/jobs"
     jobs: list[Job] = []
+    seen_page: str | None = None
     for page in range(_WORKDAY_PAGES):
         body = json.dumps(
             {"limit": _WORKDAY_MAX, "offset": page * _WORKDAY_MAX, "searchText": ""}
@@ -281,6 +287,14 @@ def workday(token: str) -> list[Job]:
             http.post_json(url, body, timeout=25, retries=2).decode("utf-8")
         )
         postings = payload.get("jobPostings") or []
+        # A tenant that ignores `offset` serves page one forever, which the
+        # short-page rule never catches. Comparing against the previous page
+        # stops it; upserts would dedupe the rows anyway, but the polling would
+        # not stop until the page bound, and that is the run's whole budget.
+        this_page = "|".join(job.get("externalPath", "") for job in postings)
+        if postings and this_page == seen_page:
+            break
+        seen_page = this_page
         for job in postings:
             path = job.get("externalPath") or ""
             jobs.append(
