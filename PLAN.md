@@ -45,7 +45,7 @@ nothing in the near-term plan now waits on a human.
 | 3 | Close audit-flagged gaps | done |
 | 4 | Layer 2 — domain resolution | **in progress** — queue empty, strong grade unsound |
 | 4b | Switzerland (FINMA) | done |
-| 5 | Layer 2 — ATS resolution | **in progress** — 4,386 tiered, 12,100 queued |
+| 5 | Layer 2 — ATS resolution | **done** — 19,821 tiered, none left untiered |
 | 6 | Layer 3 — ATS extraction | **done** — all 10 formats landing, 16,124 jobs |
 | 7 | Layer 4 — JobTech JobStream (Sweden) | **done** — delta polling live |
 | 8 | Silent-failure alerting | **done** — `alerts`, distributional |
@@ -409,7 +409,7 @@ results need no manual read.
 
 ---
 
-## Stage 5 — Layer 2, ATS resolution *(in progress)*
+## Stage 5 — Layer 2, ATS resolution *(done)*
 
 `ats.py`. A domain is not a job feed: almost every firm outsources hiring, and
 each ATS has one public endpoint shape, so `(ats, token)` is what Layer 3 needs.
@@ -474,8 +474,33 @@ This is the same failure class as principle 2 — an implausible result that
 announces nothing — in the one place the plan had not looked for it. A run that
 produces *nothing* is as silent as a run that produces zero rows.
 
-**Exit criterion:** every firm with a domain is either resolved to an ATS or
-assigned tier B/C. No firm left untiered.
+**Exit criterion — met.** Every domain is tiered; `untiered` is zero. 19,821
+domains: **824 tier A, 3,839 B, 15,158 C**.
+
+### What the tier table hides: 118 boards nobody polls
+
+Tier A means "an ATS was fingerprinted", not "postings arrive". Twelve of the
+23 recognised systems have no extractor, so their boards sit resolved and
+silent — and the tier table reports them as the success they are not.
+
+| no extractor | boards with a usable token |
+|---|---|
+| `teamtailor` | 33 |
+| `icims` | 32 |
+| `taleo` | 10 |
+| `jobvite` | 8 |
+| `pinpoint` | 7 |
+| `homerun`, `eightfold`, `varbi`, `join`, `jobylon` | 3–5 each |
+
+**Teamtailor is the one that matters here.** It is third-largest overall, ahead
+of BambooHR and Ashby, and it is the system this project singled out as
+load-bearing: without it Stockholm and Copenhagen are not exhaustive, because
+no generic scraper covers the Nordic group. Thirty-three resolved Nordic boards
+currently yield nothing.
+
+`successfactors` (24) and `emply` (5) resolve with no usable token at all —
+their board identifier is not in the page markup the way the others' is, so
+they need a different handle rather than an extractor.
 
 **Where it stands:** 4,386 domains tiered — 280 tier A, 1,034 B, 3,072 C — with
 roughly 12,100 still queued, and the queue grows as `domains.py` runs. Both are
