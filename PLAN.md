@@ -43,7 +43,7 @@ nothing in the near-term plan now waits on a human.
 | 1 | Employer identity (entity resolution) | done |
 | 2 | Coverage audit harness | done |
 | 3 | Close audit-flagged gaps | done |
-| 4 | Layer 2 — domain resolution | **in progress** — mechanism built, queue long |
+| 4 | Layer 2 — domain resolution | **in progress** — queue empty, strong grade unsound |
 | 4b | Switzerland (FINMA) | done |
 | 5 | Layer 2 — ATS resolution | **in progress** — 4,386 tiered, 12,100 queued |
 | 6 | Layer 3 — ATS extraction | **done** — all 10 formats landing, 16,124 jobs |
@@ -249,6 +249,58 @@ Replaced with two numbers that mean something:
 
 **Exit criterion:** every firm reported by a focus-region registry has been
 probed at least once, and the strong matches survive a manual read.
+
+**First half met, second half not.** `domains` now reports *nothing left to
+probe in the focus sources* — 55,000 firms looked at, 2,528 strong matches in
+the final pass alone. The second half is where it fails, and the failure is
+worth more than the number.
+
+| registry | known | share |
+|---|---|---|
+| `mas_sg` | 919/1,988 | 46.2% |
+| `fi_se` | 292/659 | 44.3% |
+| `sfc_hk` | 995/3,622 | 27.5% |
+| `afm_nl` | 972/3,709 | 26.2% |
+| `finanstilsynet_dk` | 4,388/25,549 | 17.2% |
+
+### The strong grade does not survive a read, and the reason is structural
+
+A random 25 read clean on the ones that mattered and wrong on roughly a fifth:
+
+- **Brown Brothers Harriman (Hong Kong)** → `ppgrefinishdistribution.co.uk`.
+  Brown Brothers is a UK paint distributor PPG acquired; the guess redirected
+  onto a real company with a real claim to the phrase.
+- **The Bank of Nova Scotia** → `novascotia.com`, the province's tourism board.
+  Exactly `australia.com` again, one rule later.
+- **Four Seasons Asia Investment** → `fourseasons.com.sg`, the hotel.
+- **Goldman Sachs Emerging Markets Debt Blend Portfolio** → `goldman.com`,
+  which is not Goldman Sachs.
+
+The existing rule is "the page contains the firm's first two identity-bearing
+words". `_GENERIC` already drops the words half the industry shares — *capital*,
+*securities*, *management* — so the pair that survives is treated as
+distinctive. It is not: **"brown brothers", "nova scotia" and "four seasons"
+are ordinary English, and a page containing them proves nothing.** The rule
+tests whether the words are industry-generic, never whether they are
+*language*-generic.
+
+Three tightenings were considered and none is a tweak:
+
+1. Require the landed domain to share a token with the firm name. Catches the
+   PPG case and misses the other three — and it discards `PineBridge Global
+   Funds` → `metlife.com`, which this plan records as a *good* result, since
+   MetLife acquired PineBridge.
+2. Require the match in the title or footer rather than anywhere on the page.
+   `novascotia.com` says "Nova Scotia" in its title.
+3. Weight tokens by how often they appear across the 70,000 names in `firms`,
+   and demand the needle carry a rare one. This is the one that would work, and
+   it is a real piece of work rather than a condition to add.
+
+Recording it rather than guessing at it, because a wrong domain is worse than
+no domain — it points Layer 3 at somebody else's careers page and the feed goes
+quietly wrong rather than visibly empty. The weak grade already holds back the
+one-word matches for this reason; the finding is that "strong" needs the same
+suspicion.
 
 ### The problem this stage exists to solve
 
