@@ -48,12 +48,19 @@ export SSL_CERT_FILE=C:/msys64/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
 | `sec_bd` | US | ~3,300 | SEC active broker-dealers; this is where the US prop firms are |
 | `afm_nl` | NL | ~2,700 | AFM investment firms + fund managers, via CSV export |
 | `fi_se` | SE | ~650 | Finansinspektionen, enumerated by regulatory category |
+| `eurex` | EU | ~330 | Eurex admitted exchange participants, via CSV |
+| `euronext` | EU | ~280 | Euronext trading members (AMS/BRU/DUB/LIS/MIL/OSL/PAR) |
 | `fia_epta` | EU | 20 | European Principal Traders Association members |
 
-About 29,900 employers in total.
+About 30,500 employers in total.
 
-`sec_adv` also supplies a website for ~92% of its firms, which is most of
-Layer 2's US domain resolution for free.
+`sec_adv` supplies a website for ~92% of its firms and `euronext` for ~36% of
+its own, which is most of Layer 2's domain resolution for free.
+
+The two exchange lists are small but do work nothing else does: **365 firms are
+reachable only through exchange membership**, among them 3Red Partners,
+AlphaGrep, ABC Arbitrage, Transtrend and Mint Tower Capital. See the gap note
+on licence-exempt firms for why.
 
 Coverage of the plan's named roster is good: `sec_bd` has Jane Street, HRT,
 Jump, DRW, Citadel Securities, Optiver, SIG, XTX and Virtu; `afm_nl` has the
@@ -82,14 +89,17 @@ anomaly detection will need.
 Found while verifying this layer against the plan's audit roster. All are real
 holes, not bugs:
 
-- **Own-account prop firms appear in no register at all.** Da Vinci Derivatives
-  is a real Amsterdam prop shop that is in neither AFM register, because a firm
-  dealing exclusively on own account is exempt from investment-firm licensing
-  under MiFID II Art. 2(1)(d). It is not an EPTA member either. This is a
-  *structural* limit of the registry-first approach: no registry is complete
-  for unlicensed firms. **Exchange participant lists are the only fix** — a
-  market maker must be an exchange member regardless of licensing — so Euronext
-  / Cboe Europe / Eurex member lists are now the highest-value next source.
+- **Own-account prop firms can appear in no register at all.** A firm dealing
+  exclusively on its own account is exempt from investment-firm licensing under
+  MiFID II Art. 2(1)(d), so it need not appear in any regulator's register.
+  `eurex` and `euronext` were added to cover this, and they help — 365 firms
+  come from exchange membership alone. But **Da Vinci Derivatives, the firm that
+  prompted the fix, is still missing**: it is in neither AFM register, neither
+  EPTA, and is a direct member of neither venue, most likely trading via
+  sponsored access under someone else's membership. Sponsored-access firms are
+  a residual hole that no public list closes. Realistic fixes are the Cboe
+  Europe participant list, the AFM's separate own-account-trader notification
+  list, or accepting a small hand-maintained seed file.
 - **State-registered US advisers are absent.** The ADV bulk file is SEC
   registrants only (`Firm Type` is uniformly `Registered`); advisers under
   roughly $110M AUM register with their state. This resolves the plan's open
@@ -120,11 +130,13 @@ that package's `__init__.py`. Nothing else needs to change.
 
 Highest-value next sources, by coverage per unit of effort:
 
-1. **Exchange participant lists** (Euronext, Cboe Europe, Eurex, Nasdaq
-   Stockholm) — the only way to reach licence-exempt prop firms like Da Vinci,
-   and cheap.
-2. **Finanstilsynet** (Denmark) and **BaFin** (Germany) — same shape as the
+1. **Entity resolution**, before more sources. At 30,500 rows the same firm now
+   appears up to four times under different legal names, and every further
+   registry makes it worse rather than better.
+2. **Nasdaq Stockholm and Cboe Europe participant lists** — same shape as
+   `eurex`; Cboe is also the best remaining shot at the sponsored-access firms.
+3. **Finanstilsynet** (Denmark) and **BaFin** (Germany) — same shape as the
    registries already built.
-3. **AMAC** (China) — the Shanghai quant funds; expect anti-bot friction.
-4. **FCA** (UK) — needs an API key you must register for, and only works as
-   enrichment rather than enumeration. See the gap note above.
+4. **AMAC** (China) — the Shanghai quant funds; expect anti-bot friction.
+5. **FCA** (UK) — needs an API key you must register for, and only works as
+   enrichment rather than enumeration. See `ACTION-REQUIRED.md`.

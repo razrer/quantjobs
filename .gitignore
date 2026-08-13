@@ -1,6 +1,9 @@
 # Collected data is reproducible by re-running the scrapers.
 *.sqlite3
 
+# API credentials -- see ACTION-REQUIRED.md
+.env
+
 __pycache__/
 *.py[cod]
 .venv/
