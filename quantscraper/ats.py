@@ -146,6 +146,21 @@ _NOT_A_TOKEN = {
 }
 
 
+def _is_infrastructure(token: str) -> bool:
+    """True when some part of `token` is an infrastructure host, not a board.
+
+    Hosts combine these words -- `assets-cdn.breezy.hr` polled as the board
+    "assets-cdn" and returned HTML instead of JSON, and the firm's real board
+    was never looked for. A part counts as infrastructure only when *every*
+    hyphenated piece of it does, so `jane-street` survives and `assets-cdn`
+    does not. Any one part of a compound Workday token is enough to reject it.
+    """
+    return any(
+        all(piece in _NOT_A_TOKEN for piece in part.casefold().split("-"))
+        for part in token.split("|")
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class Resolution:
     domain: str
@@ -168,7 +183,7 @@ def fingerprint(markup: str) -> tuple[str, str | None, str] | None:
             # Workday's three captures are all needed; everything else takes
             # the first non-empty group as its board token.
             token = "|".join(groups) if name == "workday" else (groups[0] if groups else None)
-            if token and any(part.casefold() in _NOT_A_TOKEN for part in token.split("|")):
+            if token and _is_infrastructure(token):
                 continue  # infrastructure host; keep looking for a real board
             # A purely numeric token is not a board name. `jobs.lever.co/500`
             # on an error page produced board "500", which then 404s on every

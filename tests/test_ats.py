@@ -97,6 +97,26 @@ class FingerprintTest(unittest.TestCase):
         self.assertEqual(hit[0], "teamtailor")
         self.assertIsNone(hit[1])
 
+    def test_a_compound_infrastructure_host_is_not_a_board(self):
+        """`assets-cdn.breezy.hr` polled as a board and returned HTML."""
+        hit = ats.fingerprint('<img src="https://assets-cdn.breezy.hr/logo.png">')
+        self.assertEqual(hit[0], "breezy")
+        self.assertIsNone(hit[1])
+
+    def test_a_hyphenated_board_name_survives(self):
+        """The rule rejects only tokens where every piece is infrastructure."""
+        hit = ats.fingerprint('<a href="https://jane-street.breezy.hr/">')
+        self.assertEqual(hit[:2], ("breezy", "jane-street"))
+
+    def test_the_real_board_is_preferred_over_infrastructure(self):
+        """Rejecting a match must not stop the scan -- the board is often the
+        next match on the same page."""
+        markup = (
+            '<img src="https://assets-cdn.breezy.hr/logo.png">'
+            '<a href="https://optiver.breezy.hr/">Careers</a>'
+        )
+        self.assertEqual(ats.fingerprint(markup)[:2], ("breezy", "optiver"))
+
 
 if __name__ == "__main__":
     unittest.main()
