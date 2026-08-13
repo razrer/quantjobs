@@ -4,20 +4,46 @@ from __future__ import annotations
 
 import gzip
 import http.cookiejar
+import ssl
 import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 
 USER_AGENT = "quant-scraper/0.1 (personal job-hunt tool; razrer@live.com)"
+
+# Windows builds its certificate store lazily: roots are fetched on demand by
+# the OS, so a fresh Python process sees only the handful already cached -- 38
+# here, against the 152 in a real bundle. Any site whose root has not happened
+# to be cached fails with CERTIFICATE_VERIFY_FAILED, which reads exactly like a
+# broken server. FINMA was diagnosed as "serves an incomplete chain" on that
+# evidence and the diagnosis was wrong; the chain is fine, our trust store was
+# short. These bundles already exist on this machine.
+_CA_BUNDLES = (
+    r"C:\Program Files\Git\mingw64\etc\ssl\certs\ca-bundle.crt",
+    r"C:\msys64\etc\pki\ca-trust\extracted\pem\tls-ca-bundle.pem",
+)
+
+
+def _ssl_context() -> ssl.SSLContext:
+    for bundle in _CA_BUNDLES:
+        if Path(bundle).exists():
+            try:
+                return ssl.create_default_context(cafile=bundle)
+            except (ssl.SSLError, OSError):
+                continue
+    # No bundle found: the platform default still works for most hosts.
+    return ssl.create_default_context()
 
 # One opener for the process, so cookies persist across calls. Some registers
 # hand out a session on the search page and return an empty result set to
 # anything that arrives without it -- an empty result set, not an error, which
 # is the failure mode this project cares most about not being fooled by.
 _OPENER = urllib.request.build_opener(
-    urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+    urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()),
+    urllib.request.HTTPSHandler(context=_ssl_context()),
 )
 
 # Minimum gap between two requests to the same host. These are public

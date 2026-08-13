@@ -48,6 +48,10 @@ python -m quantscraper domains --limit 1000   # resolve firm names to domains
 python -m quantscraper fca --limit 300        # enrich domains from the FCA register
 ```
 
+```bash
+python -m quantscraper ats --limit 800        # fingerprint careers hosts to an ATS
+```
+
 `fca` needs `FCA_EMAIL` and `FCA_KEY` in `.env` (gitignored, never committed).
 
 `run.ps1` / `run.sh` wrap these with the correct interpreter (see below).
@@ -82,6 +86,7 @@ registries/*.py  ->  employers table  ->  resolve.py  ->  firms table
 - `audit.py` — coverage measurement against `roster.csv`; reads only
 - `domains.py` — Layer 2: firm name -> domain, guessed then verified
 - `fca.py` — Layer 2 enrichment from the FCA register; needs `.env`
+- `ats.py` — Layer 2: domain -> `(ats, token)` by fingerprint, else tier B/C
 - `registries/` — one module per source
 
 `roster.csv` is the *audit set*, never the universe. A firm's absence from it
@@ -163,6 +168,12 @@ Each of these silently produced wrong results before being caught:
 - **Workday** returns an empty `jobPostings` array with **HTTP 200** if `limit`
   exceeds 20 — indistinguishable from "no jobs" unless asserted on. Workday is
   how most large banks publish. Not yet implemented; do not get this wrong.
+- **ATS board tokens are easy to extract wrongly, and the wrong answer looks
+  right.** `boards-api.greenhouse.io/v1/boards/{token}` puts an API version
+  before the board, so matching the host alone yields `v1` for every Greenhouse
+  user; `www.teamtailor.com` fits the `{board}.teamtailor.com` shape and yields
+  `www`. `ats.py` filters both against a list of infrastructure hostnames.
+  Always read the first handful of tokens before trusting a batch.
 - **Form ADV** `Website Address` is a LinkedIn page for over 4,000 filers, plus
   ~2,000 more on other social platforms. Useless for domain resolution, and it
   merges the whole long tail into one firm if used as an identity key.
@@ -223,10 +234,13 @@ Each of these silently produced wrong results before being caught:
   returns all 13,930 EEA firms, paged. Always pass `sort=id asc`: deep paging
   without a stable sort silently repeats and skips rows. The child documents
   (`aeActivity*`, 87,000 of them) are per-permission rows, not firms.
-- **FINMA serves an incomplete TLS chain** and `urllib` will not fetch the
-  missing intermediate the way a browser does, so every request fails with
-  `CERTIFICATE_VERIFY_FAILED`. It is not our certificate store — loading both
-  Windows stores explicitly does not help. See `ACTION-REQUIRED.md` item A.
+- **`CERTIFICATE_VERIFY_FAILED` on Windows usually means our trust store, not
+  their server.** Windows populates its root store *lazily*, so a fresh Python
+  process trusts only the roots already cached — 38 here, against 152 in a real
+  bundle. FINMA was diagnosed as "serves an incomplete chain" on that evidence
+  and the diagnosis was wrong. **Test with `curl` first**: it ships its own
+  bundle, so if curl connects and Python does not, the server is fine and the
+  store is short. `http.py` now loads a full bundle from Git or msys2.
 - **Form ADV covers SEC registrants only.** Advisers under roughly $110M AUM
   register with their state and are absent.
 

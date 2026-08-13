@@ -44,7 +44,8 @@ nothing in the near-term plan now waits on a human.
 | 2 | Coverage audit harness | done |
 | 3 | Close audit-flagged gaps | done |
 | 4 | Layer 2 — domain resolution | **in progress** — mechanism built, queue long |
-| 5 | Layer 2 — ATS resolution | not started |
+| 4b | Switzerland (FINMA) | done |
+| 5 | Layer 2 — ATS resolution | **in progress** — fingerprinter built |
 | 6 | Layer 3 — ATS extraction | not started |
 | 7 | Layer 4 — JobTech JobStream (Sweden) | not started |
 | 8 | Silent-failure alerting | not started |
@@ -355,11 +356,40 @@ results need no manual read.
 
 ---
 
-## Stage 5 — Layer 2, ATS resolution
+## Stage 5 — Layer 2, ATS resolution *(in progress)*
 
-Fingerprint each careers host to `(ats, token)` by outbound link hosts, script
-`src` domains, redirect chains and URL patterns. Cache permanently; re-verify
-monthly, because a silent ATS migration is an invisible coverage loss.
+`ats.py`. A domain is not a job feed: almost every firm outsources hiring, and
+each ATS has one public endpoint shape, so `(ats, token)` is what Layer 3 needs.
+`greenhouse` + `flowtraders` is a feed; `flowtraders.com` is a homepage.
+
+**Fingerprinted, not guessed.** The careers page links to, or loads script from,
+whichever ATS it uses. That outbound host is the evidence and the board token
+falls out of the same URL. 23 systems are recognised, including the Nordic group
+(Teamtailor, Varbi, Jobylon, Emply, Personio) — without those, Stockholm and
+Copenhagen are not exhaustive, because no generic scraper covers them.
+
+**Every domain gets a tier, because "no ATS" is a real answer:**
+
+- **A** — ATS and token fingerprinted; Layer 3 polls the feed
+- **B** — a careers page exists but runs on nothing recognised; Layer 3B diffs
+  it instead, which works on any page structure
+- **C** — no careers page found at all
+
+*Untiered* is the state that must not exist: a domain nobody looked at is
+indistinguishable from a firm that is not hiring.
+
+**Two token-extraction bugs, caught by reading the first five results.** Both
+produced a confident wrong answer rather than an error:
+
+- `boards-api.greenhouse.io/v1/boards/{token}` carries an API version before the
+  board, so matching the host alone extracted **"v1" as the board token** — for
+  every Greenhouse user on earth.
+- `www.teamtailor.com` matched the `{board}.teamtailor.com` shape and gave Lynx
+  the board **"www"**.
+
+Both are now filtered against a list of infrastructure hostnames, and a
+recognised ATS with an unusable token is recorded with the ATS and a NULL token
+rather than discarded — knowing the feed *shape* is still worth having.
 
 **Exit criterion:** every firm with a domain is either resolved to an ATS or
 assigned tier B/C. No firm left untiered.

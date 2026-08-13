@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from . import audit, db, domains, fca, resolve
+from . import ats, audit, db, domains, fca, resolve
 from .registries import REGISTRIES
 
 # The registries covering the focus hubs. Domain resolution starts here because
@@ -104,6 +104,25 @@ def _fca(database: str, limit: int) -> int:
     return 0
 
 
+def _ats(database: str, limit: int, workers: int) -> int:
+    connection = db.connect(database)
+    tally = ats.run(connection, limit, workers)
+    if tally:
+        print("resolved " + ", ".join(f"{n} tier {t}" for t, n in sorted(tally.items())))
+    else:
+        print("nothing left to fingerprint")
+
+    print("\ntiers")
+    for row in ats.summary(connection):
+        print(f"  {row['tier']}  {row['n']:,d}")
+    rows = ats.by_ats(connection)
+    if rows:
+        print("\nby ATS")
+        for row in rows:
+            print(f"  {row['ats']:16s} {row['n']:,d}")
+    return 0
+
+
 def _stats(database: str) -> int:
     connection = db.connect(database)
 
@@ -180,7 +199,15 @@ def main(argv: list[str] | None = None) -> int:
         "--limit", type=int, default=300, help="firms to look up this run"
     )
 
+    ats_command = commands.add_parser(
+        "ats", help="fingerprint careers hosts to an ATS (Layer 2)"
+    )
+    ats_command.add_argument("--limit", type=int, default=500)
+    ats_command.add_argument("--workers", type=int, default=12)
+
     args = parser.parse_args(argv)
+    if args.command == "ats":
+        return _ats(args.db, args.limit, args.workers)
     if args.command == "domains":
         return _domains(args.db, args.limit, args.workers)
     if args.command == "fca":
