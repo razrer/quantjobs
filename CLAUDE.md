@@ -62,6 +62,13 @@ python -m quantscraper jobs --limit 100       # pull postings from resolved boar
 python -m unittest discover -s tests          # the Workday regression tests
 ```
 
+The board is a static page. Dump the data, then serve `web/` — it reads
+`data.js` with a script tag so `file://` works too, but a server is tidier:
+
+```bash
+python web/build_data.py && python -m http.server 8731 --directory web
+```
+
 `fca` needs `FCA_EMAIL` and `FCA_KEY` in `.env` (gitignored, never committed).
 
 `run.ps1` / `run.sh` wrap these with the correct interpreter (see below).

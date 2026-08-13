@@ -1,0 +1,696 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Board — quant-scraper</title>
+<style>
+/* ---------------------------------------------------------------------------
+   A reading surface, not a dashboard. Postings are a sorted list with a strong
+   chronological spine, so the layout is one column and the ornament budget is
+   spent on hierarchy: hairlines, one accent, and a freshness rule down the
+   left edge. No shadows, no cards floating over nothing.
+--------------------------------------------------------------------------- */
+:root {
+  --paper:      #faf8f5;
+  --surface:    #ffffff;
+  --surface-2:  #f4f1ec;
+  --ink:        #1a1917;
+  --ink-soft:   #57534e;
+  --ink-faint:  #8f887e;
+  --rule:       #e6e0d6;
+  --rule-firm:  #d4ccbe;
+  --accent:     #0f5f5c;
+  --accent-bg:  #e3efed;
+  --hot:        #b4531a;
+  --hot-bg:     #f6e8dc;
+
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Menlo, Consolas, monospace;
+
+  --w: 62rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper:     #131210;
+    --surface:   #1a1916;
+    --surface-2: #201e1a;
+    --ink:       #ece7de;
+    --ink-soft:  #a8a196;
+    --ink-faint: #6f6860;
+    --rule:      #2b2924;
+    --rule-firm: #3a372f;
+    --accent:    #6cbfb4;
+    --accent-bg: #16302e;
+    --hot:       #dd9057;
+    --hot-bg:    #33241a;
+  }
+}
+:root[data-theme="dark"] {
+  --paper:     #131210;
+  --surface:   #1a1916;
+  --surface-2: #201e1a;
+  --ink:       #ece7de;
+  --ink-soft:  #a8a196;
+  --ink-faint: #6f6860;
+  --rule:      #2b2924;
+  --rule-firm: #3a372f;
+  --accent:    #6cbfb4;
+  --accent-bg: #16302e;
+  --hot:       #dd9057;
+  --hot-bg:    #33241a;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  font-variant-numeric: tabular-nums;
+}
+
+a { color: inherit; }
+
+/* --- masthead ----------------------------------------------------------- */
+
+.masthead {
+  border-bottom: 1px solid var(--rule);
+  background: var(--paper);
+}
+.masthead-inner {
+  max-width: var(--w);
+  margin: 0 auto;
+  padding: 1.75rem 1.5rem 1.25rem;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+}
+h1 {
+  font-size: 1.0625rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+h1 span { color: var(--ink-faint); font-weight: 400; }
+.built {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--ink-faint);
+}
+
+/* --- controls ----------------------------------------------------------- */
+
+.controls {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: var(--paper);
+  background: color-mix(in srgb, var(--paper) 92%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--rule);
+}
+.controls-inner {
+  max-width: var(--w);
+  margin: 0 auto;
+  padding: 0.75rem 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.search {
+  flex: 1 1 16rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  background: var(--surface);
+  padding: 0 0.625rem;
+  height: 2rem;
+}
+.search:focus-within { border-color: var(--accent); }
+.search svg { flex: none; opacity: 0.45; }
+.search input {
+  flex: 1;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 0.875rem;
+  outline: none;
+  min-width: 0;
+}
+
+.chips { display: flex; gap: 0.25rem; flex-wrap: wrap; }
+.chip {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.02em;
+  color: var(--ink-soft);
+  background: none;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  padding: 0.3125rem 0.5rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.chip:hover { border-color: var(--rule-firm); color: var(--ink); }
+.chip[aria-pressed="true"] {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+.chip .n { color: var(--ink-faint); margin-left: 0.375rem; }
+.chip[aria-pressed="true"] .n { color: inherit; opacity: 0.7; }
+
+.spacer { flex: 1 1 0; }
+
+.readout {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+
+/* --- bands -------------------------------------------------------------- */
+
+main { max-width: var(--w); margin: 0 auto; padding: 0 1.5rem 6rem; }
+
+.band { margin-top: 2.5rem; }
+.band-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--ink);
+}
+.band-head h2 {
+  font-size: 0.75rem;
+  font-family: var(--font-mono);
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin: 0;
+}
+.band-head .count {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  color: var(--ink-faint);
+}
+
+/* --- rows --------------------------------------------------------------- */
+
+.row {
+  position: relative;
+  border-bottom: 1px solid var(--rule);
+  padding: 0.875rem 0 0.875rem 1rem;
+}
+.row::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 0.875rem; bottom: 0.875rem;
+  width: 2px;
+  background: var(--rule-firm);
+}
+.row[data-age="0"]::before { background: var(--hot); }
+.row[data-age="1"]::before { background: var(--accent); }
+.row[data-age="2"]::before { background: var(--rule-firm); }
+.row[data-age="3"]::before { background: var(--rule); }
+.row:hover { background: var(--surface-2); }
+
+.line {
+  display: flex;
+  align-items: baseline;
+  gap: 0.625rem;
+  justify-content: space-between;
+}
+.title {
+  font-size: 0.9375rem;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  text-decoration: none;
+  color: var(--ink);
+}
+.title:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.title::after { content: ""; position: absolute; inset: 0; }
+
+.when {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+.when[data-loose="1"] { border-bottom: 1px dotted var(--ink-faint); cursor: help; }
+
+.meta {
+  margin-top: 0.1875rem;
+  font-size: 0.8125rem;
+  color: var(--ink-soft);
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  align-items: baseline;
+}
+.meta .firm { color: var(--ink); }
+.meta .dot { color: var(--ink-faint); }
+.meta .dom { font-family: var(--font-mono); font-size: 0.6875rem; color: var(--ink-faint); }
+.hub {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent);
+  background: var(--accent-bg);
+  padding: 0.0625rem 0.3125rem;
+  border-radius: 2px;
+}
+
+/* --- stacks ------------------------------------------------------------- */
+
+/* A firm with several openings in one band collapses into a stack. The
+   layered bottom edge is the whole affordance: it says "there is more paper
+   underneath" without a chevron or an animation. */
+.stack { position: relative; margin-bottom: 0.5rem; }
+.stack-card {
+  position: relative;
+  border: 1px solid var(--rule);
+  border-left: 2px solid var(--rule-firm);
+  background: var(--surface);
+  padding: 0.875rem 1rem;
+  cursor: pointer;
+}
+.stack-card:hover { background: var(--surface-2); border-color: var(--rule-firm); }
+.stack[data-age="0"] .stack-card { border-left-color: var(--hot); }
+.stack[data-age="1"] .stack-card { border-left-color: var(--accent); }
+.stack::after,
+.stack::before {
+  content: "";
+  position: absolute;
+  left: 0.375rem; right: 0.375rem;
+  height: 3px;
+  border: 1px solid var(--rule);
+  border-top: 0;
+  background: var(--surface);
+  pointer-events: none;
+}
+.stack::before { bottom: -4px; }
+.stack::after  { left: 0.75rem; right: 0.75rem; bottom: -8px; opacity: 0.6; }
+.stack[data-open="1"]::before,
+.stack[data-open="1"]::after { display: none; }
+
+.stack-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.stack-firm { font-size: 0.9375rem; font-weight: 600; letter-spacing: -0.005em; }
+.stack-n {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+.stack-sub {
+  margin-top: 0.125rem;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  color: var(--ink-faint);
+}
+.peek {
+  margin: 0.625rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.125rem;
+}
+.peek li {
+  font-size: 0.8125rem;
+  color: var(--ink-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.peek li::before { content: "— "; color: var(--ink-faint); }
+.peek .rest { color: var(--ink-faint); font-family: var(--font-mono); font-size: 0.6875rem; }
+.peek .rest::before { content: "+ "; }
+.stack[data-open="1"] .peek { display: none; }
+
+.stack-body { display: none; padding-left: 1rem; border-left: 1px solid var(--rule); margin-left: 1px; }
+.stack[data-open="1"] .stack-body { display: block; }
+.stack[data-open="1"] .stack-card { border-bottom-color: transparent; background: var(--surface-2); }
+.stack-body .row:last-child { border-bottom: 0; }
+
+/* --- misc --------------------------------------------------------------- */
+
+.more {
+  display: block;
+  width: 100%;
+  margin: 2rem 0 0;
+  padding: 0.75rem;
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--ink-soft);
+  background: none;
+  border: 1px dashed var(--rule-firm);
+  border-radius: 2px;
+  cursor: pointer;
+}
+.more:hover { color: var(--ink); border-color: var(--ink-faint); }
+
+.empty {
+  margin-top: 4rem;
+  padding: 2.5rem;
+  border: 1px dashed var(--rule-firm);
+  text-align: center;
+  color: var(--ink-soft);
+  font-size: 0.875rem;
+}
+.empty strong { display: block; color: var(--ink); font-weight: 500; margin-bottom: 0.25rem; }
+
+.colophon {
+  max-width: var(--w);
+  margin: 0 auto;
+  padding: 2rem 1.5rem 4rem;
+  border-top: 1px solid var(--rule);
+  font-size: 0.75rem;
+  line-height: 1.7;
+  color: var(--ink-faint);
+}
+.colophon code { font-family: var(--font-mono); }
+.colophon p { margin: 0 0 0.5rem; max-width: 46rem; }
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+@media (max-width: 40rem) {
+  .masthead-inner, .controls-inner, main, .colophon { padding-left: 1rem; padding-right: 1rem; }
+  .readout { display: none; }
+}
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <div class="masthead-inner">
+    <h1>Board <span id="scope">—</span></h1>
+    <div class="built" id="built"></div>
+  </div>
+</header>
+
+<div class="controls">
+  <div class="controls-inner">
+    <label class="search">
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+        <circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/>
+      </svg>
+      <input id="q" type="search" placeholder="Filter by role, firm or location" autocomplete="off" spellcheck="false">
+    </label>
+    <div class="chips" id="hubs"></div>
+    <div class="spacer"></div>
+    <button class="chip" id="stacking" aria-pressed="true">stack by firm</button>
+    <div class="readout" id="readout"></div>
+  </div>
+</div>
+
+<main id="board"></main>
+
+<footer class="colophon">
+  <p><strong>Ordering.</strong> Newest first. Applications would sort by closing
+  date where one is published, but none of the ten applicant tracking systems in
+  this set publishes one, so the spine is the posting date.</p>
+  <p><strong>Dates are not all equally known,</strong> and the board does not
+  pretend otherwise. Greenhouse, Ashby, Workable and Lever publish a timestamp.
+  Workday publishes a sentence — <code>Posted 21 Days Ago</code>, or
+  <code>Posted 30+ Days Ago</code>, which is a floor rather than a date. BambooHR
+  and Personio publish nothing, so those fall back to the day we first saw the
+  posting, an upper bound. Anything approximate is marked with a dotted
+  underline and says what it really knows on hover.</p>
+  <p><strong>Stacking.</strong> One firm can hold a thousand openings — U.S.
+  Bank alone accounts for 1,455 — so within each time band a firm with three or
+  more postings collapses to a single stack. Sorting stays global; stacking only
+  changes how much vertical space a firm may occupy before you have asked to see
+  it.</p>
+  <p><strong>Ties break on fewest openings first.</strong> Hundreds of postings
+  share a date, so the tie-break is doing most of the ordering work. A firm with
+  one opening wrote it for one role; a firm with fourteen hundred is staffing
+  branches. Firm name breaks the remaining ties, so the order is stable between
+  renders rather than incidental.</p>
+</footer>
+
+<script src="data.js"></script>
+<script>
+(() => {
+  "use strict";
+
+  const board = window.BOARD;
+  const $ = (id) => document.getElementById(id);
+
+  if (!board) {
+    $("board").innerHTML =
+      '<div class="empty"><strong>No data file.</strong>' +
+      'Run <code>python web/build_data.py</code> to generate <code>data.js</code>.</div>';
+    return;
+  }
+
+  const DAY = 86400000;
+  const today = new Date().setHours(0, 0, 0, 0);
+  const ageDays = (iso) => Math.floor((today - new Date(iso + "T00:00:00").getTime()) / DAY);
+
+  // Bands are the chronological spine. Everything else -- stacking, filtering --
+  // rearranges within a band and never across one.
+  const BANDS = [
+    { key: "today",  label: "Today",           max: 0 },
+    { key: "week",   label: "This week",       max: 7 },
+    { key: "month",  label: "Past 30 days",    max: 30 },
+    { key: "quarter",label: "Past three months", max: 92 },
+    { key: "older",  label: "Older",           max: Infinity },
+  ];
+  const bandOf = (d) => BANDS.find((b) => d <= b.max);
+  const ageClass = (d) => (d <= 0 ? 0 : d <= 7 ? 1 : d <= 30 ? 2 : 3);
+
+  const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  function whenLabel(job, d) {
+    const date = new Date(job.posted + "T00:00:00");
+    const stamp = `${date.getDate()} ${MONTHS[date.getMonth()]}`;
+    switch (job.precision) {
+      case "exact":   return { text: d === 0 ? "today" : d === 1 ? "yesterday" : stamp, loose: 0, why: "" };
+      case "approx":  return { text: `~${d}d ago`, loose: 1, why: `The board reported "${d} days ago" rather than a date.` };
+      case "atleast": return { text: `${d}d+ ago`, loose: 1, why: `The board reported "30+ days ago". This is a floor: the posting is at least this old, possibly much older.` };
+      default:        return { text: `seen ${stamp}`, loose: 1, why: "No posting date was published. This is the day we first saw it, so the posting is this old or older." };
+    }
+  }
+
+  const jobs = board.jobs.map((j) => {
+    const d = ageDays(j.posted);
+    return { ...j, d, band: bandOf(d).key, age: ageClass(d), firmName: board.firms[j.firm].name };
+  });
+
+  const HUBS = ["stockholm", "copenhagen", "amsterdam", "switzerland", "hong kong", "singapore"];
+
+  // Each band renders its own first slice rather than drawing from one global
+  // budget. A single budget spent itself entirely on Today -- 915 postings land
+  // there -- and the chronological spine, which is the whole point of the
+  // ordering, was invisible until you clicked.
+  const PER_BAND = 25;
+  const STEP = 200;
+  const state = { q: "", hubs: new Set(), stacking: true, limits: new Map() };
+  const limitFor = (key) => state.limits.get(key) || PER_BAND;
+
+  // --- filters -------------------------------------------------------------
+
+  function matches(job) {
+    if (state.hubs.size && !state.hubs.has(job.hub)) return false;
+    if (!state.q) return true;
+    const hay = `${job.title} ${job.firmName} ${job.firm} ${job.location || ""} ${job.team || ""}`.toLowerCase();
+    return state.q.split(/\s+/).every((term) => hay.includes(term));
+  }
+
+  // --- rendering -----------------------------------------------------------
+
+  const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+  // `nested` rows live inside a stack, which already names the firm -- repeating
+  // it on every line is the noise the stack exists to remove.
+  function rowHTML(job, nested) {
+    const w = whenLabel(job, job.d);
+    const bits = [];
+    if (!nested) bits.push(`<span class="firm">${esc(job.firmName)}</span><span class="dom">${esc(job.firm)}</span>`);
+    if (job.location) bits.push(`<span>${esc(job.location)}</span>`);
+    if (job.team) bits.push(`<span>${esc(job.team)}</span>`);
+    return `<article class="row" data-age="${job.age}">
+      <div class="line">
+        <a class="title" href="${esc(job.url || "#")}" target="_blank" rel="noopener">${esc(job.title)}</a>
+        <span class="when" data-loose="${w.loose}"${w.why ? ` title="${esc(w.why)}"` : ""}>${esc(w.text)}</span>
+      </div>
+      <div class="meta">${bits.join('<span class="dot">·</span>')}${
+        job.hub ? `<span class="hub">${esc(job.hub)}</span>` : ""
+      }</div>
+    </article>`;
+  }
+
+  function stackHTML(firm, list) {
+    const name = list[0].firmName;
+    const hubs = [...new Set(list.map((j) => j.hub).filter(Boolean))];
+    const newest = Math.min(...list.map((j) => j.d));
+    // Always leave something under the lid. A peek that shows every posting
+    // makes the stack a decoration -- there would be nothing to open it for.
+    const shown = Math.min(3, list.length - 1);
+    const peek = list.slice(0, shown).map((j) => `<li>${esc(j.title)}</li>`).join("");
+    const rest = list.length - shown;
+    return `<section class="stack" data-open="0" data-age="${ageClass(newest)}">
+      <div class="stack-card" role="button" tabindex="0" aria-expanded="false">
+        <div class="stack-head">
+          <span class="stack-firm">${esc(name)}</span>
+          <span class="stack-n">${list.length} openings</span>
+        </div>
+        <div class="stack-sub">${esc(firm)}${hubs.length ? " · " + esc(hubs.join(", ")) : ""}</div>
+        <ul class="peek">${peek}<li class="rest">and ${rest} more</li></ul>
+      </div>
+      <div class="stack-body">${list.map((j) => rowHTML(j, true)).join("")}</div>
+    </section>`;
+  }
+
+  function render() {
+    const visible = jobs.filter(matches);
+    const root = $("board");
+
+    $("readout").textContent =
+      `${visible.length.toLocaleString()} of ${jobs.length.toLocaleString()} postings`;
+
+    if (!visible.length) {
+      root.innerHTML = `<div class="empty"><strong>Nothing matches.</strong>
+        ${state.hubs.size ? "The hub filters are narrow — the registries publish a city for a minority of firms." : "Try a shorter query."}</div>`;
+      return;
+    }
+
+    const html = [];
+
+    for (const band of BANDS) {
+      const inBand = visible.filter((j) => j.band === band.key);
+      if (!inBand.length) continue;
+
+      // Group by firm, then decide per firm whether it earns a stack. Three is
+      // the threshold: two rows from one firm read as coincidence, three read
+      // as a firm hiring, and that is the point at which the list stops being
+      // about the roles and starts being about the employer.
+      const byFirm = new Map();
+      for (const job of inBand) {
+        if (!byFirm.has(job.firm)) byFirm.set(job.firm, []);
+        byFirm.get(job.firm).push(job);
+      }
+
+      const units = [];
+      for (const [firm, list] of byFirm) {
+        if (state.stacking && list.length >= 3) {
+          units.push({ kind: "stack", firm, list, size: list.length, name: list[0].firmName,
+                       d: Math.min(...list.map((j) => j.d)) });
+        } else {
+          list.forEach((job) => units.push({ kind: "row", job, size: 1, name: job.firmName, d: job.d }));
+        }
+      }
+      // Within a band the dates are largely tied -- Workday stamps hundreds of
+      // postings "Posted Today" -- so the tie-break carries the real ordering.
+      // Fewest openings first: a firm with one posting wrote it for one role,
+      // and a firm with fourteen hundred is a bank staffing branches. Firm name
+      // last, so the order is stable between renders rather than incidental.
+      units.sort((a, b) => a.d - b.d || a.size - b.size || a.name.localeCompare(b.name));
+
+      const limit = limitFor(band.key);
+      const slice = units.slice(0, limit);
+      const hidden = units.length - slice.length;
+
+      html.push(`<section class="band">
+        <div class="band-head">
+          <h2>${band.label}</h2>
+          <span class="count">${inBand.length.toLocaleString()} ${inBand.length === 1 ? "posting" : "postings"}${
+            units.length !== inBand.length ? ` · ${units.length} entries` : ""
+          }</span>
+        </div>
+        ${slice.map((u) => (u.kind === "stack" ? stackHTML(u.firm, u.list) : rowHTML(u.job))).join("")}
+        ${hidden > 0 ? `<button class="more" data-band="${band.key}">${hidden.toLocaleString()} more in ${band.label.toLowerCase()}</button>` : ""}
+      </section>`);
+    }
+
+    root.innerHTML = html.join("");
+
+    root.querySelectorAll(".more").forEach((button) => {
+      button.addEventListener("click", () => {
+        const key = button.dataset.band;
+        state.limits.set(key, limitFor(key) + STEP);
+        render();
+      });
+    });
+
+    const toggle = (card) => {
+      const stack = card.closest(".stack");
+      const open = stack.dataset.open === "1";
+      stack.dataset.open = open ? "0" : "1";
+      card.setAttribute("aria-expanded", String(!open));
+    };
+    root.querySelectorAll(".stack-card").forEach((card) => {
+      card.addEventListener("click", () => toggle(card));
+      card.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") { event.preventDefault(); toggle(card); }
+      });
+    });
+  }
+
+  // --- controls ------------------------------------------------------------
+
+  const counts = new Map();
+  for (const job of jobs) if (job.hub) counts.set(job.hub, (counts.get(job.hub) || 0) + 1);
+
+  $("hubs").innerHTML = HUBS.filter((h) => counts.has(h))
+    .map((h) => `<button class="chip" data-hub="${h}" aria-pressed="false">${h}<span class="n">${counts.get(h)}</span></button>`)
+    .join("");
+
+  $("hubs").addEventListener("click", (event) => {
+    const chip = event.target.closest(".chip");
+    if (!chip) return;
+    const hub = chip.dataset.hub;
+    if (state.hubs.has(hub)) state.hubs.delete(hub); else state.hubs.add(hub);
+    chip.setAttribute("aria-pressed", String(state.hubs.has(hub)));
+    state.limits.clear();
+    render();
+  });
+
+  $("stacking").addEventListener("click", () => {
+    state.stacking = !state.stacking;
+    $("stacking").setAttribute("aria-pressed", String(state.stacking));
+    state.limits.clear();
+    render();
+  });
+
+  let timer;
+  $("q").addEventListener("input", (event) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      state.q = event.target.value.trim().toLowerCase();
+      state.limits.clear();
+      render();
+    }, 120);
+  });
+
+  $("scope").textContent =
+    `${jobs.length.toLocaleString()} postings · ${Object.keys(board.firms).length} firms`;
+  $("built").textContent = `built ${board.built.replace("T", " ").replace("+00:00", "Z")}`;
+
+  render();
+})();
+</script>
+</body>
+</html>

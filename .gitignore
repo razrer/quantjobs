@@ -3,6 +3,10 @@
 *.sqlite3
 *.sqlite3-journal
 
+# The board's data file, dumped from the database by `web/build_data.py`. Same
+# reasoning as above, and it is several megabytes.
+web/data.js
+
 # API credentials -- see ACTION-REQUIRED.md
 .env
 
