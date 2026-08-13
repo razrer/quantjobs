@@ -1,0 +1,6 @@
+# Collected data is reproducible by re-running the scrapers.
+*.sqlite3
+
+__pycache__/
+*.py[cod]
+.venv/
