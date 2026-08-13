@@ -70,6 +70,7 @@ export SSL_CERT_FILE=C:/msys64/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
 |---|---|---|---|
 | `finanstilsynet_dk` | DK | ~26,500 | Danish FSA; swept by letter, see the design note |
 | `sec_adv` | US | ~23,300 | SEC Form ADV monthly bulk CSV, registered + exempt reporting |
+| `esma_eea` | EU | ~12,300 | EEA-wide investment firms, AIFMs and UCITS managers; 75% carry an LEI |
 | `afm_nl` | NL | ~3,700 | AFM investment firms, fund managers, and both AIFM registers |
 | `sfc_hk` | HK | ~3,600 | SFC licensed corporations, by regulated activity |
 | `sec_bd` | US | ~3,300 | SEC active broker-dealers; this is where the US prop firms are |
@@ -81,7 +82,7 @@ export SSL_CERT_FILE=C:/msys64/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
 | `fia_epta` | EU | 20 | European Principal Traders Association members |
 | `seed` | manual | 16 | Firms no public register carries; hand-maintained CSV |
 
-About 63,700 employers in total, resolving to 58,600 firms.
+About 76,100 employers in total, resolving to 67,500 firms.
 
 `sec_adv` supplies a website for ~92% of its firms and `euronext` for ~36% of
 its own, which is most of Layer 2's domain resolution for free.
@@ -97,8 +98,14 @@ All seven focus hubs now hold every firm on the audit roster — see
 ## Design notes
 
 **Enumerate, never query.** FI is walked category by category, MAS by category,
-SFC by regulated activity, rather than searched — coverage should not depend on
-guessing the right keyword.
+SFC by regulated activity, ESMA by a Solr query that returns the whole set,
+rather than searched — coverage should not depend on guessing the right keyword.
+
+**ESMA is the highest-leverage source here, and not for its size.** Three
+quarters of its records carry an **LEI**, and no national register we hold
+publishes one. LEI is the strongest key entity resolution has, so it merges
+firms already held under names that match nothing: cross-registry firms went
+from 2,595 to 4,234 when it landed.
 
 Denmark is the exception that proves the rule. Finanstilsynet exposes six
 service operations and none of them lists anything; its own "list extract" page
@@ -204,7 +211,7 @@ here is a false merge: a duplicate costs a second of reading, a wrong merge
 silently deletes an employer. Citadel and Citadel Securities are kept separate
 for exactly this reason — different employers, different careers pages.
 
-Current state: 63,724 rows → 58,638 firms. The collapse is modest because most
+Current state: 76,056 rows → 67,509 firms. The collapse is modest because most
 rows carry no website; Stage 4 (domain resolution) is what will improve it, and
 `firms` is rebuilt from scratch on demand so re-running then is free.
 

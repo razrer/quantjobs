@@ -7,8 +7,45 @@ Nothing here is urgent — the project runs fine without any of it. These are th
 places where I hit a wall that needed a human, not a decision I should make for
 you.
 
-**Nothing here is blocking.** Item 0 went optional when you deprioritized Dubai;
-everything else was already optional or resolved.
+**Nothing here is blocking.** Item A is a judgement call I'd rather you made than
+made silently; item 0 went optional when you deprioritized Dubai; the rest are
+resolved.
+
+---
+
+## A. FINMA (Switzerland) — a trade-off I don't want to make for you
+
+Switzerland is the weakest focus hub: 11/11 roster firms *present* but only 6
+*local*, the rest visible through Dutch, Danish and US registrations. FINMA
+would close that, and it publishes exactly the right shape — bulk spreadsheets:
+
+```
+https://www.finma.ch/en/~/media/finma/dokumente/bewilligungstraeger/xlsx/beh.xlsx
+```
+
+(banks and securities firms; there are sibling files for asset managers, fund
+management companies and Raiffeisen banks)
+
+**Why I stopped:** `finma.ch` serves an incomplete TLS certificate chain. It
+omits the intermediate certificate, and Python's `urllib` — unlike a browser —
+will not go and fetch the missing link. Every request dies with
+`CERTIFICATE_VERIFY_FAILED`. I confirmed this is FINMA's end, not ours: loading
+both Windows certificate stores explicitly does not help, because the
+intermediate is not present locally at all.
+
+**The three ways forward, and why this is your call:**
+
+1. **Ship a CA bundle in the repo** — a `.pem` alongside the code. Simple, but
+   it puts an expiring certificate under version control, and someone has to
+   remember to refresh it.
+2. **Fetch the intermediate at runtime** from the certificate's own AIA
+   extension. Self-healing, no committed file, but it means parsing X.509 by
+   hand — there is no standard-library X.509 parser, and the "no third-party
+   dependencies" rule is one you set deliberately.
+3. **Leave it.** Switzerland stays at 6/11 local. Nothing else depends on it.
+
+I lean towards (3) for now and (2) if Switzerland ever matters more, because (1)
+quietly rots. But all three touch rules you set, so tell me which you want.
 
 ---
 

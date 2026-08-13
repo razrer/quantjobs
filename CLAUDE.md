@@ -219,6 +219,14 @@ Each of these silently produced wrong results before being caught:
   overstate coverage.
 - **FCA search is fuzzy**: a query for "barclays" returns `PEAC Business
   Finance Limited` first. Accept a result only on a token-aligned name match.
+- **ESMA's Solr endpoint is open and is a real enumeration** — `q=entity_type:ae`
+  returns all 13,930 EEA firms, paged. Always pass `sort=id asc`: deep paging
+  without a stable sort silently repeats and skips rows. The child documents
+  (`aeActivity*`, 87,000 of them) are per-permission rows, not firms.
+- **FINMA serves an incomplete TLS chain** and `urllib` will not fetch the
+  missing intermediate the way a browser does, so every request fails with
+  `CERTIFICATE_VERIFY_FAILED`. It is not our certificate store — loading both
+  Windows stores explicitly does not help. See `ACTION-REQUIRED.md` item A.
 - **Form ADV covers SEC registrants only.** Advisers under roughly $110M AUM
   register with their state and are absent.
 

@@ -20,6 +20,7 @@ from types import ModuleType
 from . import (
     afm_nl,
     cboe_europe,
+    esma_eea,
     eurex,
     euronext,
     fi_se,
@@ -38,6 +39,7 @@ REGISTRIES: dict[str, ModuleType] = {
         fi_se,
         afm_nl,
         finanstilsynet_dk,
+        esma_eea,
         mas_sg,
         sfc_hk,
         sec_adv,

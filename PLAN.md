@@ -292,6 +292,33 @@ until you remember MetLife acquired PineBridge.
 | `fi_se` | 34/659 | 5.2% |
 | `finanstilsynet_dk` | 447/25,549 | 1.7% |
 
+### Overseas sources surveyed
+
+Checked for sources that carry firms beyond their own borders, on the theory
+that made the SEC and FCA worth having. Result: one clear win, one blocked, two
+not worth it.
+
+| Source | Verdict |
+|---|---|
+| **ESMA** (EEA) | **Added** as `esma_eea`. 13,930 firms, real enumeration |
+| **FINMA** (CH) | Found bulk `.xlsx`, blocked on TLS — `ACTION-REQUIRED.md` item A |
+| **GLEIF** (global) | Skipped: ~2.5M LEIs, no websites, and ESMA already supplies the LEIs that matter here |
+| **Companies House** (UK) | Skipped: enumerates every UK company but publishes no websites, and London is deprioritized |
+
+**ESMA is the find.** Every national regulator notifies it, so one adapter
+covers Amsterdam, Stockholm and Copenhagen at once plus twenty member states we
+have no adapter for. It is Solr-backed with an open query endpoint, so it
+enumerates rather than searches — the shape this project prefers, and the reason
+it was worth chasing where the FCA was not.
+
+Its real value was not the head count. **Three quarters of ESMA records carry an
+LEI, and no national register we hold publishes one.** LEI is the strongest key
+entity resolution has, so it welds together firms already held under names that
+match nothing: cross-registry firms went from 2,595 to **4,234**, and 8,877
+firms are now LEI-keyed. A domain found for any one of them now covers all of
+them. Websites, by contrast, appear on only 383 of the 13,930 — this is an
+identity source, not a domain source.
+
 ### The FCA register as a domain donor
 
 `fca.py`, added after the credentials arrived. **Not a registry** — the register
