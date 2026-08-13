@@ -154,15 +154,11 @@ Drop a module in `quantscraper/registries/` exposing `NAME`, `JURISDICTION`,
 `MIN_EXPECTED` and `fetch() -> list[Employer]`, then add it to `REGISTRIES` in
 that package's `__init__.py`. Nothing else needs to change.
 
-Highest-value next sources, by coverage per unit of effort:
+`PLAN.md` holds the build order and the geographic priority. In short: focus is
+**Stockholm, Copenhagen, Amsterdam, Switzerland, Dubai, Hong Kong, Singapore**;
+Germany, the US, London and China are deprioritized. That governs what gets
+built next, never what gets ingested — collected data is never dropped for
+being out of area.
 
-1. **Entity resolution**, before more sources. At 30,500 rows the same firm now
-   appears up to four times under different legal names, and every further
-   registry makes it worse rather than better.
-2. **Nasdaq Stockholm and Cboe Europe participant lists** — same shape as
-   `eurex`; Cboe is also the best remaining shot at the sponsored-access firms.
-3. **Finanstilsynet** (Denmark) and **BaFin** (Germany) — same shape as the
-   registries already built.
-4. **AMAC** (China) — the Shanghai quant funds; expect anti-bot friction.
-5. **FCA** (UK) — needs an API key you must register for, and only works as
-   enrichment rather than enumeration. See `ACTION-REQUIRED.md`.
+Next sources, in order: Finanstilsynet (DK), FINMA (CH), SFC (HK), MAS (SG),
+DFSA/FSRA (UAE), then the Nasdaq Stockholm and Cboe Europe participant lists.

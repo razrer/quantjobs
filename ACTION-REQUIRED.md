@@ -7,9 +7,17 @@ Nothing here is urgent — the project runs fine without any of it. These are th
 places where I hit a wall that needed a human, not a decision I should make for
 you.
 
+**Since deprioritizing Germany, the US, London and China, nothing in the
+near-term plan is blocked at all.** Item 1 was the only true blocker and it is
+now optional. Item 2 is a small convenience and item 3 is a judgement call.
+
 ---
 
-## 1. FCA API key — unblocks the UK
+## 1. FCA API key — unblocks the UK *(deprioritized — only if you want London back)*
+
+**You have since deprioritized London, so this is now optional.** Nothing in the
+current plan waits on it; the FCA was the only blocked source, so the near-term
+work is now entirely unblocked. Left here in full in case you change your mind.
 
 **Why it is blocked:** every FCA route (register API, bulk download) returns
 401/403 without credentials, and getting them means creating an account. I don't

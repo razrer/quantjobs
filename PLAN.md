@@ -16,6 +16,20 @@ stage below has an explicit exit criterion instead.
 If a stage turns out to be blocked, record it in `ACTION-REQUIRED.md` and stop —
 do not skip ahead to something more interesting.
 
+## Geographic priority
+
+**Focus:** Stockholm, Copenhagen, Amsterdam, Switzerland, Dubai, Hong Kong,
+Singapore. **Deprioritized:** Germany, US, London/UK, China.
+
+This sets **what gets built next**, not what gets ingested. Data already
+collected stays — `sec_adv` and `sec_bd` are 26,500 US rows and they remain in
+the universe, because geography ranks results rather than gating membership, and
+deleting employers is the one mistake this design refuses to make. It simply is
+not where the next unit of effort goes.
+
+Deprioritizing the UK is convenient: the FCA was the only blocked source, so
+nothing in the near-term plan now waits on a human.
+
 ## Status
 
 | # | Stage | Status |
@@ -113,24 +127,37 @@ checked-in fixture, plus `python -m quantscraper audit` reporting present/missin
 per hub, matched through Stage 1's resolution.
 
 The roster is the *audit set*, never the universe — it measures coverage, it
-does not define it.
+does not define it. Keep the deprioritized hubs in the fixture but report them
+separately, so London and the US measure coverage without competing for
+attention with the hubs that matter.
 
 **Exit criteria:**
 - [ ] `audit` runs and reports per-hub hit rate
-- [ ] every miss is either fixed or recorded in the README with a reason
+- [ ] every miss **in a focus hub** is either fixed or recorded with a reason
 - [ ] known-stale roster entries (IPM) are marked so they stop reading as bugs
 
 ---
 
 ## Stage 3 — Close audit-flagged gaps
 
-Only now add sources, and only the ones Stage 2 proves are needed. Candidates,
-in rough order: a hand-maintained seed file (AP1–AP6, Da Vinci), Nasdaq
-Stockholm and Cboe Europe participant lists, Finanstilsynet (DK), BaFin (DE),
-FINMA (CH), SFC (HK), MAS (SG), AMAC (CN).
+Only now add sources, and only the ones Stage 2 proves are needed. Ordered by
+the geographic priority above:
 
-**Exit criterion:** audit miss list is empty, or every remaining miss has a
-written reason and an entry in `ACTION-REQUIRED.md` if it needs a human.
+1. **Finanstilsynet** (DK) — Copenhagen, the largest uncovered focus hub
+2. **FINMA** (CH) — Switzerland
+3. **SFC** (HK) and **MAS** (SG) — both publish public registers
+4. **DFSA** (DIFC) and **FSRA** (ADGM) — Dubai and Abu Dhabi
+5. **Nasdaq Stockholm** and **Cboe Europe** participant lists — same shape as
+   `eurex`; Cboe is also the best remaining shot at sponsored-access firms
+6. Hand-maintained seed file for firms no public list carries (AP1–AP6, Da Vinci)
+
+Deferred with the deprioritized regions: BaFin (DE), FCA (UK), AMAC (CN), and
+the US state-adviser tail. Each is a known gap with a written reason, not an
+oversight — pick them up if the focus hubs run dry.
+
+**Exit criterion:** audit miss list for focus hubs is empty, or every remaining
+miss has a written reason and an entry in `ACTION-REQUIRED.md` if it needs a
+human.
 
 ---
 
