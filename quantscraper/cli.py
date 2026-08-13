@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from . import ats, audit, db, domains, extract, fca, resolve
+from . import ats, audit, db, domains, extract, fca, jobstream, resolve
 from .registries import REGISTRIES
 
 # The registries covering the focus hubs. Domain resolution starts here because
@@ -141,6 +141,22 @@ def _jobs(database: str, limit: int) -> int:
     return 0
 
 
+def _jobstream(database: str) -> int:
+    connection = db.connect(database)
+    since = jobstream.cursor(connection)
+    seen, written, withdrawn = jobstream.run(connection)
+    print(
+        f"polled JobStream from {since:%Y-%m-%d %H:%M} UTC: "
+        f"{seen:,d} changes, {written:,d} written, {withdrawn:,d} withdrawn"
+    )
+    row = connection.execute(
+        "SELECT COUNT(*) AS n, SUM(removed_at IS NOT NULL) AS gone"
+        " FROM jobs WHERE ats = ?", (jobstream.NAME,)
+    ).fetchone()
+    print(f"  {row['n']:,d} Swedish ads held, {row['gone'] or 0:,d} withdrawn")
+    return 0
+
+
 def _stats(database: str) -> int:
     connection = db.connect(database)
 
@@ -228,7 +244,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     jobs_command.add_argument("--limit", type=int, default=100)
 
+    commands.add_parser(
+        "jobstream", help="poll Sweden's JobTech delta feed (Layer 4)"
+    )
+
     args = parser.parse_args(argv)
+    if args.command == "jobstream":
+        return _jobstream(args.db)
     if args.command == "jobs":
         return _jobs(args.db, args.limit)
     if args.command == "ats":

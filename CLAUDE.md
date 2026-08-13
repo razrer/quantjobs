@@ -59,7 +59,11 @@ python -m quantscraper jobs --limit 100       # pull postings from resolved boar
 ```
 
 ```bash
-python -m unittest discover -s tests          # the Workday regression tests
+python -m quantscraper jobstream              # poll Sweden's delta feed
+```
+
+```bash
+python -m unittest discover -s tests          # regression tests
 ```
 
 The board is a static page. Dump the data, then serve `web/` — it reads
@@ -105,6 +109,7 @@ registries/*.py  ->  employers table  ->  resolve.py  ->  firms table
 - `fca.py` — Layer 2 enrichment from the FCA register; needs `.env`
 - `ats.py` — Layer 2: domain -> `(ats, token)` by fingerprint, else tier B/C
 - `extract.py` — Layer 3: one function per ATS format; postings land in `jobs`
+- `jobstream.py` — Layer 4: Sweden's national delta feed, cursor in `feed_state`
 - `registries/` — one module per source
 
 `roster.csv` is the *audit set*, never the universe. A firm's absence from it
@@ -194,6 +199,14 @@ Each of these silently produced wrong results before being caught:
   protections are mutation-tested.
 - **Workday needs `tenant|wdN|site`.** A tenant alone builds a URL that 404s on
   every poll while the board looks resolved.
+- **A withdrawn JobStream ad arrives with `id` set and every other field null.**
+  Feeding one through the normal upsert leaves the row and wipes its title,
+  employer and description — still counted, no longer readable, nothing
+  announced. Withdrawals take a separate path touching only `removed_at`. They
+  are the majority of a poll: 2,826 of 5,053 changes on the first run.
+- **JobStream's cursor is `timestamp`, epoch milliseconds** — not
+  `publication_date`. Resume rewound by a few minutes, because a duplicate
+  costs an idempotent upsert and a gap costs a posting.
 - **A careers page can link to a board that is not the firm's.**
   `palmersquare.com` linked to `jobs.lever.co/heyrowan` — syndicated content
   with a Google `srsltid` parameter still attached — and the feed delivered 90

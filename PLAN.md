@@ -47,7 +47,7 @@ nothing in the near-term plan now waits on a human.
 | 4b | Switzerland (FINMA) | done |
 | 5 | Layer 2 — ATS resolution | **in progress** — 4,386 tiered, 12,100 queued |
 | 6 | Layer 3 — ATS extraction | **done** — all 10 formats landing, 16,124 jobs |
-| 7 | Layer 4 — JobTech JobStream (Sweden) | not started |
+| 7 | Layer 4 — JobTech JobStream (Sweden) | **done** — delta polling live |
 | 8 | Silent-failure alerting | not started |
 | 9 | Layer 3B — Tier B change detection | not started |
 | 10 | Coverage measurement | not started |
@@ -541,12 +541,48 @@ including Arrowstreet Capital.
 
 ---
 
-## Stage 7 — Layer 4, JobTech JobStream
+## Stage 7 — Layer 4, JobTech JobStream *(done)*
 
-Sweden's incremental change feed. Makes Stockholm effectively complete for a few
-hours of work.
+`jobstream.py`. Every job advertised in Sweden is published to Platsbanken, and
+JobTech exposes it as a delta feed — new ads, edited ads, and withdrawn ones —
+with no key and no quota.
 
-**Exit criterion:** delta polling works; a full re-search is never needed.
+**This is the one source that makes a hub complete rather than well covered.**
+Firm-level ATS polling only reaches firms we resolved to a feed; JobStream
+reaches every Swedish employer, including the ones we tiered C and the ones we
+never resolved a domain for.
+
+**Exit criterion — met:** delta polling works and a full re-read is never
+needed. Cold start pulled 5,053 changes over a 24-hour window; the very next
+poll, resuming from the stored cursor, pulled **133**. The cursor lives in
+`feed_state`, so it survives restarts.
+
+**Resume with overlap.** The cursor rewinds ten minutes before each poll.
+Re-reading an ad costs an idempotent upsert; missing one because it landed in
+the same second as the cursor costs a posting — the same trade this project
+makes everywhere.
+
+**What would have gone wrong silently.** A withdrawn ad arrives with `id` set
+and *every other field null* — headline, employer, description. Feeding one
+through the normal upsert leaves the row in place but wipes it: the job is still
+counted and no longer readable, and nothing announces it. Withdrawals therefore
+take a separate path that touches only `removed_at`. Rows are never deleted, so
+a withdrawal is recorded rather than vanishing.
+
+2,826 of the 5,053 cold-start changes were withdrawals, so this is the common
+case, not an edge one.
+
+`tests/test_jobstream.py` covers the withdrawal path, the cursor arithmetic and
+the field mapping. Both protections are mutation-tested: routing withdrawals
+through the upsert fails 2 tests, removing the overlap fails 1.
+
+**Known cost, not yet a problem.** JobStream carries all of Sweden — roughly
+9,000 ads a day, most of them nurses and drivers rather than quants. They are
+ingested unclassified, per the read-time rule, which is right but grows the
+database by tens of megabytes a day. Stage 11's tagging is what makes them
+useful; if storage becomes the binding constraint before then, pruning old
+descriptions is the lever, since `jobs` is a pollable table rather than a raw
+registry.
 
 ---
 

@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     department   TEXT,
     posted_at    TEXT,
     description  TEXT,
+    removed_at   TEXT,            -- withdrawn by the employer; never deleted
     first_seen   TEXT NOT NULL,
     last_seen    TEXT NOT NULL,
     PRIMARY KEY (ats, token, job_id)
@@ -80,7 +81,26 @@ def connect(path: Path | str = DEFAULT_PATH) -> sqlite3.Connection:
     # flush. Waiting is always the better trade here.
     connection.execute("PRAGMA busy_timeout = 60000")
     connection.executescript(SCHEMA)
+    _migrate(connection)
     return connection
+
+
+# Columns added after `jobs` already existed somewhere. `CREATE TABLE IF NOT
+# EXISTS` is a no-op on an existing table, so a new column has to be added
+# explicitly or every install predating it reads as corrupt.
+_ADDED_COLUMNS = (("jobs", "removed_at", "TEXT"),)
+
+
+def _migrate(connection: sqlite3.Connection) -> None:
+    for table, column, kind in _ADDED_COLUMNS:
+        existing = {
+            row["name"] for row in connection.execute(f"PRAGMA table_info({table})")
+        }
+        if existing and column not in existing:
+            with connection:
+                connection.execute(
+                    f"ALTER TABLE {table} ADD COLUMN {column} {kind}"
+                )
 
 
 def upsert_employers(
