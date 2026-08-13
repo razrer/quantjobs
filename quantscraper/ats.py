@@ -142,23 +142,30 @@ _NOT_A_TOKEN = {
     "www", "api", "app", "apps", "assets", "cdn", "static", "js", "css",
     "embed", "media", "images", "img", "help", "support", "status", "docs",
     "blog", "developers", "developer", "partners", "resources", "my", "secure",
+    # The ATS's own shared hosts. `career.emply.com` was claimed by five
+    # unrelated Danish firms at once, `careers-analytics.recruitee.com` by
+    # three, `staticfe.bamboohr.com` by one -- a token several unrelated
+    # domains agree on is the vendor's infrastructure, not anyone's board.
+    "career", "careers", "jobs", "job", "analytics", "staticfe", "portal",
+    "login", "account", "accounts",
     *(f"v{n}" for n in range(1, 10)),
 }
 
 
 def _is_infrastructure(token: str) -> bool:
-    """True when some part of `token` is an infrastructure host, not a board.
+    """True when `token` names the vendor's own host rather than a board.
 
-    Hosts combine these words -- `assets-cdn.breezy.hr` polled as the board
-    "assets-cdn" and returned HTML instead of JSON, and the firm's real board
-    was never looked for. A part counts as infrastructure only when *every*
-    hyphenated piece of it does, so `jane-street` survives and `assets-cdn`
-    does not. Any one part of a compound Workday token is enough to reject it.
+    Only the first component is tested. For Workday that is the tenant, and
+    the *site* after it is very often called exactly "Careers" -- LSEG,
+    Fortress, PJT Partners and Motorola all publish through
+    `tenant|wdN|Careers`, so testing every component throws them away.
+
+    Within that component, a piece counts only if *every* hyphenated part of
+    it is infrastructure: `assets-cdn.breezy.hr` polled as the board
+    "assets-cdn" and returned HTML, while `jane-street` must survive.
     """
-    return any(
-        all(piece in _NOT_A_TOKEN for piece in part.casefold().split("-"))
-        for part in token.split("|")
-    )
+    head = token.split("|")[0].casefold()
+    return all(piece in _NOT_A_TOKEN for piece in head.split("-"))
 
 
 @dataclass(frozen=True, slots=True)

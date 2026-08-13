@@ -86,6 +86,12 @@ class FingerprintTest(unittest.TestCase):
         hit = ats.fingerprint('src="https://boards-api.greenhouse.io/v1/boards/optiver"')
         self.assertEqual(hit[:2], ("greenhouse", "optiver"))
 
+    def test_a_workday_site_called_careers_is_kept(self):
+        """The site component is not a host, and "Careers" is what most of
+        them are called -- LSEG, Fortress and PJT Partners among them."""
+        hit = ats.fingerprint('href="https://lseg.wd3.myworkdayjobs.com/en-US/Careers"')
+        self.assertEqual(hit[:2], ("workday", "lseg|wd3|Careers"))
+
     def test_workday_needs_tenant_datacentre_and_site(self):
         """A tenant alone builds a URL that 404s on every poll."""
         hit = ats.fingerprint('href="https://abrdn.wd3.myworkdayjobs.com/en-US/abrdncareers"')
@@ -101,6 +107,12 @@ class FingerprintTest(unittest.TestCase):
         """`assets-cdn.breezy.hr` polled as a board and returned HTML."""
         hit = ats.fingerprint('<img src="https://assets-cdn.breezy.hr/logo.png">')
         self.assertEqual(hit[0], "breezy")
+        self.assertIsNone(hit[1])
+
+    def test_a_vendor_shared_host_is_not_a_board(self):
+        """`career.emply.com` was claimed by five unrelated Danish firms."""
+        hit = ats.fingerprint('<a href="https://career.emply.com/apply">')
+        self.assertEqual(hit[0], "emply")
         self.assertIsNone(hit[1])
 
     def test_a_hyphenated_board_name_survives(self):
