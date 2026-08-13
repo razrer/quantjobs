@@ -45,8 +45,8 @@ nothing in the near-term plan now waits on a human.
 | 3 | Close audit-flagged gaps | done |
 | 4 | Layer 2 — domain resolution | **in progress** — mechanism built, queue long |
 | 4b | Switzerland (FINMA) | done |
-| 5 | Layer 2 — ATS resolution | **in progress** — fingerprinter built |
-| 6 | Layer 3 — ATS extraction | **in progress** — 10 formats, jobs landing |
+| 5 | Layer 2 — ATS resolution | **in progress** — 4,386 tiered, 12,100 queued |
+| 6 | Layer 3 — ATS extraction | **done** — all 10 formats landing, 16,124 jobs |
 | 7 | Layer 4 — JobTech JobStream (Sweden) | not started |
 | 8 | Silent-failure alerting | not started |
 | 9 | Layer 3B — Tier B change detection | not started |
@@ -425,13 +425,22 @@ produces *nothing* is as silent as a run that produces zero rows.
 **Exit criterion:** every firm with a domain is either resolved to an ATS or
 assigned tier B/C. No firm left untiered.
 
-**Where it stands:** 1,130 domains tiered — 118 tier A, 390 B, 622 C — against
-a queue of roughly 13,900 domains that `domains.py` has produced so far. Both
-queues are incremental and cached, so this is wall time, not a design problem.
+**Where it stands:** 4,386 domains tiered — 280 tier A, 1,034 B, 3,072 C — with
+roughly 12,100 still queued, and the queue grows as `domains.py` runs. Both are
+incremental and cached, so this is wall time, not a design problem.
+
+**A tenant can host more than one board, and only the first is kept.**
+`arrowstreetcapital.com` fingerprints to `arrowstreetcapital|wd5|Campus_Careers`
+— the campus site. If the firm also runs an experienced-hire site under the
+same tenant, nothing here will ever see it, because `ats_resolution` is keyed
+on the domain and `fingerprint` returns on its first match. That is a coverage
+gap of exactly the kind this project treats as expensive, and it is a schema
+change (one row per board, not per domain) rather than a patch, so it is
+recorded here for a later stage instead of being bolted on now.
 
 ---
 
-## Stage 6 — Layer 3, ATS extraction *(in progress)*
+## Stage 6 — Layer 3, ATS extraction *(done)*
 
 `extract.py`. Stage 5 resolved firms to `(ats, token)`; each ATS publishes one
 endpoint shape, so this is one small function per format rather than one scraper
@@ -493,11 +502,15 @@ Both produced boards that look resolved and yield nothing forever:
 
 ### A careers page can link to somebody else's board
 
-The one Lever board resolved so far is `palmersquare.com` → `heyrowan`, and it
-is wrong. Palmer Square Capital Management's careers page carries a single
+The first Lever board resolved was `palmersquare.com` → `heyrowan`, and it is
+wrong. Palmer Square Capital Management's careers page carries a single
 `jobs.lever.co/heyrowan` link with a Google `srsltid` tracking parameter on it
 — syndicated content, not their own board — and the 90 postings it yields are
-*Piercing Studio Nurse* and *Store Manager* at a jewellery retailer.
+*Piercing Studio Nurse* and *Store Manager* at a jewellery retailer. The same
+shape put `alvier.com` on a Workday tenant belonging to Höganäs, though that
+one turned out to be genuine: the tenant is shared and the site really is
+`Alvier_Careers`. The evidence string is what distinguishes them, and only a
+human read does it.
 
 The rows are kept, because raw tables are append-only and read-time
 classification discards these on sight. But it is a new failure shape for
@@ -509,10 +522,22 @@ confirmation at Layer 3 — Greenhouse and Lever both publish the board's own
 company name, so the feed can be asked who it belongs to — and that is worth
 doing when a second example turns up rather than before.
 
-**Exit criterion:** jobs land from at least one firm per implemented ATS format
-*(10 of 10 by format, but the Lever board is the mis-attribution above, so nine
-formats are proven against a firm that actually owns the board)*, and the
-Workday trap has a test that fails if the protection is removed *(met)*.
+**Exit criterion — met.** Jobs land from at least one firm per implemented ATS
+format, and the Workday trap has a test that fails if the protection is
+removed. Lever was the last format outstanding and is now proven on a board the
+firm actually owns: `cimgroup.com` → `cimgroup`, 51 investment-firm postings,
+independent of the Palmer Square mis-attribution above.
+
+**Where it stands:** 16,124 postings from 116 boards across all ten formats,
+from 473 across eight at the start of this stage. Workday is 14,732 of them,
+which is what the `total` trap and the page bound were both hiding.
+
+Failures are printed rather than swallowed, and the five in the last run were
+all real: two BambooHR boards serving HTML instead of JSON, a Greenhouse 404, a
+Recruitee 403, and one stale tenant-only Workday token. Four such tokens
+survived the earlier re-fingerprint; clearing them from `ats_resolution` — a
+derived table, so it rebuilds — brought all four back as `tenant|wdN|site`,
+including Arrowstreet Capital.
 
 ---
 
