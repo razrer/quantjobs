@@ -84,13 +84,13 @@ Switzerland,focus,GAM,GAM Holding|GAM Investments,active,Systematic arm effectiv
 Switzerland,focus,Swiss Re,,active,Markets side only.
 Switzerland,focus,Zurich Insurance,Zurich Insurance Group,active,Markets side only. Reached through Zurich Insurance Europe AG in the Danish register; still no Swiss register of our own.
 # ── Dubai ────────────────────────────────────────────────────────────────────
-Dubai,focus,DRW,DRW Trading|DRW Investments,active,
-Dubai,focus,Millennium,Millennium Management,active,
-Dubai,focus,Balyasny,Balyasny Asset Management,active,
-Dubai,focus,ADIA,Abu Dhabi Investment Authority,active,Sovereign wealth fund; appears in no financial register anywhere. Carried by the seed registry.
-Dubai,focus,ADQ,,active,Sovereign wealth fund; appears in no financial register anywhere. Carried by the seed registry.
-Dubai,focus,Mubadala,Mubadala Investment Company,active,Sovereign wealth fund; appears in no financial register anywhere. Carried by the seed registry.
-Dubai,focus,Emirates NBD,,active,Present only through its Singapore banking licence -- hence not local. No Gulf register is ingested; DFSA puts its public register behind a CAPTCHA.
+Dubai,deprioritized,DRW,DRW Trading|DRW Investments,active,
+Dubai,deprioritized,Millennium,Millennium Management,active,
+Dubai,deprioritized,Balyasny,Balyasny Asset Management,active,
+Dubai,deprioritized,ADIA,Abu Dhabi Investment Authority,active,Sovereign wealth fund; appears in no financial register anywhere. Carried by the seed registry.
+Dubai,deprioritized,ADQ,,active,Sovereign wealth fund; appears in no financial register anywhere. Carried by the seed registry.
+Dubai,deprioritized,Mubadala,Mubadala Investment Company,active,Sovereign wealth fund; appears in no financial register anywhere. Carried by the seed registry.
+Dubai,deprioritized,Emirates NBD,,active,Present only through its Singapore banking licence -- hence not local. No Gulf register is ingested; DFSA puts its public register behind a CAPTCHA.
 # ── Hong Kong ────────────────────────────────────────────────────────────────
 Hong Kong,focus,Optiver,,active,
 Hong Kong,focus,Jump Trading,Jump Trading Europe,active,

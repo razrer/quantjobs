@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 import http.cookiejar
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -24,16 +25,30 @@ _OPENER = urllib.request.build_opener(
 MIN_INTERVAL_S = 1.0
 
 _last_hit: dict[str, float] = {}
+# Domain resolution probes thousands of *different* hosts, so it is worth doing
+# in parallel -- the per-host interval barely applies when no two requests share
+# a host. The lock is what makes that safe; the bookkeeping is still per host,
+# so any one registry is hit no harder than before.
+_throttle_lock = threading.Lock()
 
 
 def _throttle(host: str) -> None:
-    wait = MIN_INTERVAL_S - (time.monotonic() - _last_hit.get(host, 0.0))
+    with _throttle_lock:
+        now = time.monotonic()
+        wait = MIN_INTERVAL_S - (now - _last_hit.get(host, 0.0))
+        # Reserve the slot before sleeping, so concurrent callers for the same
+        # host queue up behind each other instead of all waking together.
+        _last_hit[host] = now + max(wait, 0.0)
     if wait > 0:
         time.sleep(wait)
-    _last_hit[host] = time.monotonic()
 
 
-def _send(request: urllib.request.Request, timeout: int, retries: int) -> bytes:
+def _send(
+    request: urllib.request.Request,
+    timeout: int,
+    retries: int,
+    final_url: list[str] | None = None,
+) -> bytes:
     """Send `request`, retrying transient failures.
 
     Client errors (except 429) are not retried -- a 404 will still be a 404.
@@ -47,6 +62,8 @@ def _send(request: urllib.request.Request, timeout: int, retries: int) -> bytes:
                 body = response.read()
                 if response.headers.get("Content-Encoding") == "gzip":
                     body = gzip.decompress(body)
+                if final_url is not None:
+                    final_url.append(response.geturl())
                 return body
         except urllib.error.HTTPError as exc:
             retryable = exc.code == 429 or exc.code >= 500
@@ -60,12 +77,41 @@ def _send(request: urllib.request.Request, timeout: int, retries: int) -> bytes:
     raise AssertionError("unreachable")
 
 
-def get(url: str, *, timeout: int = 60, retries: int = 3) -> bytes:
+def get(
+    url: str,
+    *,
+    timeout: int = 60,
+    retries: int = 3,
+    headers: dict[str, str] | None = None,
+) -> bytes:
     """GET `url` and return the body."""
+    return get_with_url(url, timeout=timeout, retries=retries, headers=headers)[0]
+
+
+def get_with_url(
+    url: str,
+    *,
+    timeout: int = 60,
+    retries: int = 3,
+    headers: dict[str, str] | None = None,
+) -> tuple[bytes, str]:
+    """GET `url`, returning the body and the URL that actually answered.
+
+    Redirects matter to domain resolution: a guess that lands on the right firm
+    via a redirect should be recorded as the domain it ended on, not the one we
+    guessed, or Layer 2 caches an alias and Layer 3 chases it every poll.
+    """
     request = urllib.request.Request(
-        url, headers={"User-Agent": USER_AGENT, "Accept-Encoding": "gzip"}
+        url,
+        headers={
+            "User-Agent": USER_AGENT,
+            "Accept-Encoding": "gzip",
+            **(headers or {}),
+        },
     )
-    return _send(request, timeout, retries)
+    final: list[str] = []
+    body = _send(request, timeout, retries, final_url=final)
+    return body, (final[0] if final else url)
 
 
 def get_text(url: str, *, encoding: str = "utf-8", **kwargs) -> str:

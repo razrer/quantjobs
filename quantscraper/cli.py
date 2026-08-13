@@ -5,8 +5,13 @@ from __future__ import annotations
 import argparse
 import sys
 
-from . import audit, db, resolve
+from . import audit, db, domains, fca, resolve
 from .registries import REGISTRIES
+
+# The registries covering the focus hubs. Domain resolution starts here because
+# these are the firms with no website at all; the SEC already publishes one for
+# most of its filers.
+FOCUS_SOURCES = ("fi_se", "afm_nl", "finanstilsynet_dk", "mas_sg", "sfc_hk", "seed")
 
 
 def _fetch(names: list[str], database: str) -> int:
@@ -52,6 +57,50 @@ def _audit(database: str, verbose: bool) -> int:
         print("no firms table -- run `resolve` first", file=sys.stderr)
         return 1
     print(audit.format_report(audit.run(connection, audit.load_roster()), verbose))
+    return 0
+
+
+def _domains(database: str, limit: int, workers: int) -> int:
+    connection = db.connect(database)
+    connection.executescript(domains.SCHEMA)
+
+    seeded = domains.harvest_registry_domains(connection)
+    print(f"seeded {seeded:,d} domains from registry websites")
+
+    attempted, resolved = domains.run(connection, FOCUS_SOURCES, limit, workers)
+    if attempted:
+        print(f"probed {attempted:,d} firms, {resolved:,d} strong matches")
+    else:
+        print("nothing left to probe in the focus sources")
+
+    print("\ndomain coverage by focus registry")
+    print(f"  {'':18s} {'known':>13s}   registry   fca   strong   weak   unresolved")
+    for source, row in domains.coverage(connection, FOCUS_SOURCES):
+        # Weak matches are stored but not counted: one word out of several is
+        # not proof, and a wrong domain costs a silently empty job feed.
+        known = (row["registry"] or 0) + (row["fca"] or 0) + (row["strong"] or 0)
+        share = 100 * known / row["firms"] if row["firms"] else 0.0
+        print(
+            f"  {source:18s} {known:5,d}/{row['firms']:<6,d} ({share:4.1f}%)"
+            f"   {row['registry'] or 0:8,d}"
+            f"   {row['fca'] or 0:3,d}"
+            f"   {row['strong'] or 0:6,d}"
+            f"   {row['weak'] or 0:4,d}"
+            f"   {row['unresolvable'] or 0:10,d}"
+        )
+    return 0
+
+
+def _fca(database: str, limit: int) -> int:
+    connection = db.connect(database)
+    try:
+        looked_up, found = fca.enrich(connection, limit)
+    except fca.MissingCredentials as exc:
+        print(f"FCA credentials unavailable: {exc}", file=sys.stderr)
+        return 1
+    print(f"looked up {looked_up:,d} firms, found {found:,d} domains")
+    for row in fca.summary(connection):
+        print(f"  {row['method']:10s} {row['n']:,d}")
     return 0
 
 
@@ -114,8 +163,28 @@ def main(argv: list[str] | None = None) -> int:
     audit_command.add_argument(
         "-v", "--verbose", action="store_true", help="list what each hit matched"
     )
+    domains_command = commands.add_parser(
+        "domains", help="resolve firm names to domains (Layer 2)"
+    )
+    domains_command.add_argument(
+        "--limit", type=int, default=500, help="firms to probe this run"
+    )
+    domains_command.add_argument(
+        "--workers", type=int, default=12, help="parallel probes"
+    )
+
+    fca_command = commands.add_parser(
+        "fca", help="enrich firms with FCA register websites (needs .env)"
+    )
+    fca_command.add_argument(
+        "--limit", type=int, default=300, help="firms to look up this run"
+    )
 
     args = parser.parse_args(argv)
+    if args.command == "domains":
+        return _domains(args.db, args.limit, args.workers)
+    if args.command == "fca":
+        return _fca(args.db, args.limit)
     if args.command == "stats":
         return _stats(args.db)
     if args.command == "resolve":

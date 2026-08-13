@@ -40,6 +40,16 @@ python -m quantscraper stats     # what is in the database
 python -m quantscraper audit     # check the universe against the named roster
 ```
 
+```bash
+python -m quantscraper domains --limit 1000   # resolve firm names to domains
+```
+
+```bash
+python -m quantscraper fca --limit 300        # enrich domains from the FCA register
+```
+
+`fca` needs `FCA_EMAIL` and `FCA_KEY` in `.env` (gitignored, never committed).
+
 `run.ps1` / `run.sh` wrap these with the correct interpreter (see below).
 
 **Interpreter gotcha — this will waste your time otherwise.** Bare `python`
@@ -68,8 +78,10 @@ registries/*.py  ->  employers table  ->  resolve.py  ->  firms table
 - `http.py` — throttled, retrying GET and form POST, sharing one cookie jar
 - `parsing.py` — minimal HTML table and `.xlsx` readers, standard library only
 - `db.py` — SQLite schema and upserts
-- `resolve.py` — entity resolution
+- `resolve.py` — entity resolution, plus the shared name/country normalizers
 - `audit.py` — coverage measurement against `roster.csv`; reads only
+- `domains.py` — Layer 2: firm name -> domain, guessed then verified
+- `fca.py` — Layer 2 enrichment from the FCA register; needs `.env`
 - `registries/` — one module per source
 
 `roster.csv` is the *audit set*, never the universe. A firm's absence from it
@@ -178,6 +190,35 @@ Each of these silently produced wrong results before being caught:
 - **MAS (SG) ignores every page-size parameter** — ten rows per page, no
   override. An out-of-range page returns zero rows rather than wrapping to the
   first, which is what makes the walk terminate correctly.
+- **A guessed domain must be verified against the page, and one word is not
+  proof.** `australia.com` (the tourism board) "matched" Australia and New
+  Zealand Banking Group, `societe.com` matched Societe Generale, and
+  `citadel.com` matched *Citadel Securities* — a different employer with a
+  different careers page. `domains.py` grades matches strong/weak for this
+  reason; only strong ones count. A wrong domain yields a silently empty job
+  feed, which is worse than no domain at all.
+- **Evidence must not be circular.** `marketfrance.com` proved itself by
+  printing its own domain on the page — and the domain was what we guessed.
+  Match on spaced phrases, never on the run-together form.
+- **Fold both sides the same way before matching text.** The register says
+  "J.P. Morgan SE" (normalizing to `jp morgan`) while the page says
+  "J.P. Morgan"; comparing a normalized name against raw page text silently
+  matches nothing.
+- **FCA: Cloudflare returns 403 "error 1010" to any request without a
+  `User-Agent`**, which is indistinguishable from a bad API key. If FCA calls
+  start failing, check the header before you doubt the credentials.
+- **FCA `CommonSearch` returns "No search result found" for everything**, for
+  any query, forever. The working endpoint is `Search?q=...&type=firm`. Paging
+  is `pgnp=N` — not `page`, which is silently ignored while the response
+  helpfully advertises `pgnp` in its own `Next` URL.
+- **FCA cannot enumerate, and this is now settled.** Queries under three
+  characters are rejected, and broad ones ("trading", "capital") return
+  `Request Entity Too Large`, so the Danish letter-sweep trick does not
+  transfer. There is no bulk download. It is enrichment only — `fca.py` lives
+  outside `registries/` deliberately, because calling it a registry would
+  overstate coverage.
+- **FCA search is fuzzy**: a query for "barclays" returns `PEAC Business
+  Finance Limited` first. Accept a result only on a token-aligned name match.
 - **Form ADV covers SEC registrants only.** Advisers under roughly $110M AUM
   register with their state and are absent.
 

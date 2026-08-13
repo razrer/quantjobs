@@ -7,12 +7,12 @@ Nothing here is urgent — the project runs fine without any of it. These are th
 places where I hit a wall that needed a human, not a decision I should make for
 you.
 
-**One new blocker: item 0, the Dubai register.** Everything else here is
-optional or already resolved.
+**Nothing here is blocking.** Item 0 went optional when you deprioritized Dubai;
+everything else was already optional or resolved.
 
 ---
 
-## 0. DFSA public register — the only thing blocking Dubai
+## 0. DFSA public register — Dubai *(deprioritized; leave it unless you want Dubai back)*
 
 **Why it is blocked:** the DFSA's public register at
 https://www.dfsa.ae/public-register puts its search behind a Google reCAPTCHA.
@@ -35,46 +35,46 @@ for any of them.
    answer, not a cop-out: the Gulf universe of quant employers is small and
    nameable, unlike the Nordics.
 
-Nothing else waits on this — Dubai is the last focus hub without a local
-register, and the other six are all at 100%.
+**You have since deprioritized Dubai, so none of this is needed.** Left in full
+in case you change your mind. The six remaining focus hubs are all at 100%
+present, and Dubai's roster firms are in the universe via the seed file — what
+is missing is only a *locally registered* row for them.
 
 ---
 
-## 1. FCA API key — unblocks the UK *(deprioritized — only if you want London back)*
+## 1. FCA API key — **done**
 
-**You have since deprioritized London, so this is now optional.** Nothing in the
-current plan waits on it; the FCA was the only blocked source, so the near-term
-work is now entirely unblocked. Left here in full in case you change your mind.
+**Resolved.** You supplied the credentials; they are in `.env`, which is
+gitignored and has not been committed. `python -m quantscraper fca` works.
 
-**Why it is blocked:** every FCA route (register API, bulk download) returns
-401/403 without credentials, and getting them means creating an account. I don't
-create accounts on your behalf, so this one is yours.
+**One security note:** the key was pasted into chat, so it now exists in that
+transcript as well as in `.env`. If that bothers you, regenerate it at
+https://register.fca.org.uk/Developer/s/ and replace the value in `.env` — I do
+not need to see the new one, and nothing else needs changing.
 
-**What to do:**
+**What it turned out to be good for.** Not enumeration — that is now settled
+rather than assumed:
 
-1. Go to https://register.fca.org.uk/Developer/s/ and sign up.
-2. You get an **email address** and an **API key**.
-3. Put them in a file called `.env` in the repo root:
+- there is no bulk download;
+- queries shorter than three characters are rejected;
+- broad queries ("trading", "capital") return `Request Entity Too Large`, so the
+  letter-sweep that enumerates the Danish register does not transfer;
+- the only other handle is the FRN, a numeric space of about a million.
 
-   ```
-   FCA_EMAIL=you@example.com
-   FCA_KEY=your-key-here
-   ```
+So `fca.py` sits outside `registries/` on purpose. Calling it a registry would
+overstate coverage: it can only return what we thought to ask for.
 
-   `.env` is already in `.gitignore`, so it will not be committed. Do not paste
-   the key into chat — the file is enough, I will read it from there.
+**What it does do is supply websites**, which are the scarce resource — no
+focus-region registry publishes a single one. `Firm/{FRN}/Address` carries a
+`Website Address` and a `Country`. First 200 firms looked up: 29 domains, of
+which 13 were non-UK entities (Cyprus, Ireland, Belgium, Spain, Luxembourg,
+Germany, Slovakia). It also corrected one of my own guesses — Commonwealth Bank
+of Australia resolves to `commbank.com.au`, where the guesser had offered
+`commonwealth.com`.
 
-**Set expectations, because this one disappointed me:** the FCA API has no
-"list all firms" endpoint, only per-firm lookups. So it *cannot* enumerate a UK
-universe the way the other registries do. What it is genuinely good for is
-enrichment — specifically the `Dealing in investments as principal` permission,
-which the plan calls the single best proprietary-trading signal available. So
-the realistic UK plan is: discover UK firms from other sources, then use FCA to
-check permissions on them.
-
-If enumerating UK firms matters more to you than the permission flag, say so —
-Companies House has a free bulk product that lists every UK company, and SIC
-codes 64/66 narrow it to financials. It is noisier but it does enumerate.
+Still available if you ever want UK *enumeration*: Companies House has a free
+bulk product listing every UK company, with SIC codes 64/66 narrowing to
+financials. Noisier, but it does enumerate. Not built — London is deprioritized.
 
 ---
 

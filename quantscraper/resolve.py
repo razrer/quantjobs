@@ -44,6 +44,11 @@ CREATE TABLE firm_members (
     source_id  TEXT NOT NULL,
     PRIMARY KEY (source, source_id)
 );
+
+-- The primary key answers "which firm is this row in?"; this answers "which
+-- rows is this firm made of?", which is the direction every question about
+-- coverage per source asks, and it is a self-join without the index.
+CREATE INDEX firm_members_by_firm ON firm_members (firm_id);
 """
 
 # Trailing legal-form tokens. Only these are stripped -- anything that
@@ -121,6 +126,34 @@ def normalize_name(name: str) -> str:
     while tokens and tokens[-1] in _LEGAL_FORMS:
         tokens.pop()
     return " ".join(tokens)
+
+
+# Registries report country in their own language and format: AFM says
+# "Nederland", the SEC "United States", Eurex "DE". Only the countries something
+# downstream keys on need translating -- everything else stays as reported.
+_COUNTRY_CODES = {
+    "se": "SE", "sweden": "SE", "sverige": "SE", "zweden": "SE",
+    "dk": "DK", "denmark": "DK", "danmark": "DK", "denemarken": "DK",
+    "nl": "NL", "netherlands": "NL", "the netherlands": "NL", "nederland": "NL",
+    "ch": "CH", "switzerland": "CH", "schweiz": "CH", "zwitserland": "CH",
+    "ae": "AE", "united arab emirates": "AE",
+    "verenigde arabische emiraten": "AE",
+    "hk": "HK", "hong kong": "HK", "hongkong": "HK",
+    "sg": "SG", "singapore": "SG",
+    "gb": "GB", "uk": "GB", "united kingdom": "GB", "great britain": "GB",
+    "verenigd koninkrijk": "GB", "groot brittannie": "GB",
+    "de": "DE", "germany": "DE", "deutschland": "DE", "duitsland": "DE",
+    "cn": "CN", "china": "CN", "people's republic of china": "CN",
+    "us": "US", "usa": "US", "united states": "US",
+    "united states of america": "US", "verenigde staten": "US",
+}
+
+
+def country_code(value: str | None) -> str | None:
+    """ISO code for a registry's country string, or None if unrecognised."""
+    if not value:
+        return None
+    return _COUNTRY_CODES.get(value.strip().casefold())
 
 
 def domain_of(website: str | None) -> str | None:

@@ -33,6 +33,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .resolve import country_code as _iso_country
 from .resolve import normalize_name
 
 ROSTER_PATH = Path(__file__).with_name("roster.csv")
@@ -55,25 +56,6 @@ HUB_COUNTRY = {
     "US centers": "US",
 }
 
-# Registries report country in their own language and format: AFM says
-# "Nederland", the SEC says "United States", Eurex says "DE". Only the countries
-# a hub maps to need translating -- everything else is irrelevant here.
-_COUNTRY_CODES = {
-    "se": "SE", "sweden": "SE", "sverige": "SE", "zweden": "SE",
-    "dk": "DK", "denmark": "DK", "danmark": "DK", "denemarken": "DK",
-    "nl": "NL", "netherlands": "NL", "the netherlands": "NL", "nederland": "NL",
-    "ch": "CH", "switzerland": "CH", "schweiz": "CH", "zwitserland": "CH",
-    "ae": "AE", "united arab emirates": "AE",
-    "verenigde arabische emiraten": "AE",
-    "hk": "HK", "hong kong": "HK", "hongkong": "HK",
-    "sg": "SG", "singapore": "SG",
-    "gb": "GB", "uk": "GB", "united kingdom": "GB", "great britain": "GB",
-    "verenigd koninkrijk": "GB", "groot brittannie": "GB",
-    "de": "DE", "germany": "DE", "deutschland": "DE", "duitsland": "DE",
-    "cn": "CN", "china": "CN", "people's republic of china": "CN",
-    "us": "US", "usa": "US", "united states": "US",
-    "united states of america": "US", "verenigde staten": "US",
-}
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,10 +132,9 @@ def country_code(row: sqlite3.Row) -> str | None:
     neither of which localises a firm to a hub.
     """
     for value in (row["country"], row["jurisdiction"]):
-        if value:
-            code = _COUNTRY_CODES.get(value.strip().casefold())
-            if code:
-                return code
+        code = _iso_country(value)
+        if code:
+            return code
     return None
 
 

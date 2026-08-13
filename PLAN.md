@@ -18,8 +18,13 @@ do not skip ahead to something more interesting.
 
 ## Geographic priority
 
-**Focus:** Stockholm, Copenhagen, Amsterdam, Switzerland, Dubai, Hong Kong,
-Singapore. **Deprioritized:** Germany, US, London/UK, China.
+**Focus:** Stockholm, Copenhagen, Amsterdam, Switzerland, Hong Kong, Singapore.
+**Deprioritized:** Germany, US, London/UK, China, Dubai.
+
+Dubai was deprioritized after Stage 3. Its register is the one behind a CAPTCHA,
+so it could not be built anyway; the roster firms that matter there are already
+in the universe through the seed file. It stays in the audit fixture and reports
+with the deprioritized hubs.
 
 This sets **what gets built next**, not what gets ingested. Data already
 collected stays — `sec_adv` and `sec_bd` are 26,500 US rows and they remain in
@@ -38,7 +43,7 @@ nothing in the near-term plan now waits on a human.
 | 1 | Employer identity (entity resolution) | done |
 | 2 | Coverage audit harness | done |
 | 3 | Close audit-flagged gaps | done |
-| 4 | Layer 2 — domain resolution | **next** |
+| 4 | Layer 2 — domain resolution | **in progress** — mechanism built, queue long |
 | 5 | Layer 2 — ATS resolution | not started |
 | 6 | Layer 3 — ATS extraction | not started |
 | 7 | Layer 4 — JobTech JobStream (Sweden) | not started |
@@ -225,12 +230,101 @@ participants, BaFin, FCA, AMAC, and the US state-adviser tail.
 
 ## Stage 4 — Layer 2, domain resolution
 
-Registry `website` fields first — ~20,700 rows already carry one. Then
-Certificate Transparency logs (`crt.sh`) for careers subdomains, then targeted
-search for the remainder.
+Registry `website` fields first, then guess-and-verify for the rest.
 
-**Exit criterion:** ≥90% of firms in priority cities have a domain, or are
-explicitly marked unresolvable.
+**The exit criterion as written is not measurable, and the shortfall is real.**
+It says "≥90% of firms in priority cities have a domain, or are explicitly
+marked unresolvable" — but *every* firm ends up explicitly marked, so the clause
+makes the bar trivially passable while saying nothing. Worse, "priority cities"
+is not a field we have: `fi_se`, `sfc_hk`, `mas_sg` and `finanstilsynet_dk`
+publish no city at all.
+
+Replaced with two numbers that mean something:
+
+- **known** — the firm has a domain from a registry or a *strong* verified match
+- **probed** — the firm has been looked at, so the remainder is a queue length
+  rather than an unknown
+
+**Exit criterion:** every firm reported by a focus-region registry has been
+probed at least once, and the strong matches survive a manual read.
+
+### The problem this stage exists to solve
+
+Registries in the focus regions publish **no websites at all** — not one of
+`fi_se`, `afm_nl`, `finanstilsynet_dk`, `mas_sg` or `sfc_hk` carries a single
+one. Across the 34,047 firms they report, 2.3% had a domain, and 95% of even
+those arrived via a US registration rather than a local one.
+
+### Guess, then verify
+
+`domains.py` derives candidate domains from the firm's name and accepts one only
+if the page that answers actually names the firm. **An unverified guess is worse
+than no domain**: it points Layer 3 at someone else's careers page, and the
+result is a silently empty feed rather than a visible error.
+
+Matches are graded, and the grading is the whole safety mechanism:
+
+- **strong** — the page contains the firm's full name, or its first two
+  identity-bearing words. Counted as resolved.
+- **weak** — the page contains only one word of a multi-word name. Stored with
+  its evidence, **not counted**, and not to be used by Layer 3 until confirmed.
+
+Three false positives drove that design and are worth keeping in mind:
+`australia.com` (the tourism board) for *Australia and New Zealand Banking
+Group*, `societe.com` for *Societe Generale*, and `citadel.com` for *Citadel
+Securities* — a different employer with a different careers page, and precisely
+the merge the roster is careful to keep apart. A fourth, `marketfrance.com`,
+"proved" itself by printing its own domain name on the page, which is circular:
+the domain was the thing we guessed.
+
+### Where it stands
+
+360 firms probed, 119 strong matches (33%), 128 weak held back, the rest
+unresolved. A random sample of 30 strong matches read clean. Following redirects
+matters: `PineBridge Global Funds` resolves to `metlife.com`, which looks wrong
+until you remember MetLife acquired PineBridge.
+
+| Registry | Known | Share |
+|---|---|---|
+| `mas_sg` | 200/1,988 | 10.1% |
+| `afm_nl` | 255/3,709 | 6.9% |
+| `sfc_hk` | 228/3,622 | 6.3% |
+| `fi_se` | 34/659 | 5.2% |
+| `finanstilsynet_dk` | 447/25,549 | 1.7% |
+
+### The FCA register as a domain donor
+
+`fca.py`, added after the credentials arrived. **Not a registry** — the register
+cannot enumerate (no bulk file; sub-three-character queries rejected; broad ones
+return `Request Entity Too Large`; the only other handle is a millon-wide FRN
+space). Treating it as one would overstate UK coverage.
+
+What it does is publish a `Website Address` and a `Country` per firm, so it
+enriches firms the universe already has. First 200 lookups produced 29 domains,
+**13 of them non-UK entities** — Cyprus, Ireland, Belgium, Spain, Luxembourg,
+Germany, Slovakia — which is the overseas reach that made it worth doing.
+
+Because it is authoritative rather than inferred, it also corrects the guesser:
+Commonwealth Bank of Australia resolves to `commbank.com.au`, where guessing had
+offered `commonwealth.com`. Yield is lower than guessing (15% vs 33%) but the
+results need no manual read.
+
+### Still to do in this stage
+
+- **The queue is the work**: ~34,000 focus-region firms, of which the Danish
+  register contributes 25,549 that are mostly fund vehicles. At the observed
+  rate this is hours of wall time, not minutes. `--limit` makes it incremental,
+  writes are batched every 100 so an interrupted run keeps its progress, and the
+  cache makes re-runs free.
+- Weak matches need a confirmation pass. Stage 5 gives one for free: a domain
+  with no careers page and no ATS fingerprint is evidence the guess was wrong.
+- Certificate Transparency (`crt.sh`) for careers subdomains, once firms have a
+  domain to start from. It enumerates `careers.*` hosts that are never linked
+  from the homepage. This is Stage 5's input, not a name resolver.
+- Ordering is by how many registries saw the firm, which is a good proxy for
+  "operating company rather than fund vehicle" but surfaces large international
+  banks first. Resolving the audit roster ahead of the tail would be a cheap
+  improvement.
 
 ---
 

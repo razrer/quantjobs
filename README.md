@@ -29,6 +29,10 @@ python -m quantscraper stats
 python -m quantscraper audit
 ```
 
+```bash
+python -m quantscraper domains --limit 1000
+```
+
 `resolve` groups the raw registry rows into real-world firms; run it after
 `fetch`. It rebuilds from scratch every time, so it is safe to re-run.
 
@@ -36,6 +40,10 @@ python -m quantscraper audit
 `quantscraper/roster.csv` and reports, per hub, how many of those firms it
 found. `-v` lists what each hit actually matched, which is how a wrong match
 gets caught — see [Coverage audit](#coverage-audit).
+
+`domains` resolves firm names to domains, `--limit` firms at a time. Results are
+cached, including failures, so re-running is cheap and the work survives a
+`resolve` rebuild — see [Domain resolution](#domain-resolution).
 
 `fetch` takes optional registry names (`python -m quantscraper fetch fi_se`).
 Data lands in `employers.sqlite3`; override with `--db`.
@@ -251,6 +259,50 @@ Registries prepend qualifiers to legal names — `Bank Julius Bär & Co. AG`,
 `-v` prints the employer names each entry actually matched: a bare
 `Grasshopper` matching `GRASSHOPPER ESCAPEMENT, LLC` reported Singapore as
 covered when it was not, and was only visible because the matched name is shown.
+
+## Domain resolution
+
+A firm name has to become a careers feed. **The focus-region registries publish
+no websites at all** — not one of `fi_se`, `afm_nl`, `finanstilsynet_dk`,
+`mas_sg` or `sfc_hk` carries a single URL. Of the 34,047 firms they report, 2.3%
+had a domain, and 95% of even those came from a US registration rather than a
+local one. So the domains have to be derived.
+
+`domains.py` builds candidate domains from the firm's name and accepts one only
+if the page that answers **names the firm**. A live host proves only that
+somebody owns the name.
+
+**An unverified guess is worse than no domain.** It points Layer 3 at someone
+else's careers page, and the result is a silently empty feed rather than a
+visible error. So matches are graded:
+
+| Grade | Bar | Counted? |
+|---|---|---|
+| `registry` | the register published it | yes |
+| `name-strong` | page contains the full name, or its first two identity-bearing words | yes |
+| `name-weak` | page contains only one word of a multi-word name | **no** |
+| `unresolved` | nothing verified | no |
+
+Weak matches are kept with their evidence rather than discarded — `nomura.com`
+really is right for *Nomura Financial Products Europe GmbH* — but nothing
+downstream may use one until it is confirmed.
+
+Four false positives shaped those rules, and all four are instructive:
+
+- `australia.com`, the **tourism board**, for *Australia and New Zealand Banking
+  Group* — one word out of six is not evidence.
+- `societe.com` for *Societe Generale*, the same way.
+- `citadel.com` for *Citadel Securities* — a different employer with a different
+  careers page, and exactly the merge the roster is careful to keep apart. It
+  happened because the bare first word was tried before `citadelsecurities`.
+- `marketfrance.com` for *Market Securities France SA*, which "proved" itself by
+  printing its own domain on the page. The domain was what we guessed, so the
+  evidence was circular. Matching is on spaced phrases only for this reason.
+
+The cache is keyed on the firm's **name**, not its id, because `firms` is
+rebuilt from scratch on demand and ids are not a durable handle. Failures are
+cached too — most firms are unresolvable, and re-probing them every run is the
+bulk of the cost.
 
 ## Adding a registry
 
