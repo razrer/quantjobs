@@ -1,5 +1,7 @@
-# Collected data is reproducible by re-running the scrapers.
+# Collected data is reproducible by re-running the scrapers. The journal is
+# the same data mid-write, and `*.sqlite3` does not match it.
 *.sqlite3
+*.sqlite3-journal
 
 # API credentials -- see ACTION-REQUIRED.md
 .env
