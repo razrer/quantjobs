@@ -330,6 +330,70 @@ def harvest_registry_domains(connection: sqlite3.Connection) -> int:
     return len(lookups)
 
 
+def regrade_targets(connection: sqlite3.Connection, limit: int):
+    """Strong matches graded before the corroboration rule existed.
+
+    Ordered oldest first, so an interrupted pass resumes where it stopped
+    rather than re-reading the rows it just refreshed.
+    """
+    return connection.execute(
+        "SELECT query, domain FROM domain_lookups"
+        " WHERE method = 'name-strong' AND evidence NOT LIKE '%, but no %'"
+        "   AND evidence NOT LIKE '% and ''%'"
+        " ORDER BY checked_at LIMIT ?",
+        (limit,),
+    ).fetchall()
+
+
+def regrade(
+    connection: sqlite3.Connection, limit: int, workers: int = 12
+) -> tuple[int, int]:
+    """Re-check recorded strong matches against the current rule.
+
+    Corroboration needs the page text and the page text is not stored, so a
+    grade can only be revised by asking the host again. Returns
+    (checked, demoted).
+
+    Only the *grade* moves. The domain stays whatever it was even when the
+    host has since gone quiet, because Stage 5 tiers every domain regardless
+    of grade -- dropping one here would cost a board, which is the trade this
+    project never makes.
+    """
+    connection.executescript(SCHEMA)
+    rows = regrade_targets(connection, limit)
+    if not rows:
+        return 0, 0
+
+    def work(row: sqlite3.Row) -> Lookup | None:
+        normalized = normalize_name(row["query"])
+        if not normalized:
+            return None
+        try:
+            hit = verify(row["domain"], normalized)
+        except Exception:  # noqa: BLE001 -- one hostile host must not stop the pass
+            return None
+        if hit is None:
+            return None  # unreachable today says nothing about the old grade
+        _, strength, evidence = hit
+        method = "name-strong" if strength == "strong" else "name-weak"
+        return Lookup(row["query"], row["domain"], method, evidence)
+
+    checked = demoted = 0
+    batch: list[Lookup] = []
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for lookup in pool.map(work, rows):
+            checked += 1
+            if lookup is None:
+                continue
+            demoted += lookup.method == "name-weak"
+            batch.append(lookup)
+            if len(batch) >= 100:
+                record(connection, batch)
+                batch.clear()
+    record(connection, batch)
+    return checked, demoted
+
+
 def run(
     connection: sqlite3.Connection,
     sources: tuple[str, ...],

@@ -60,18 +60,25 @@ def _audit(database: str, verbose: bool) -> int:
     return 0
 
 
-def _domains(database: str, limit: int, workers: int) -> int:
+def _domains(database: str, limit: int, workers: int, regrade: bool = False) -> int:
     connection = db.connect(database)
     connection.executescript(domains.SCHEMA)
 
-    seeded = domains.harvest_registry_domains(connection)
-    print(f"seeded {seeded:,d} domains from registry websites")
-
-    attempted, resolved = domains.run(connection, FOCUS_SOURCES, limit, workers)
-    if attempted:
-        print(f"probed {attempted:,d} firms, {resolved:,d} strong matches")
+    if regrade:
+        # Grades recorded before a rule changed are stale, and only the host
+        # can settle them: corroboration needs the page text, which is not
+        # stored. Nothing is deleted -- a demoted row keeps its domain.
+        checked, demoted = domains.regrade(connection, limit, workers)
+        print(f"re-checked {checked:,d} strong matches, {demoted:,d} demoted to weak")
     else:
-        print("nothing left to probe in the focus sources")
+        seeded = domains.harvest_registry_domains(connection)
+        print(f"seeded {seeded:,d} domains from registry websites")
+
+        attempted, resolved = domains.run(connection, FOCUS_SOURCES, limit, workers)
+        if attempted:
+            print(f"probed {attempted:,d} firms, {resolved:,d} strong matches")
+        else:
+            print("nothing left to probe in the focus sources")
 
     print("\ndomain coverage by focus registry")
     print(f"  {'':18s} {'known':>13s}   registry   fca   strong   weak   unresolved")
@@ -243,6 +250,11 @@ def main(argv: list[str] | None = None) -> int:
     domains_command.add_argument(
         "--workers", type=int, default=12, help="parallel probes"
     )
+    domains_command.add_argument(
+        "--regrade",
+        action="store_true",
+        help="re-check recorded strong matches against the current rule",
+    )
 
     fca_command = commands.add_parser(
         "fca", help="enrich firms with FCA register websites (needs .env)"
@@ -280,7 +292,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "ats":
         return _ats(args.db, args.limit, args.workers)
     if args.command == "domains":
-        return _domains(args.db, args.limit, args.workers)
+        return _domains(args.db, args.limit, args.workers, args.regrade)
     if args.command == "fca":
         return _fca(args.db, args.limit)
     if args.command == "stats":

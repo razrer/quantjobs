@@ -9,6 +9,7 @@ Run with: python -m unittest discover -s tests
 
 from __future__ import annotations
 
+import sqlite3
 import unittest
 from unittest import mock
 
@@ -70,6 +71,27 @@ class CorroborationTest(unittest.TestCase):
         self.assertEqual(
             domains._corroborators("kikk capital ii management", "kikk capital"), []
         )
+
+    def test_a_regraded_row_is_not_picked_up_twice(self):
+        """The pass resumes rather than restarts, so its own output must not
+        look like more work: both outcomes leave a mark in the evidence."""
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        connection.executescript(domains.SCHEMA)
+        connection.executemany(
+            "INSERT INTO domain_lookups (query, domain, method, evidence, checked_at)"
+            " VALUES (?, ?, 'name-strong', ?, '2026-01-01')",
+            [
+                ("Old Grade Ltd", "old.com", "https://old.com/ names 'old grade'"),
+                ("Kept Ltd", "kept.com", "https://kept.com/ names 'kept' and 'ltd'"),
+                ("Demoted Ltd", "no.com", "https://no.com/ names 'x', but no y"),
+            ],
+        )
+
+        pending = [row["query"] for row in domains.regrade_targets(connection, 10)]
+        connection.close()
+
+        self.assertEqual(pending, ["Old Grade Ltd"])
 
     def test_a_one_word_match_is_still_weak(self):
         """The older rule this one sits beside: accepting one word out of
