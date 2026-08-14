@@ -98,6 +98,38 @@ class SeniorityTest(unittest.TestCase):
         self.assertEqual(tags["seniority"], {"student_only"})
         self.assertEqual(tags["fit"], {"out_of_scope"})
 
+    def test_the_title_decides_the_rank_too(self):
+        """A body saying "you will report to the Head of Trading" made
+        `Graduate Trader` a head_or_md posting, and one mentioning senior
+        colleagues made it senior_6_10. The rank is in the title."""
+        tags = _tags(
+            title="Graduate Trader",
+            description="You report to the Head of Trading and work with "
+                        "senior colleagues on the desk. " * 15,
+        )
+
+        self.assertEqual(tags["seniority"] & {"head_or_md", "senior_6_10", "lead"}, set())
+        self.assertTrue(tags["seniority"] & {"new_grad", "junior_0_2"})
+
+    def test_a_body_welcoming_students_is_not_a_student_only_role(self):
+        """A full-time PhD-level research role at Radix was marked
+        student-only because its body said "students"."""
+        tags = _tags(
+            title="Quantitative Researcher (Full-Time - PhD+)",
+            description="We welcome students and graduates alike. " * 20,
+        )
+
+        self.assertNotIn("student_only", tags["seniority"])
+
+    def test_a_real_graduation_gate_still_wins_from_the_body(self):
+        """No title announces it, which is why the bucket exists at all."""
+        tags = _tags(
+            title="Quantitative Analyst",
+            description="Applicants must be graduating in 2028. " * 20,
+        )
+
+        self.assertEqual(tags["seniority"], {"student_only"})
+
     def test_associate_director_is_not_an_associate(self):
         self.assertEqual(
             _tags(title="Associate Director, EQD Quant")["seniority"], {"senior_6_10"}

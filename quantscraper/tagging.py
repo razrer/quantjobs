@@ -35,7 +35,7 @@ from . import db
 # Bump on every lexicon change: the diff between two versions over the same
 # corpus is a free regression test, and it is the only way to tell "the
 # classifier improved" from "the market moved".
-TAGGER = 7
+TAGGER = 8
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS job_tags (
@@ -155,10 +155,14 @@ _ROLE_FAMILY = {
 # has graduated, so a posting demanding a *future* graduation date is noise --
 # and it is noise a title never announces.
 _SENIORITY = {
+    # Specific phrases only. A bare "student" or "students" fired on any body
+    # that merely welcomes them, and marked a full-time PhD-level research
+    # role at Radix Trading as student-only.
     "student_only": (
         "currently enrolled", "must be enrolled", "final year student",
-        "final year students", "penultimate year", "graduating in 2027",
-        "graduating in 2028", "studerande", "student", "students",
+        "final year students", "penultimate year", "still studying",
+        "graduating in 2027", "graduating in 2028", "graduating in 2029",
+        "expected graduation", "pursuing a degree", "studerande vid",
     ),
     "intern": ("intern", "internship", "praktik", "stage", "praktikant"),
     "new_grad": (
@@ -381,11 +385,24 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
         if not found:
             add(dimension, "unknown" if dimension != "asset_class" else "unstated", None)
 
-    for dimension, mapping in (
-        ("seniority", _SENIORITY),
-        ("code_depth", _CODE_DEPTH),
-        ("contract", _CONTRACT),
-    ):
+    # Seniority follows the same rule as relevance, and for the same reason.
+    # A body saying "you will report to the Head of Trading" made *Graduate
+    # Trader* a `head_or_md` posting, and one saying "work with senior
+    # colleagues" made it `senior_6_10`. The rank is in the title.
+    #
+    # `student_only` is the exception and is checked against the body first,
+    # because that is the only place it is ever written: no title announces
+    # "must be graduating in 2028", which is exactly why it needs its own
+    # bucket. Its needles are specific phrases for the same reason -- a bare
+    # "students" tripped on bodies that merely welcome them.
+    gate = _hit(text, _SENIORITY["student_only"])
+    rank = _first(_SENIORITY, title) or _first(_SENIORITY, text)
+    if gate:
+        add("seniority", "student_only", f"{gate!r}")
+    else:
+        add("seniority", rank[0] if rank else "unknown", f"{rank[1]!r}" if rank else None)
+
+    for dimension, mapping in (("code_depth", _CODE_DEPTH), ("contract", _CONTRACT)):
         found = _first(mapping, text)
         add(dimension, found[0] if found else "unknown", f"{found[1]!r}" if found else None)
 
