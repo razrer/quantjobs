@@ -553,6 +553,90 @@ def summary(connection: sqlite3.Connection, dimension: str):
     ).fetchall()
 
 
+def search(
+    connection: sqlite3.Connection,
+    *,
+    require: dict[str, tuple[str, ...]] | None = None,
+    exclude: dict[str, tuple[str, ...]] | None = None,
+    since: str | None = None,
+    limit: int = 50,
+):
+    """Postings matching every `require` and none of `exclude`.
+
+    This is where filtering belongs. Nothing is dropped at ingest -- principle
+    4, and it has earned itself here repeatedly: every lexicon bug found so far
+    was fixed by re-running over stored rows, which a write-time filter would
+    have thrown away. Reading is the reversible end.
+
+    `require` is AND across dimensions and OR within one, which is what a
+    person actually means: hub in (amsterdam, stockholm) *and* fit in
+    (apply_now, strong). `exclude` drops a posting carrying any listed value,
+    so one `crypto_web3` tag is enough to lose it.
+    """
+    where = ["j.removed_at IS NULL"]
+    params: list[object] = []
+
+    for dimension, values in (require or {}).items():
+        if not values:
+            continue
+        marks = ",".join("?" * len(values))
+        where.append(
+            "EXISTS (SELECT 1 FROM job_tags t WHERE t.ats = j.ats"
+            " AND t.token = j.token AND t.job_id = j.job_id AND t.tagger = ?"
+            f" AND t.dimension = ? AND t.value IN ({marks}))"
+        )
+        params += [TAGGER, dimension, *values]
+
+    for dimension, values in (exclude or {}).items():
+        if not values:
+            continue
+        marks = ",".join("?" * len(values))
+        where.append(
+            "NOT EXISTS (SELECT 1 FROM job_tags t WHERE t.ats = j.ats"
+            " AND t.token = j.token AND t.job_id = j.job_id AND t.tagger = ?"
+            f" AND t.dimension = ? AND t.value IN ({marks}))"
+        )
+        params += [TAGGER, dimension, *values]
+
+    if since:
+        where.append("j.first_seen >= ?")
+        params.append(since)
+
+    return connection.execute(
+        f"""
+        SELECT j.ats, j.token, j.job_id, j.title, j.location, j.url, j.domain,
+               j.first_seen,
+               (SELECT value FROM job_tags v WHERE v.ats = j.ats
+                 AND v.token = j.token AND v.job_id = j.job_id
+                 AND v.dimension = 'fit' AND v.tagger = ?)  AS fit,
+               (SELECT value FROM job_tags v WHERE v.ats = j.ats
+                 AND v.token = j.token AND v.job_id = j.job_id
+                 AND v.dimension = 'hub' AND v.tagger = ?)  AS hub,
+               (SELECT value FROM job_tags v WHERE v.ats = j.ats
+                 AND v.token = j.token AND v.job_id = j.job_id
+                 AND v.dimension = 'seniority' AND v.tagger = ?) AS seniority
+        FROM jobs j
+        WHERE {' AND '.join(where)}
+        ORDER BY CASE fit
+                     WHEN 'apply_now' THEN 0 WHEN 'strong' THEN 1
+                     WHEN 'plausible' THEN 2 WHEN 'stretch' THEN 3 ELSE 4 END,
+                 j.first_seen DESC
+        LIMIT ?
+        """,
+        (TAGGER, TAGGER, TAGGER, *params, limit),
+    ).fetchall()
+
+
+def dimensions(connection: sqlite3.Connection):
+    """Every dimension and value in use, so the filter is discoverable."""
+    connection.executescript(SCHEMA)
+    return connection.execute(
+        "SELECT dimension, value, COUNT(*) AS n FROM job_tags WHERE tagger = ?"
+        " GROUP BY dimension, value ORDER BY dimension, n DESC",
+        (TAGGER,),
+    ).fetchall()
+
+
 def shortlist(connection: sqlite3.Connection, limit: int = 40):
     """The postings the tags say to read first."""
     connection.executescript(SCHEMA)

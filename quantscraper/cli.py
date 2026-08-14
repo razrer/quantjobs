@@ -245,6 +245,45 @@ def _coverage(database: str) -> int:
     return 0
 
 
+def _list(database: str, args) -> int:
+    connection = db.connect(database)
+
+    if args.dimensions:
+        for row in tagging.dimensions(connection):
+            print(f"  {row['dimension']:18s} {row['value']:22s} {row['n']:7,d}")
+        return 0
+
+    def split(value):
+        return tuple(v.strip() for v in value.split(",") if v.strip()) if value else ()
+
+    require = {
+        "fit": split(args.fit),
+        "hub": split(args.hub),
+        "relevance": split(args.relevance),
+        "seniority": split(args.seniority),
+        "role_family": split(args.role),
+        "language": split(args.language),
+    }
+    exclude = {
+        "exclusion_reason": split(args.exclude),
+        "hard_gates": split(args.without),
+        "seniority": split(args.not_seniority),
+    }
+
+    rows = tagging.search(
+        connection, require=require, exclude=exclude, since=args.since,
+        limit=args.limit,
+    )
+    print(f"{len(rows)} posting(s)")
+    for row in rows:
+        print(
+            f"  {(row['fit'] or '-'):9s} {(row['hub'] or '-'):12s}"
+            f" {(row['seniority'] or '-'):12s} {(row['title'] or '')[:44]:46s}"
+            f" {(row['location'] or '')[:22]:24s} {row['url'] or ''}"
+        )
+    return 0
+
+
 def _alerts(database: str) -> int:
     connection = db.connect(database)
     found = alerts.check(connection)
@@ -373,6 +412,24 @@ def main(argv: list[str] | None = None) -> int:
         "--dimension", default="fit", help="dimension to summarise afterwards"
     )
 
+    list_command = commands.add_parser(
+        "list", help="filter tagged postings (Layer 5, read side)"
+    )
+    list_command.add_argument("--fit", help="apply_now,strong,plausible,stretch")
+    list_command.add_argument("--hub", help="stockholm,amsterdam,...")
+    list_command.add_argument("--relevance", help="core,adjacent")
+    list_command.add_argument("--seniority", help="junior_0_2,new_grad,intern,...")
+    list_command.add_argument("--not-seniority", help="drop these seniorities")
+    list_command.add_argument("--role", help="research,trading,quant_dev,...")
+    list_command.add_argument("--language", help="python,cplusplus,...")
+    list_command.add_argument("--exclude", help="crypto_web3,actuarial,...")
+    list_command.add_argument("--without", help="hard gates to drop: phd_required,...")
+    list_command.add_argument("--since", help="first seen on or after, ISO date")
+    list_command.add_argument("--limit", type=int, default=50)
+    list_command.add_argument(
+        "--dimensions", action="store_true", help="show every filterable value"
+    )
+
     commands.add_parser(
         "coverage", help="estimate how much of the market we see (Stage 10)"
     )
@@ -382,6 +439,8 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     args = parser.parse_args(argv)
+    if args.command == "list":
+        return _list(args.db, args)
     if args.command == "coverage":
         return _coverage(args.db)
     if args.command == "tag":

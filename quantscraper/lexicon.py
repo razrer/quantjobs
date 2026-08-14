@@ -189,6 +189,17 @@ GENERIC_IN_BODY = frozenset(_terms(
 ))
 QUANT_BODY = tuple(term for term in QUANT if term not in GENERIC_IN_BODY)
 
+# The mirror image, and the reason `CLAUDE.md` names Jane Street: `Trader` in a
+# title *is* the job, and in a body it is furniture -- every bank's boilerplate
+# mentions traders somewhere. These keep a posting when they appear in a title,
+# and are checked *after* the non-quant finance list so that `Sales Trader` and
+# `Trader Support` reject on the phrase that names them rather than on the word
+# they happen to contain.
+TITLE_ANCHOR = _terms(
+    "trader", "traders", "trading strategist", "proprietary trader",
+    "handlare", "handelaar", "händler",
+)
+
 # Contextual. These say "markets", not "quantitative". They are never enough to
 # keep a posting on their own -- they are the second half of a two-sided test,
 # the part that separates a trading-systems engineer from a payments one.
@@ -474,8 +485,19 @@ def compound(text: str, heads: tuple[str, ...] = SWEDISH_HEADS) -> str | None:
 # Body-only, and the one gate a graduate cannot pass. A posting requiring a
 # *future* graduation date is noise for someone who has already graduated, and
 # titles never announce it -- `Summer Analyst` and `Analyst` look identical.
+# Titles that say the posting is a student position outright. Their job is to
+# corroborate the body gate below -- see `judge` step 4 for why a body alone is
+# not allowed to reject a quantitative title.
+INTERN_TITLE = _terms(
+    "intern", "interns", "internship", "praktikant", "praktik", "praktikplats",
+    "werkstudent", "stagiaire", "summer analyst", "summer associate",
+    "summer intern", "sommarjobb", "co op", "student",
+)
+
+# `are enrolled` is deliberately absent: "employees who are enrolled in our
+# benefits plan" is ordinary handbook language, and this list rejects outright.
 STUDENT_ONLY = _terms(
-    "currently enrolled", "must be enrolled", "are enrolled", "still studying",
+    "currently enrolled", "must be enrolled", "still studying",
     "final year student", "final year students", "penultimate year",
     "graduating in 2027", "graduating in 2028", "expected graduation",
     "pursuing a degree", "currently pursuing a", "enrolled at a university",
@@ -565,14 +587,33 @@ def judge(
     if hit:
         return Verdict("reject", "crypto_web3", hit, "strong")
 
-    # 4. The title says quantitative. There is nothing further to decide.
-    if quant_role:
-        return Verdict("keep", None, quant_role, "strong")
-
-    # 5. A body demanding a future graduation date.
+    # 4. A body demanding a future graduation date. It outranks the tests below
+    #    -- `Quantitative Research Intern` is the most relevant title in the
+    #    corpus and still unreachable for someone who has graduated -- but only
+    #    when the title agrees that this is a student position.
+    #
+    #    Alone it is not enough, and the audit that found this is the reason:
+    #    Aquatic Capital's `Quantitative Researcher, Early Career` and
+    #    `Quantitative Researcher, PhD` were both rejected on the phrases
+    #    "expected graduation" and "pursuing a degree", which their bodies use
+    #    to describe who *may* apply. Those two are the most on-target postings
+    #    in the whole corpus, and this rule threw them away silently. So a
+    #    quantitative title downgrades the gate to a read, exactly as it does
+    #    for a named occupation in step 1.
     hit = first(body, STUDENT_ONLY)
     if hit:
+        student_title = first(role, INTERN_TITLE)
+        if student_title:
+            return Verdict("reject", "student_only",
+                           f"{student_title} + {hit}", "strong")
+        if quant_role or first(role, TITLE_ANCHOR):
+            return Verdict("undecided", None,
+                           f"{hit}, against a quantitative title", "weak")
         return Verdict("reject", "student_only", hit, "strong")
+
+    # 5. The title says quantitative. There is nothing further to decide.
+    if quant_role:
+        return Verdict("keep", None, quant_role, "strong")
 
     # 6. Finance, but the relationship-and-processing part of it.
     hit = first(role, NON_QUANT_FINANCE)
@@ -580,6 +621,13 @@ def judge(
         if quant_body:
             return Verdict("undecided", None, f"{hit} + {quant_body}", "weak")
         return Verdict("reject", "non_quant_finance", hit, "strong")
+
+    # 6b. A title-only anchor, below the finance list on purpose -- `Sales
+    #     Trader` has already rejected by the time this runs, and `Trader` has
+    #     not been looked at by anything else.
+    hit = first(role, TITLE_ANCHOR)
+    if hit:
+        return Verdict("keep", None, hit, "strong")
 
     # 7. Engineering, and three-sided rather than two. Where the markets word
     #    was found decides how far it carries: in the title it is the job, in

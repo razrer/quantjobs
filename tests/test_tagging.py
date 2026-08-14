@@ -9,9 +9,10 @@ Run with: python -m unittest discover -s tests
 
 from __future__ import annotations
 
+import sqlite3
 import unittest
 
-from quantscraper import tagging
+from quantscraper import db, tagging
 
 
 def _posting(title, description="", location="Stockholm, Sweden", department=None):
@@ -192,3 +193,81 @@ class CompletenessTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SearchTest(unittest.TestCase):
+    """The read side, which is where filtering belongs.
+
+    Nothing is dropped at ingest -- every lexicon bug found so far was fixed
+    by re-running over stored rows, and a write-time filter would have thrown
+    those rows away.
+    """
+
+    def setUp(self):
+        self.connection = sqlite3.connect(":memory:")
+        self.connection.row_factory = sqlite3.Row
+        self.connection.executescript(db.SCHEMA)
+        self.connection.executescript(tagging.SCHEMA)
+
+    def tearDown(self):
+        self.connection.close()
+
+    def _store(self, job_id, title, location, first_seen="2026-01-01"):
+        self.connection.execute(
+            "INSERT INTO jobs (ats, token, job_id, title, location, first_seen,"
+            " last_seen) VALUES ('greenhouse', 'b', ?, ?, ?, ?, ?)",
+            (job_id, title, location, first_seen, first_seen),
+        )
+        row = dict(
+            ats="greenhouse", token="b", job_id=job_id, title=title,
+            location=location, description="", department=None,
+        )
+        tags = tagging.tag_posting(row)
+        tags.append(tagging._fit(tags))
+        tagging.record(self.connection, tags)
+
+    def test_dimensions_are_and_but_values_within_one_are_or(self):
+        """What a person means by "Amsterdam or Stockholm, and junior"."""
+        self._store("1", "Junior Quantitative Researcher", "Amsterdam")
+        self._store("2", "Junior Quantitative Researcher", "Singapore")
+        self._store("3", "Senior Quantitative Researcher", "Amsterdam")
+
+        found = tagging.search(
+            self.connection,
+            require={"hub": ("amsterdam", "stockholm"), "seniority": ("junior_0_2",)},
+        )
+
+        self.assertEqual([r["job_id"] for r in found], ["1"])
+
+    def test_exclude_drops_a_posting_carrying_any_listed_value(self):
+        self._store("1", "Quantitative Researcher", "Amsterdam")
+        self._store("2", "Crypto Quantitative Researcher", "Amsterdam")
+
+        found = tagging.search(
+            self.connection, exclude={"exclusion_reason": ("crypto_web3",)}
+        )
+
+        self.assertEqual([r["job_id"] for r in found], ["1"])
+
+    def test_the_best_fit_sorts_first(self):
+        self._store("1", "Quantitative Researcher", "Amsterdam")
+        self._store("2", "Junior Quantitative Researcher", "Amsterdam")
+
+        self.assertEqual(
+            [r["fit"] for r in tagging.search(self.connection)][0], "apply_now"
+        )
+
+    def test_a_withdrawn_posting_is_never_returned(self):
+        """Removed, not deleted -- the row stays and stops being offered."""
+        self._store("1", "Junior Quantitative Researcher", "Amsterdam")
+        self.connection.execute("UPDATE jobs SET removed_at = '2026-02-01'")
+
+        self.assertEqual(tagging.search(self.connection), [])
+
+    def test_since_filters_on_first_seen(self):
+        self._store("1", "Quantitative Researcher", "Amsterdam", "2026-01-01")
+        self._store("2", "Quantitative Researcher", "Amsterdam", "2026-06-01")
+
+        found = tagging.search(self.connection, since="2026-05-01")
+
+        self.assertEqual([r["job_id"] for r in found], ["2"])

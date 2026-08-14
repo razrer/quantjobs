@@ -143,12 +143,29 @@ class OrdinaryEnglishIsNotEvidence(unittest.TestCase):
         self.assertEqual(call.verdict, "reject")
 
     def test_quantitative_skills_boilerplate_does_not_keep(self):
-        """"Strong quantitative skills" is in half the job specs ever written."""
+        """"Strong quantitative skills" is in half the job specs ever written.
+
+        The title has to be an ambiguous one for this to bite: that is the rule
+        where a body anchor promotes a posting all the way to `keep`, and it is
+        how `Senior Associate, Operations` and `Corporate Finance - Associate`
+        got there.
+        """
         call = lexicon.judge(
-            "Regional VP of P&C Operations",
-            description="We need strong quantitative skills. " * 30,
+            "Senior Associate, Operations",
+            description="You will need strong quantitative skills and "
+            "attention to detail. " * 20,
         )
         self.assertNotEqual(call.verdict, "keep")
+
+    def test_a_specific_quant_phrase_in_a_body_still_counts(self):
+        """The narrowing must not cost the real signal: the same title with a
+        body that names the work is exactly what `undecided` promotes."""
+        call = lexicon.judge(
+            "Senior Associate, Operations",
+            description="You will maintain our statistical arbitrage "
+            "backtesting pipeline. " * 20,
+        )
+        self.assertEqual(call.verdict, "keep")
 
 
 class NonQuantitativeFinance(unittest.TestCase):
@@ -242,7 +259,7 @@ class QuantitativeRolesSurvive(unittest.TestCase):
         date is not."""
         self.assertEqual(lexicon.judge("Graduate Trader").verdict, "keep")
 
-    def test_an_enrolment_requirement_rejects(self):
+    def test_an_enrolment_requirement_rejects_a_student_title(self):
         call = lexicon.judge(
             "Quantitative Research Intern",
             description="You must be currently enrolled in a PhD programme "
@@ -250,6 +267,28 @@ class QuantitativeRolesSurvive(unittest.TestCase):
         )
         self.assertEqual(call.verdict, "reject")
         self.assertEqual(call.reason, "student_only")
+
+    def test_a_body_alone_cannot_reject_a_quantitative_title(self):
+        """Aquatic Capital's `Quantitative Researcher, Early Career` and
+        `Quantitative Researcher, PhD` -- the two most on-target postings in
+        the corpus -- were rejected because their bodies describe who may apply
+        in terms of an expected graduation date. Nothing announced it."""
+        for title in ("Quantitative Researcher, Early Career",
+                      "Quantitative Researcher, PhD"):
+            with self.subTest(title=title):
+                call = lexicon.judge(
+                    title,
+                    description="We welcome applicants with an expected "
+                    "graduation date in 2026, or currently pursuing a degree. " * 5,
+                )
+                self.assertEqual(call.verdict, "undecided")
+
+    def test_sales_trading_is_not_quantitative_trading(self):
+        """`Sales Trader` contains the token that keeps `Trader`, so the order
+        of the rules is what separates them -- eight CLSA postings ride on it."""
+        call = lexicon.judge("Algorithmic Sales Trader (Graduate), Trading")
+        self.assertEqual(call.verdict, "reject")
+        self.assertEqual(call.reason, "non_quant_finance")
 
 
 class BoardProfile(unittest.TestCase):
