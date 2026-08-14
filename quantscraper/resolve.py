@@ -160,7 +160,12 @@ def domain_of(website: str | None) -> str | None:
     """Registrable host of `website`, or None if there isn't one."""
     if not website:
         return None
-    host = re.sub(r"^\w+://", "", website.strip().casefold()).split("/")[0]
+    # The colon is optional because AFM publishes `http//www.optiver.com` for
+    # 68 firms, Optiver and IMC Trading among them. Without this the host reads
+    # as "http", yields no domain, and the firm falls through every path that
+    # depends on one. The separator is still required: `^\w+:?/{0,2}` would eat
+    # the first label of a bare `optiver.com`.
+    host = re.sub(r"^\w+:?//", "", website.strip().casefold()).split("/")[0]
     host = host.split("@")[-1].split(":")[0]
     if host.startswith("www."):
         host = host[4:]

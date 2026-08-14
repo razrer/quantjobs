@@ -283,8 +283,14 @@ def targets(connection: sqlite3.Connection, sources: tuple[str, ...], limit: int
         f"""
         SELECT f.firm_id, f.name, f.country, f.website
         FROM firms f
-        WHERE f.website IS NULL
-          AND EXISTS (
+        -- Deliberately *not* filtered on `f.website IS NULL`. It was, and a
+        -- firm whose published website failed to parse was excluded here for
+        -- having one while `harvest_registry_domains` skipped it for having
+        -- none -- so it was never probed and never seeded. Optiver and IMC
+        -- Trading were lost that way. A firm with a usable website already
+        -- has a `domain_lookups` row, so the clause below excludes it anyway;
+        -- this one only ever excluded the failures.
+        WHERE EXISTS (
               SELECT 1 FROM firm_members m
               WHERE m.firm_id = f.firm_id AND m.source IN ({placeholders})
           )

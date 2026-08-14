@@ -14,10 +14,39 @@ import unittest
 from unittest import mock
 
 from quantscraper import domains
+from quantscraper.resolve import domain_of
 
 
 def _page(text: str) -> bytes:
     return f"<html><body><p>{text}</p></body></html>".encode()
+
+
+class MalformedWebsiteTest(unittest.TestCase):
+    """A registry's own website field, published wrong.
+
+    AFM writes `http//www.optiver.com` -- no colon -- for 68 firms, Optiver
+    and IMC Trading among them. The host read as "http", yielded no domain,
+    and the firm then fell through both paths: skipped by the harvester for
+    having no parseable website and excluded from the probe queue for having
+    one. Neither said anything.
+    """
+
+    def test_a_scheme_without_its_colon_still_yields_the_host(self):
+        self.assertEqual(domain_of("http//www.optiver.com"), "optiver.com")
+        self.assertEqual(domain_of("https//imc.nl/careers"), "imc.nl")
+
+    def test_a_well_formed_url_is_unchanged(self):
+        self.assertEqual(domain_of("https://www.optiver.com/careers"), "optiver.com")
+
+    def test_a_bare_domain_keeps_its_first_label(self):
+        """The permissive pattern must still require the separator: a rule
+        like `^\w+:?/{0,2}` eats "optiver" and leaves ".com"."""
+        self.assertEqual(domain_of("optiver.com"), "optiver.com")
+        self.assertEqual(domain_of("www.optiver.com"), "optiver.com")
+
+    def test_something_with_no_host_is_still_nothing(self):
+        self.assertIsNone(domain_of("http//localhost"))
+        self.assertIsNone(domain_of(""))
 
 
 class CorroborationTest(unittest.TestCase):
