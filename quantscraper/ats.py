@@ -187,9 +187,29 @@ class Resolution:
 # This is not a corner case. `careers.lynxhedge.se` is Lynx Asset Management,
 # which is the Stockholm quant firm this project exists to find, and it sat in
 # tier B with a live feed behind it.
-_VENDOR_ASSETS: tuple[tuple[str, str], ...] = (
-    ("teamtailor", "teamtailor-cdn.com"),
+# (ats, asset host, feed path, marker the feed must contain)
+_VENDOR_ASSETS: tuple[tuple[str, str, str, str], ...] = (
+    ("teamtailor", "teamtailor-cdn.com", "/jobs.rss", "<channel"),
 )
+
+
+def _serves_feed(host: str, path: str, marker: str) -> bool:
+    """Whether `host` actually answers with the vendor's feed.
+
+    The guess on its own is wrong more often than right: embedding a vendor's
+    widget puts its CDN in the markup of pages that serve no feed at all, and
+    the first three domains this rule matched -- 3stepit, Enfuce, Infovista --
+    all returned 404. Recording an unverified host is the failure mode this
+    project keeps meeting: a board that looks resolved and yields nothing
+    forever. One request settles it.
+    """
+    try:
+        body, _ = http.get_with_url(f"https://{host}{path}", timeout=10, retries=1)
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
+        return False
+    except Exception:  # noqa: BLE001 -- one hostile host must not stop the run
+        return False
+    return marker.encode() in body[:100_000]
 
 
 def fingerprint(markup: str, url: str | None = None) -> tuple[str, str | None, str] | None:
@@ -222,9 +242,9 @@ def fingerprint(markup: str, url: str | None = None) -> tuple[str, str | None, s
     # usable token where that one yields none.
     if url:
         host = urllib.parse.urlsplit(url).netloc.casefold()
-        for name, asset_host in _VENDOR_ASSETS:
-            if asset_host in markup and host:
-                return name, host, f"{asset_host} on {host}"
+        for name, asset_host, path, marker in _VENDOR_ASSETS:
+            if asset_host in markup and host and _serves_feed(host, path, marker):
+                return name, host, f"{asset_host}, feed verified at {host}"
 
     # Third pass: the ATS is present but every match was infrastructure.
     for name, pattern in ATS_PATTERNS:

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import time
 import unittest
+from unittest import mock
 
 from quantscraper import ats
 
@@ -72,9 +73,21 @@ class CustomDomainTest(unittest.TestCase):
     def test_a_vendor_cdn_on_a_custom_host_resolves_to_that_host(self):
         markup = '<img src="https://assets-aws.teamtailor-cdn.com/logo.png">'
 
-        hit = ats.fingerprint(markup, "https://careers.lynxhedge.se/")
+        with mock.patch.object(ats, "_serves_feed", return_value=True):
+            hit = ats.fingerprint(markup, "https://careers.lynxhedge.se/")
 
         self.assertEqual(hit[:2], ("teamtailor", "careers.lynxhedge.se"))
+
+    def test_the_host_must_actually_serve_the_feed(self):
+        """Embedding a vendor's widget puts its CDN in the markup of pages
+        that serve no feed. The first three domains this rule matched --
+        3stepit, Enfuce, Infovista -- all returned 404 on `/jobs.rss`."""
+        markup = '<img src="https://assets-aws.teamtailor-cdn.com/logo.png">'
+
+        with mock.patch.object(ats, "_serves_feed", return_value=False):
+            hit = ats.fingerprint(markup, "https://www.3stepit.com/")
+
+        self.assertIsNone(hit)
 
     def test_a_real_board_token_still_wins(self):
         """The custom-host rule is a fallback, not a replacement: a page that
@@ -84,7 +97,8 @@ class CustomDomainTest(unittest.TestCase):
             '<a href="https://optiver.teamtailor.com/jobs">Jobs</a>'
         )
 
-        hit = ats.fingerprint(markup, "https://careers.optiver.com/")
+        with mock.patch.object(ats, "_serves_feed", return_value=True):
+            hit = ats.fingerprint(markup, "https://careers.optiver.com/")
 
         self.assertEqual(hit[:2], ("teamtailor", "optiver"))
 
