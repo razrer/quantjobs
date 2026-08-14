@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import sys
 
-from . import alerts, ats, audit, db, domains, extract, fca, jobstream, resolve
+from . import (
+    alerts, ats, audit, db, domains, extract, fca, jobstream, pages, resolve,
+)
 from .registries import REGISTRIES
 
 # The registries covering the focus hubs. Domain resolution starts here because
@@ -164,6 +166,31 @@ def _jobstream(database: str) -> int:
     return 0
 
 
+def _pages(database: str, limit: int, workers: int) -> int:
+    connection = db.connect(database)
+    polled, baselined, changed = pages.run(connection, limit, workers)
+    if polled:
+        print(
+            f"polled {polled:,d} tier-B pages, {baselined:,d} new baselines,"
+            f" {changed:,d} changed"
+        )
+    else:
+        print("no tier-B pages to poll")
+
+    row = pages.coverage(connection)
+    print(f"\n{row['watched']:,d} of {row['tier_b']:,d} tier-B pages watched")
+
+    recent = pages.recent_changes(connection)
+    if recent:
+        print("\nmost recently changed")
+        for change in recent:
+            print(
+                f"  {change['changed_at'][:10]}  {change['changes']:2d}x"
+                f"  {change['url'][:70]}"
+            )
+    return 0
+
+
 def _alerts(database: str) -> int:
     connection = db.connect(database)
     found = alerts.check(connection)
@@ -278,11 +305,19 @@ def main(argv: list[str] | None = None) -> int:
         "jobstream", help="poll Sweden's JobTech delta feed (Layer 4)"
     )
 
+    pages_command = commands.add_parser(
+        "pages", help="watch tier-B careers pages for change (Layer 3B)"
+    )
+    pages_command.add_argument("--limit", type=int, default=500)
+    pages_command.add_argument("--workers", type=int, default=12)
+
     commands.add_parser(
         "alerts", help="flag sources that broke quietly (Layer 0 health)"
     )
 
     args = parser.parse_args(argv)
+    if args.command == "pages":
+        return _pages(args.db, args.limit, args.workers)
     if args.command == "alerts":
         return _alerts(args.db)
     if args.command == "jobstream":
