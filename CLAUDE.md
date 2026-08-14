@@ -59,6 +59,30 @@ python -m quantscraper jobs --limit 100       # pull postings from resolved boar
 ```
 
 ```bash
+python -m quantscraper pages --limit 500      # watch tier-B careers pages (Layer 3B)
+```
+
+```bash
+python -m quantscraper tag                    # classify postings into tags (Layer 5)
+```
+
+```bash
+python -m quantscraper list --fit apply_now --hub amsterdam   # filter the tags
+```
+
+```bash
+python -m quantscraper list --dimensions      # every filterable value
+```
+
+```bash
+python -m quantscraper coverage               # how much of the market we see
+```
+
+```bash
+python -m quantscraper domains --regrade --limit 2000   # re-check strong matches
+```
+
+```bash
 python -m quantscraper jobstream              # poll Sweden's delta feed
 ```
 
@@ -212,6 +236,27 @@ Each of these silently produced wrong results before being caught:
 - **JobStream's cursor is `timestamp`, epoch milliseconds** — not
   `publication_date`. Resume rewound by a few minutes, because a duplicate
   costs an idempotent upsert and a gap costs a posting.
+- **An ATS board often lives on the firm's own hostname, and every host
+  pattern misses it.** `careers.lynxhedge.se` is Lynx Asset Management,
+  `jobs.swedbank.com` is Swedbank — Teamtailor boards that never spell
+  `{board}.teamtailor.com` anywhere on the page, so both tiered B with a live
+  feed behind them. The vendor's asset CDN is still in the markup and the
+  custom host is the token. **Verify it**: the CDN proves the firm *uses*
+  Teamtailor, not where its board lives, and the first three domains matched
+  this way — 3stepit, Enfuce, Infovista — all 404'd on `/jobs.rss`.
+- **Tier A with a NULL token is a board nobody can poll, and a tier-B sweep
+  never touches it.** 98 rows sat in that state, `lynxhedge.se` among them.
+  When re-probing for a fingerprinting fix, clear tier A with no token too.
+- **The careers walk must try every candidate and go two hops.** The loop used
+  to `return` tier B on the first readable careers page, so candidates two and
+  three were fetched by nobody; and Swedbank's board is a link *off* its
+  careers page. Six fetches per domain is the ceiling.
+- **A registry's own website field can be malformed, and two guards can each
+  assume the other caught it.** AFM publishes `http//www.optiver.com` — no
+  colon — for 68 firms, Optiver and IMC Trading among them. `domain_of`
+  returned None, so the harvester skipped them for having no parseable website
+  *and* `targets` excluded them for having one. `domains` reported "nothing
+  left to probe" while they had never been looked at.
 - **A careers page can link to a board that is not the firm's.**
   `palmersquare.com` linked to `jobs.lever.co/heyrowan` — syndicated content
   with a Google `srsltid` parameter still attached — and the feed delivered 90
@@ -342,3 +387,18 @@ years).
 **Never filter on job title alone.** Goldman says "Strat", Jane Street says
 "Trader", Swedish postings say "kvantitativ analytiker". Classify on the full
 description, multilingually.
+
+**But the title decides what the role *is*, and the body decides everything
+else.** That rule is about *inclusion*: a title carrying no signal must fall
+through to the body, and it does. Scoring relevance *over* the body made
+`Insurance Accounting & Reporting Specialist` a core quant role three times
+over, because "strong quantitative skills" is boilerplate and every bank's
+about-us names market and credit risk. Seniority is the same: a body saying
+"you will report to the Head of Trading" made `Graduate Trader` a `head_or_md`
+posting. `student_only` is the one exception, read from the body first,
+because no title announces "must be graduating in 2028".
+
+**Tag counts must pin the lexicon version.** `job_tags` keeps every retired
+`tagger` so two can be diffed, which means an unpinned `COUNT(*)` sums them —
+the hub table read 49,808 postings in `unknown` after `unknown` had already
+been split out, because six earlier taggers still said so.

@@ -23,8 +23,12 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from quantscraper import tagging  # noqa: E402
 
 DB = Path(__file__).resolve().parent.parent / "employers.sqlite3"
 OUT = Path(__file__).resolve().parent / "data.js"
@@ -157,11 +161,28 @@ def main() -> None:
     for row in connection.execute("SELECT domain, query FROM domain_lookups WHERE domain IS NOT NULL"):
         names.setdefault(row["domain"], []).append(row["query"])
 
+    # Layer 5's tags, keyed on the posting. The board used to carry its own
+    # `hub()` over the raw location string -- a second implementation of a
+    # rule that already exists in `tagging.py`, free to drift from it, and
+    # blind to every other dimension. The lexicon version is pinned for the
+    # same reason `coverage.py` pins it: `job_tags` keeps retired versions so
+    # two can be diffed, and an unpinned read sums them.
+    tags: dict[tuple[str, str, str], dict[str, list[str]]] = {}
+    for row in connection.execute(
+        "SELECT ats, token, job_id, dimension, value FROM job_tags WHERE tagger = ?",
+        (tagging.TAGGER,),
+    ):
+        key = (row["ats"], row["token"], row["job_id"])
+        tags.setdefault(key, {}).setdefault(row["dimension"], []).append(row["value"])
+
     firms: dict[str, dict] = {}
     jobs = []
     for row in connection.execute(
         "SELECT ats, token, job_id, domain, title, url, location, department,"
-        " posted_at, first_seen FROM jobs"
+        # Withdrawn postings keep their row and stop being offered. The board
+        # was showing them: `removed_at` was in the schema and not in this
+        # query, so every ad JobStream had already retired still listed.
+        " posted_at, first_seen FROM jobs WHERE removed_at IS NULL"
     ):
         domain = row["domain"] or "unknown"
         if domain not in firms:
@@ -171,6 +192,8 @@ def main() -> None:
                 "ats": row["ats"],
             }
         when, precision = posted(row["posted_at"], row["first_seen"])
+        mine = tags.get((row["ats"], row["token"], row["job_id"]), {})
+        tagged_hub = (mine.get("hub") or [None])[0]
         jobs.append(
             {
                 "id": f"{row['ats']}:{row['token']}:{row['job_id']}",
@@ -178,10 +201,17 @@ def main() -> None:
                 "title": (row["title"] or "").strip(),
                 "url": row["url"],
                 "location": (row["location"] or "").strip() or None,
-                "hub": hub(row["location"]),
+                # The tagger's hub, falling back to the local reading only for
+                # a posting it has not seen yet -- an untagged posting must
+                # still be findable.
+                "hub": (tagged_hub if tagged_hub not in (None, "other", "unknown")
+                        else hub(row["location"])),
                 "team": (row["department"] or "").strip() or None,
                 "posted": when,
                 "precision": precision,
+                "fit": (mine.get("fit") or [None])[0],
+                "rel": (mine.get("relevance") or [None])[0],
+                "sen": (mine.get("seniority") or [None])[0],
             }
         )
 
@@ -195,7 +225,11 @@ def main() -> None:
         "window.BOARD = " + json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + ";\n",
         encoding="utf-8",
     )
-    print(f"{len(jobs):,d} postings from {len(firms):,d} firms -> {OUT.name}")
+    shortlist = sum(1 for j in jobs if j["fit"] in ("apply_now", "strong"))
+    print(
+        f"{len(jobs):,d} postings from {len(firms):,d} firms -> {OUT.name}"
+        f"  ({shortlist:,d} worth reading)"
+    )
 
 
 if __name__ == "__main__":

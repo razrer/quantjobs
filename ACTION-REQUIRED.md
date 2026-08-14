@@ -7,8 +7,57 @@ Nothing here is urgent — the project runs fine without any of it. These are th
 places where I hit a wall that needed a human, not a decision I should make for
 you.
 
-**Nothing here is blocking, and nothing is waiting on you.** Every item below is
+**One thing is genuinely waiting on you** — item 1. Everything below it is
 resolved or optional.
+
+---
+
+## 1. Label 100 postings, so the classifier has a fixture
+
+**This is the last thing standing between Stage 11 and done**, and it is the
+only kind of work I cannot do for you: it needs your judgement about your own
+career, not mine.
+
+**Why it matters.** The tagger currently rates 13 postings `apply_now` and 264
+`strong` out of 55,455. I believe that is roughly right, and *believing* is the
+problem. Stage 2 hit this exact wall with coverage: the numbers were checked by
+ad-hoc greps until `roster.csv` made them repeatable, and that fixture
+immediately found a false hit nobody had suspected. Tagging has no equivalent
+yet, so "the lexicon improved" and "the market moved" are indistinguishable.
+
+Six false positives have already been found by reading output by hand — a
+recruiter role scored as a trading role, an insurance accounting role scored as
+core quant three times over, `Graduate Trader` scored as a managing director.
+Each was found by luck, in whatever happened to be on screen. A fixture finds
+them on purpose.
+
+**What to do.** Run this to get a spread across formats, hubs and verdicts:
+
+```bash
+python -m quantscraper list --limit 100 > sample.txt
+```
+
+Then for each posting write one line in `quantscraper/labels.csv`:
+
+    ats,token,job_id,relevance,seniority,note
+
+`relevance` is one of `core`, `adjacent`, `rejected`. `seniority` is one of
+`intern`, `student_only`, `new_grad`, `junior_0_2`, `mid_3_5`, `senior_6_10`,
+`lead`, `head_or_md`. The `note` is free text and is the most valuable column —
+it is where "this says Trader but the body is an ops role" goes.
+
+**The one rule that matters:** label what the posting *is*, not what the tagger
+said. If you find yourself agreeing with a tag because it is already there, the
+fixture is measuring nothing.
+
+**What I will build once it exists.** `python -m quantscraper labels`, which
+scores the current lexicon against your sample and prints every disagreement.
+The exit criterion in `TAGGING.md` is ≥90% on `relevance` and `seniority` and
+**no false `rejected`** — a wrongly rejected posting is the expensive failure,
+a false positive costs you a few seconds of reading.
+
+**Effort:** an hour or so, once. It does not need doing again unless the
+lexicon changes shape.
 
 ---
 

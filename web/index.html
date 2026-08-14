@@ -420,6 +420,7 @@ main { max-width: var(--w); margin: 0 auto; padding: 0 1.5rem 6rem; }
       <input id="q" type="search" placeholder="Filter by role, firm or location" autocomplete="off" spellcheck="false">
     </label>
     <div class="chips" id="hubs"></div>
+    <div class="chips" id="fits"></div>
     <div class="spacer"></div>
     <button class="chip" id="stacking" aria-pressed="true">stack by firm</button>
     <div class="readout" id="readout"></div>
@@ -507,13 +508,19 @@ main { max-width: var(--w); margin: 0 auto; padding: 0 1.5rem 6rem; }
   // ordering, was invisible until you clicked.
   const PER_BAND = 25;
   const STEP = 200;
-  const state = { q: "", hubs: new Set(), stacking: true, limits: new Map() };
+  const state = { q: "", hubs: new Set(), fits: new Set(), stacking: true, limits: new Map() };
+
+  // Layer 5's verdict, best first. `unknown` is a real value and gets a chip:
+  // a posting nothing decided about must stay reachable, or the filter
+  // becomes the write-time classifier the pipeline refuses to have.
+  const FITS = ["apply_now", "strong", "plausible", "stretch", "out_of_scope", "unknown"];
   const limitFor = (key) => state.limits.get(key) || PER_BAND;
 
   // --- filters -------------------------------------------------------------
 
   function matches(job) {
     if (state.hubs.size && !state.hubs.has(job.hub)) return false;
+    if (state.fits.size && !state.fits.has(job.fit || "unknown")) return false;
     if (!state.q) return true;
     const hay = `${job.title} ${job.firmName} ${job.firm} ${job.location || ""} ${job.team || ""}`.toLowerCase();
     return state.q.split(/\s+/).every((term) => hay.includes(term));
@@ -657,6 +664,26 @@ main { max-width: var(--w); margin: 0 auto; padding: 0 1.5rem 6rem; }
   $("hubs").innerHTML = HUBS.filter((h) => counts.has(h))
     .map((h) => `<button class="chip" data-hub="${h}" aria-pressed="false">${h}<span class="n">${counts.get(h)}</span></button>`)
     .join("");
+
+  const fitCounts = new Map();
+  for (const job of jobs) {
+    const f = job.fit || "unknown";
+    fitCounts.set(f, (fitCounts.get(f) || 0) + 1);
+  }
+
+  $("fits").innerHTML = FITS.filter((f) => fitCounts.has(f))
+    .map((f) => `<button class="chip" data-fit="${f}" aria-pressed="false">${f.replace(/_/g, " ")}<span class="n">${fitCounts.get(f)}</span></button>`)
+    .join("");
+
+  $("fits").addEventListener("click", (event) => {
+    const chip = event.target.closest(".chip");
+    if (!chip) return;
+    const fit = chip.dataset.fit;
+    if (state.fits.has(fit)) state.fits.delete(fit); else state.fits.add(fit);
+    chip.setAttribute("aria-pressed", String(state.fits.has(fit)));
+    state.limits.clear();
+    render();
+  });
 
   $("hubs").addEventListener("click", (event) => {
     const chip = event.target.closest(".chip");

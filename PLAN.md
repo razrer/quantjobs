@@ -51,7 +51,7 @@ nothing in the near-term plan now waits on a human.
 | 8 | Silent-failure alerting | **done** — `alerts`, distributional |
 | 9 | Layer 3B — Tier B change detection | **done** — 3,751 pages watched |
 | 10 | Coverage measurement | **done** — measures, and refuses when it cannot |
-| 11 | Layer 5 — job tagging | **in progress** — Layer 1 lexicon live |
+| 11 | Layer 5 — job tagging | **in progress** — lexicon live, sample unlabelled |
 
 ---
 
@@ -775,6 +775,62 @@ Two things that design turned up and that the rest of the plan should know:
 **Exit criterion:** in `TAGGING.md` — a hand-labelled sample of 100 postings,
 every posting carrying a value in every dimension, and no false rejection in
 the sample.
+
+### Built: Layer 1, the deterministic lexicon
+
+`tagging.py`. 55,455 postings become 573,792 tags across ten dimensions, in
+seconds, re-runnably. `TAGGER` is the lexicon version and every tag records it,
+so two versions can be diffed over the same corpus.
+
+**Descriptions turned out not to be the prerequisite this file called them.**
+Titles carry role identity and bodies carry qualifiers. Tags read from a body
+are graded `strong` and tags read from a title alone `weak`, so the difference
+stays visible instead of being averaged away.
+
+**The title decides what the role is; the body decides everything else.** Six
+false positives drove that rule and each reached the shortlist before being
+caught:
+
+| what it did | why |
+|---|---|
+| `Trading Operations Engineer` scored core | bare *trading* was a core word — the desk's name is not the role's |
+| `Campus Recruiter` scored core | same, via its department |
+| `Insurance Accounting Specialist` scored core, 3× | "strong quantitative skills" is body boilerplate |
+| `Associate Director` scored junior | it is not an associate |
+| `Actuarial Pricing Analyst` scored adjacent | an exclusion must outrank a weak positive |
+| `Graduate Trader` scored head_or_md | its body says "report to the Head of Trading" |
+
+`student_only` stays body-first — no title announces "must be graduating in
+2028", which is the whole reason the bucket exists — but its needles are
+specific phrases, because a bare "student" marked a full-time PhD-level role at
+Radix Trading student-only.
+
+**Geography ranks, it never gates.** Santander's global board filled the
+shortlist from `hub: other` while Stockholm showed one entry. A core quant role
+in São Paulo keeps every tag and stays readable; it simply no longer outranks
+Amsterdam.
+
+### Built: the read side
+
+Filtering belongs after ingest. Every lexicon bug above was fixed by re-running
+the tagger over stored rows, and a write-time filter would have thrown those
+rows away — principle 4, earning itself again.
+
+`list` composes over `job_tags`: AND across dimensions, OR within one.
+`--dimensions` prints every filterable value so the filter is discoverable.
+The board in `web/` carries the same tags as chips, and now excludes withdrawn
+postings — `removed_at` was in the schema and not in its query.
+
+    list --relevance core --hub amsterdam,stockholm,copenhagen
+         --not-seniority head_or_md,senior_6_10,lead,student_only
+         --exclude crypto_web3
+
+returns 13 of 55,455.
+
+**What is left is the fixture**, and it needs a human: 100 hand-labelled
+postings. Until then the accuracy claim is a feeling, which is exactly what
+Stage 2 said about coverage before `roster.csv` existed. See
+`ACTION-REQUIRED.md`.
 
 ---
 
