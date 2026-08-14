@@ -1,65 +1,131 @@
-"""Word lists for job tagging, and the token-boundary matcher they need.
+"""Which postings are the wrong job, and the evidence that says so.
 
-Kept apart from `tags.py` because the two change for different reasons. The
-rules there are a short ordered decision that should almost never move; the
-vocabulary here grows every time a board turns up a word we had not seen. Bump
-`VERSION` on any change and `job_tags.tagger` records which lexicon produced a
-tag, so the diff between two versions over the same corpus is a free regression
-test.
+`tagging.py` decides what a posting *is* -- role family, seniority, code depth,
+asset class, fit. This module decides what a posting is **not**, which turns
+out to need a different rule and a much longer word list, so it lives apart.
+One import and one call adopts it:
 
-**Matching is on token boundaries, never substrings.** `admini`*strat*`or` and
-State Street's custody platform -- which is called *Alpha* -- were both real
-false hits in this corpus under a naive `in`. Every phrase here is normalized
-the same way the text is and matched with spaces on both sides, so a phrase
-can only match whole words.
+    from . import lexicon
+    call = lexicon.judge(row["title"], row["department"], row["description"])
+    # call.verdict is "keep" | "reject" | "undecided"
 
-The lists are multilingual because the corpus is: Sweden's JobStream feed is
-Swedish, the Teamtailor boards are Nordic, and Workday serves French, German
-and Portuguese postings from the same tenants. A word list that is English-only
-silently keeps every foreign posting, which reads as "nothing was rejected"
-rather than as a gap.
+Bump `VERSION` on any change here. `job_tags.tagger` records it, so the diff
+between two versions over the same corpus is a free regression test.
+
+## The asymmetry the whole module rests on
+
+`CLAUDE.md` says never to filter on a job title alone. That rule is about
+*inclusion* and it is right: Goldman says "Strat", Jane Street says "Trader",
+Stockholm says "kvantitativ analytiker", so a title that fails to look
+quantitative proves nothing at all.
+
+Exclusion is not its mirror image. Some titles name the entire occupation, and
+no body text turns a *Receptionist* into a quant role. So:
+
+- **a title can never prove a posting is relevant** -- that needs the body, or a
+  word specific enough to stand alone;
+- **a title can prove a posting is a different job** -- and the word that proved
+  it is recorded as evidence.
+
+That distinction is what makes this corpus tractable. 81% of postings are a
+title, a location and a date -- the list endpoints Workday, BambooHR, Personio,
+Breezy and SmartRecruiters publish carry nothing else -- so a classifier that
+waits for descriptions classifies almost nothing, while one that rejects on
+named occupations can clear most of the noise today.
+
+It is also the sharpest place in the project to be wrong, so every rejection
+stores the phrase that caused it and nothing is ever deleted: `job_tags`
+rebuilds from `jobs`, and a lexicon bug costs one re-run.
+
+## Three verdicts, because two would force a guess
+
+`keep` - `reject` - `undecided`.
+
+`undecided` is not a failure state, it is the **backfill queue**. A posting
+whose title is ambiguous and whose body was never fetched is precisely the
+posting worth fetching a body for, and there are far fewer of those than there
+are postings. That turns "92% have no description" from a blocker into a
+prioritised list. A two-verdict classifier has to guess on those, and here a
+guess is either a false rejection or a board full of noise.
+
+## Two-sided rules, for the two cases a word list gets wrong
+
+A one-sided list gets *receptionist* right and both cases that matter wrong:
+
+- **Pure programming.** `Software Engineer` is in scope at Optiver and out of it
+  on a retail bank's payments team, so an engineering title rejects only when
+  **no markets anchor appears anywhere in the posting**. The tag records which
+  anchor rescued it, or that none did.
+- **Non-quantitative finance.** `Economist`, `Financial Analyst` and `Credit
+  Analyst` are quantitative at one firm and commentary at the next. These are
+  never rejected on a title; they go to `undecided` and the body settles it.
+
+Firm boilerplate is deliberately not allowed to answer either question about
+the *role*. A quant fund's description says "we are a systematic trading firm"
+on its office-manager posting too, so anchors found in the title and department
+decide the role, while anchors found in the body only ever support or rescue.
+
+## Matching is on token boundaries, never substrings
+
+`admini`*strat*`or` contains "strat", and State Street's custody platform is
+called *Alpha*; both were real false hits in this corpus. Every phrase here is
+normalized the same way the text is and matched with a space on each side, so a
+phrase can only ever match whole words.
+
+## The lists are multilingual because the corpus is
+
+Sweden's JobStream feed is Swedish and is 2,227 ads of nurses, chefs and
+drivers; the Teamtailor boards are Nordic; Workday serves French, German and
+Portuguese postings from the same tenants. An English-only word list rejects
+none of them, which reads as "nothing was wrong with these" rather than as a
+gap -- the same silent failure as a scraper returning zero rows with HTTP 200.
 """
 
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 
 VERSION = 1
 
-# Everything that is not a letter, digit, `+` or `#` is a separator. The two
-# punctuation marks are kept because `c++` and `c#` are the names of things we
-# grade a posting on, and splitting them turns both into a bare `c`.
+# Everything that is not a letter, digit, `+` or `#` is a separator. Those two
+# are kept because `c++` and `c#` name things a posting is graded on, and
+# dropping them turns both into a bare `c`.
 _SEPARATOR = re.compile(r"[^0-9a-zÀ-ɏ+#]+")
 
 # Markup arrives in `description` verbatim -- stripping it is a read-time job,
-# per principle 4. The bound on the tag body is what keeps a pathological one
-# from being quadratic in anything downstream; `<[^>]*>` over an unclosed angle
-# bracket is the same shape of trap `ats.py` was stalled by.
-_TAG = re.compile(r"<[^>]{0,4000}>")
+# per principle 4. The bound matters: `ats.py` lost two and a half hours of CPU
+# to an unbounded pattern over fetched markup, and the failure looked like a
+# slow network rather than an error.
+_MARKUP = re.compile(r"<[^>]{0,4000}>")
 MAX_BODY = 200_000
+
+# Below this a description is a stub -- a one-line summary or an empty div --
+# and absence of evidence in it is not evidence of absence.
+MIN_BODY = 200
 
 
 def normalize(text: str | None) -> str:
-    """Fold text to space-delimited lowercase tokens, padded on both ends.
+    """Fold text to space-delimited lowercase tokens, padded at both ends.
 
-    The padding is what makes `" quant "` a token match rather than a
-    substring one, which is the whole safety property of this module.
+    The padding is what makes `" quant "` a token match rather than a substring
+    one, which is the entire safety property of this module.
     """
     if not text:
         return " "
     body = text[:MAX_BODY]
     if "<" in body:
-        body = _TAG.sub(" ", body)
+        body = _MARKUP.sub(" ", body)
     return " " + _SEPARATOR.sub(" ", body.casefold()).strip() + " "
 
 
 def _terms(*phrases: str) -> tuple[str, ...]:
     """Normalize a group of phrases once, at import."""
-    return tuple(normalize(p).strip() for p in phrases)
+    return tuple(normalize(phrase).strip() for phrase in phrases)
 
 
 def first(text: str, terms: tuple[str, ...]) -> str | None:
-    """The first phrase in `terms` present in already-normalized `text`."""
+    """The first phrase of `terms` present in already-normalized `text`."""
     for term in terms:
         if f" {term} " in text:
             return term
@@ -71,13 +137,13 @@ def every(text: str, terms: tuple[str, ...]) -> list[str]:
 
 
 # --------------------------------------------------------------------------
-# Anchors: the vocabulary that says a posting is about markets at all.
+# Anchors -- the vocabulary that says a posting is about markets at all
 # --------------------------------------------------------------------------
 
 # Strong. A posting carrying one of these is doing quantitative work on
-# markets, and that is enough to keep it on its own. Words here must not be
-# ambiguous across industries -- `optimization` and `modelling` are, so they
-# are absent; `stochastic` and `backtest` are not.
+# markets, and that is enough to keep it on its own. Nothing ambiguous across
+# industries belongs here: `optimization` and `modelling` are ordinary words in
+# logistics and insurance, `stochastic` and `backtest` are not.
 QUANT = _terms(
     # English
     "quant", "quants", "quantitative", "quantitatively",
@@ -87,183 +153,133 @@ QUANT = _terms(
     "algo trading", "statistical arbitrage", "stat arb", "pairs trading",
     "alpha research", "alpha generation", "alpha signals", "signal research",
     "market making", "market maker", "market makers", "electronic trading",
-    "high frequency", "low latency", "execution algorithms", "smart order routing",
+    "high frequency trading", "low latency trading", "execution algorithms",
+    "smart order routing", "execution research", "transaction cost analysis",
     "portfolio construction", "portfolio optimization", "portfolio optimisation",
     "derivatives pricing", "options pricing", "pricing models", "exotic derivatives",
-    "volatility surface", "implied volatility", "greeks", "term structure",
+    "volatility surface", "implied volatility", "term structure",
     "model validation", "model risk", "model governance", "xva", "cva",
     "counterparty credit risk", "market risk models", "value at risk",
     "econometric", "econometrics", "econometrician", "time series",
     "stochastic", "stochastic calculus", "monte carlo", "numerical methods",
-    "statistical modelling", "statistical modeling", "bayesian",
+    "statistical modelling", "statistical modeling", "bayesian inference",
     "backtest", "backtests", "backtesting", "factor models", "risk premia",
     "systematic investing", "trading strategies", "trading strategy",
     "financial engineering", "mathematical finance", "computational finance",
+    "risk quant", "strats",
     # Nordic
     "kvantitativ", "kvantitativa", "kvantitative", "kvantitativt",
     "kvantitativ analytiker", "algoritmisk handel", "systematisk handel",
     "matematisk statistik", "finansiell matematik",
-    # Dutch / German / French
+    # Dutch, German, French
     "kwantitatief", "kwantitatieve", "quantitativ", "quantitative analyse",
     "quantitatif", "finance quantitative", "modellvalidierung",
 )
 
 # Contextual. These say "markets", not "quantitative". They are never enough to
-# keep a posting on their own -- they are the *second* half of a two-sided test,
-# the thing that separates a trading-systems engineer from a payments one.
+# keep a posting on their own -- they are the second half of a two-sided test,
+# the part that separates a trading-systems engineer from a payments one.
+#
+# **Ordinary English is banned from this list**, and the reason is a measured
+# one. `portfolio`, `equity`, `options`, `execution` and `benchmark` all mean
+# something else in a job advertisement: a venture firm's *portfolio
+# companies*, a startup's *equity* compensation, *stock options*, *strategy
+# execution*. With those words in here, every engineer AlphaSense and eleven
+# venture boards were hiring came out as a markets role. This is `_GENERIC` in
+# `domains.py` all over again -- a word can be rare in this industry and still
+# be ordinary language, and it is the second that decides whether it is
+# evidence.
 MARKETS = _terms(
-    "trading", "trader", "traders", "trade floor", "trading floor",
+    "trading", "trader", "traders", "trading floor", "trading desk",
     "front office", "buy side", "sell side", "hedge fund", "proprietary trading",
     "asset management", "investment management", "portfolio management",
-    "portfolio manager", "portfolio", "portfolios", "fund management",
-    "equities", "equity research", "fixed income", "derivatives", "futures",
-    "options", "swaps", "foreign exchange", "commodities", "securities",
-    "capital markets", "financial markets", "money markets", "structured products",
-    "structuring", "structurer", "market data", "order book", "liquidity",
-    "execution", "clearing", "settlement", "prime brokerage", "brokerage",
-    "market risk", "credit risk", "counterparty risk", "risk analytics",
-    "investment strategy", "investment research", "index", "indices", "etf",
-    "benchmark", "asset allocation", "wealth", "treasury", "exchange traded",
+    "portfolio manager", "fund management", "equities", "equity research",
+    "fixed income", "derivatives", "swaps", "foreign exchange", "commodities",
+    "securities", "capital markets", "financial markets", "money markets",
+    "structured products", "structuring", "structurer", "market data",
+    "order book", "prime brokerage", "brokerage", "market risk", "credit risk",
+    "counterparty risk", "risk analytics", "investment strategy",
+    "investment research", "asset allocation", "exchange traded",
+    "alternative investments", "listed derivatives",
     "handel", "värdepapper", "kapitalmarknad", "kapitalförvaltning",
     "effecten", "beleggingen", "vermogensbeheer", "handelaar",
-    "wertpapiere", "kapitalmarkt", "marché financier", "gestion d actifs",
+    "wertpapiere", "kapitalmarkt", "marché financier",
 )
 
-# Programming languages, kept as their own dimension so "C++ nice to have" and
-# "C++ expert" stay distinguishable at read time rather than collapsing into
-# one number. `CLAUDE.md` is explicit that a C++-second quant-dev role fits.
-LANGUAGES = {
-    "python": _terms("python", "pandas", "numpy", "scipy", "pytorch", "jupyter"),
-    "cpp": _terms("c++", "cpp"),
-    "rust": _terms("rust"),
-    "java": _terms("java", "scala", "kotlin"),
-    "csharp": _terms("c#", "dotnet", "net"),
-    "kdb": _terms("kdb", "kdb+", "q kdb"),
-    "matlab": _terms("matlab"),
-    "r": _terms("rstudio", "tidyverse"),
-    "sql": _terms("sql", "postgres", "snowflake"),
-}
-
-ASSET_CLASSES = {
-    "equities": _terms("equities", "equity", "cash equities", "aktier", "aandelen"),
-    "futures": _terms("futures", "listed derivatives", "terminer"),
-    "fx": _terms("fx", "foreign exchange", "currencies", "valuta"),
-    "rates": _terms("rates", "interest rate", "government bonds", "treasuries", "räntor"),
-    "credit": _terms("credit", "corporate bonds", "high yield", "cds", "krediter"),
-    "commodities": _terms("commodities", "power", "gas", "metals", "energy trading", "råvaror"),
-    "options_vol": _terms("options", "volatility", "vol trading", "exotics", "optioner"),
-    "crypto": _terms("crypto", "cryptocurrency", "digital assets", "defi", "web3", "bitcoin"),
-}
-
-ROLE_FAMILIES = {
-    "research": _terms(
-        "quantitative research", "quantitative researcher", "research analyst",
-        "alpha research", "signal research", "investment research", "researcher",
-        "equity research", "strategist", "economist",
-    ),
-    "trading": _terms(
-        "trader", "trading", "market making", "market maker", "dealer",
-        "portfolio manager", "handlare",
-    ),
-    "quant_dev": _terms(
-        "quantitative developer", "quant developer", "quantitative engineer",
-        "trading systems", "trading technology", "trading platform",
-        "quantitative software", "research engineer", "platform quant",
-    ),
-    "risk": _terms(
-        "market risk", "credit risk", "risk management", "risk analytics",
-        "counterparty risk", "liquidity risk", "riskkontroll", "risk quant",
-    ),
-    "model_validation": _terms(
-        "model validation", "model risk", "model governance", "validation quant",
-    ),
-    "data_science": _terms(
-        "data scientist", "data science", "machine learning", "applied scientist",
-        "artificial intelligence", "deep learning",
-    ),
-    "execution": _terms(
-        "execution", "algo execution", "transaction cost", "smart order routing",
-        "electronic execution",
-    ),
-    "structuring": _terms("structuring", "structurer", "structured products"),
-}
-
 
 # --------------------------------------------------------------------------
-# Hard negatives: occupations a title fully determines.
+# Hard negatives -- occupations a title fully determines
 # --------------------------------------------------------------------------
 #
-# The asymmetry these rest on is the point of the whole module. A title can
-# never *prove* a posting is quantitative -- Goldman says "Strat", Jane Street
-# says "Trader" -- but some titles name the entire occupation, and no body text
-# turns a *Receptionist* into a quant role. Rejecting on those is safe where
-# accepting on a title never is.
-#
-# Each entry is a phrase, grouped by the reason it rejects. The reason is
-# stored with the tag, so "what did the filter throw away, and on what word"
-# is one query rather than a re-run.
+# Each list is grouped by the reason it rejects, and the reason is stored with
+# the tag: "what did the filter throw away, and on what word" is then one query
+# rather than a re-run. Anything ambiguous belongs in `AMBIGUOUS` further down,
+# not here -- a false rejection is the one failure this project treats as
+# expensive, so the bar for entry is "no body text could change this".
 
 UNRELATED = _terms(
-    # front of house, facilities, trades
+    # front of house, facilities, skilled trades
     "receptionist", "reception", "front desk", "housekeeper", "housekeeping",
     "janitor", "custodian", "cleaner", "cleaning", "groundskeeper", "porter",
     "maintenance technician", "maintenance supervisor", "maintenance manager",
     "facilities technician", "hvac", "plumber", "electrician", "welder",
     "machinist", "carpenter", "roofer", "painter", "landscaper", "locksmith",
-    "forklift", "warehouse", "warehouse associate", "picker", "packer",
-    "driver", "truck driver", "delivery driver", "chauffeur", "courier",
-    "mechanic", "technician", "field technician", "service technician",
-    "installer", "fitter", "operator", "machine operator", "assembler",
+    "forklift", "warehouse", "picker", "packer", "driver", "truck driver",
+    "delivery driver", "chauffeur", "courier", "mechanic", "technician",
+    "installer", "fitter", "machine operator", "assembler", "seamstress",
+    "operator", "detailer", "car wash", "rental agent", "rental sales",
+    "fleet", "dispatcher", "groundsman", "handyman",
     # health and care
     "nurse", "nursing", "physician", "surgeon", "dentist", "dental",
     "pharmacist", "pharmacy", "therapist", "physiotherapist", "psychologist",
     "caregiver", "care assistant", "midwife", "veterinarian", "paramedic",
-    "radiologist", "medical assistant", "clinical", "patient",
+    "radiologist", "medical assistant", "clinical", "patient care",
     # food, retail, hospitality
     "chef", "cook", "sous chef", "kitchen", "waiter", "waitress", "server",
     "barista", "bartender", "dishwasher", "restaurant", "catering",
-    "food service", "housekeeping attendant", "front office agent",
-    "store manager", "store associate", "sales associate", "shop assistant",
-    "cashier", "merchandiser", "stylist", "barber", "hairdresser",
-    "beautician", "tattoo", "piercing", "concierge", "valet",
-    "flight attendant", "cabin crew", "pilot", "baggage",
-    # education, public safety, social
+    "food service", "store manager", "store associate", "sales associate",
+    "shop assistant", "cashier", "merchandiser", "stylist", "barber",
+    "hairdresser", "beautician", "tattoo", "piercing", "concierge", "valet",
+    "flight attendant", "cabin crew", "pilot", "baggage", "housekeeping attendant",
+    # education, public safety, social work
     "teacher", "tutor", "instructor", "lecturer", "childcare", "preschool",
     "daycare", "nanny", "social worker", "youth worker",
     "security guard", "guard", "firefighter", "police", "correctional",
-    # heavy industry and site engineering -- real engineering, wrong industry
+    # engineering that is real engineering in the wrong industry
     "civil engineer", "mechanical engineer", "electrical engineer",
     "chemical engineer", "process engineer", "structural engineer",
     "manufacturing engineer", "production engineer", "field engineer",
     "service engineer", "operating engineer", "mining engineer",
     "avionics", "aircraft", "aerospace", "automotive", "construction",
     "site manager", "foreman", "surveyor", "geologist", "hydrogeologist",
-    "biologist", "environmental", "laboratory", "quality inspector",
-    "production operator", "shift supervisor", "plant manager",
-    "property manager", "leasing", "leasing consultant", "real estate agent",
-    "facilities manager", "building automation",
-    # Swedish / Danish / Norwegian
+    "biologist", "laboratory", "quality inspector", "production operator",
+    "shift supervisor", "plant manager", "warehouse associate",
+    "property manager", "leasing", "real estate agent", "facilities manager",
+    "building automation", "process safety", "quality engineer",
+    "building engineer", "robotics", "maintenance engineer", "hardware engineer",
+    "packaging", "logistics coordinator", "supervisor", "foreperson",
+    # Swedish, Danish, Norwegian
     "sjuksköterska", "undersköterska", "vårdbiträde", "läkare", "specialistläkare",
     "tandläkare", "tandsköterska", "fysioterapeut", "sjukgymnast", "arbetsterapeut",
     "barnmorska", "psykolog", "kurator", "logoped", "apotekare", "farmaceut",
     "medicinsk sekreterare", "personlig assistent", "boendestödjare",
-    "socialsekreterare", "behandlingspedagog",
+    "socialsekreterare", "behandlingspedagog", "vårdcentral", "rehab",
     "kock", "kallskänka", "servitör", "servitris", "restaurangbiträde",
-    "bagare", "köksmästare", "diskare", "barista",
+    "bagare", "köksmästare", "diskare", "kallskänk",
     "lokalvårdare", "städare", "städ", "vaktmästare", "fastighetsskötare",
     "chaufför", "lastbilsförare", "truckförare", "lagerarbetare", "montör",
     "svetsare", "elektriker", "snickare", "målare", "plattsättare", "murare",
-    "mekaniker", "bärgare", "väktare", "brandman",
+    "mekaniker", "bärgare", "väktare", "brandman", "maskinförare",
     "lärare", "förskollärare", "barnskötare", "fritidspedagog", "rektor",
-    "butikssäljare", "butikschef", "frisör", "receptionist",
-    "sygeplejerske", "pædagog", "tømrer", "rengøring", "elektriker",
-    # Dutch / German / French
+    "butikssäljare", "butikschef", "frisör", "florist", "hantverkare",
+    "sygeplejerske", "pædagog", "tømrer", "rengøring", "kokk",
+    # Dutch, German, French
     "verpleegkundige", "verzorgende", "monteur", "schoonmaak", "docent",
-    "magazijn", "chauffeur", "verkoopmedewerker",
+    "magazijn", "verkoopmedewerker", "beveiliger",
     "pflegefachkraft", "krankenschwester", "erzieher", "verkäufer",
     "lagerist", "hausmeister", "koch", "fahrer", "mechatroniker",
     "infirmier", "cuisinier", "serveur", "vendeur", "technicien",
-    "conducteur", "magasinier", "agent d entretien",
+    "conducteur", "magasinier", "hôte", "hôtesse",
 )
 
 CORPORATE = _terms(
@@ -275,155 +291,353 @@ CORPORATE = _terms(
     "personal assistant", "office administrator", "office coordinator",
     "facilities", "procurement", "purchasing", "supply chain", "logistics",
     "marketing", "brand", "communications", "public relations", "press officer",
-    "content", "copywriter", "social media", "graphic designer", "ux designer",
-    "event", "events", "community manager", "customer success",
+    "copywriter", "social media", "graphic designer", "ux designer",
+    "ui designer", "community manager", "customer success", "event manager",
     "legal counsel", "paralegal", "attorney", "lawyer", "solicitor",
     "translator", "interpreter", "archivist", "librarian",
+    "project manager", "programme manager", "program manager",
+    "operations manager", "service manager", "general manager", "team leader",
+    "subject matter expert", "corporate administrator", "senior executive",
+    "associate executive", "training", "trainer", "quality assurance",
     "rekryterare", "lönespecialist", "kommunikatör", "marknadsförare",
     "administratör", "avtalsadministratör", "jurist", "personalchef",
-    "kundtjänst", "kundservice", "kundrådgivare",
+    "kundtjänst", "kundservice", "receptionist",
 )
 
-# Finance, but the part of finance that is relationship work, processing or
-# advice rather than modelling. `CLAUDE.md`'s exclude list, made concrete.
+# Finance, but the relationship, advice and processing part of it. This is
+# `CLAUDE.md`'s exclude list made concrete, and it is the list most likely to
+# need trimming later -- `middle office` at a systematic fund is not what it is
+# at a custodian. Anything that turns out to be borderline belongs in
+# `AMBIGUOUS` instead, where a body decides it.
 NON_QUANT_FINANCE = _terms(
     "relationship manager", "relationship banker", "personal banker",
     "private banker", "branch manager", "bank teller", "teller",
     "mortgage advisor", "mortgage adviser", "mortgage loan", "loan officer",
     "loan processor", "financial advisor", "financial adviser", "wealth advisor",
-    "wealth manager", "client advisor", "insurance advisor", "insurance broker",
-    "customer service", "client service", "client services", "customer care",
-    "contact centre", "contact center", "call centre", "call center",
-    "account manager", "account executive", "business development",
+    "wealth manager", "wealth strategist", "client advisor", "insurance advisor",
+    "insurance broker", "customer service", "client service", "client services",
+    "customer care", "contact centre", "contact center", "call centre",
+    "call center", "account manager", "account executive", "business development",
     "sales manager", "sales representative", "sales executive", "sales support",
-    "inside sales", "telesales", "client onboarding", "onboarding specialist",
-    "accountant", "accounting", "bookkeeper", "accounts payable",
-    "accounts receivable", "financial reporting", "fund accounting",
-    "fund administration", "fund administrator", "transfer agency",
-    "tax manager", "tax advisor", "tax analyst", "auditor", "internal audit",
-    "external audit", "compliance officer", "compliance analyst",
+    "inside sales", "telesales", "sales trader", "client onboarding",
+    "onboarding specialist", "accountant", "accounting", "bookkeeper",
+    "accounts payable", "accounts receivable", "financial reporting",
+    "fund accounting", "fund administration", "fund administrator",
+    "transfer agency", "tax manager", "tax advisor", "tax analyst", "auditor",
+    "internal audit", "external audit", "compliance officer", "compliance analyst",
     "compliance manager", "regulatory reporting", "anti money laundering",
     "aml", "kyc", "know your customer", "financial crime", "fraud",
     "sanctions", "collections", "debt recovery", "underwriter", "underwriting",
     "claims", "claims handler", "actuary", "actuarial", "insurance pricing",
     "trade support", "trading support", "middle office", "back office",
-    "operations analyst", "settlements", "corporate actions", "reconciliation",
-    "banking advisor", "bankrådgivare", "redovisningsekonom", "redovisningsansvarig",
+    "settlements", "corporate actions", "reconciliation", "custody",
+    "customer experience", "personal banking", "banking associate",
+    "mobile mortgage", "financial services representative", "financial consultant",
+    "personal financial", "wealth executive", "consumer banking", "retail banking",
+    "bankrådgivare", "redovisningsekonom", "redovisningsansvarig",
     "ekonomiassistent", "löneadministratör", "revisor", "försäkringsrådgivare",
-    "kundberater", "kundenberater", "bankfiliale", "conseiller clientèle",
+    "kundenberater", "bankfiliale", "conseiller clientèle",
+    # Santander and Citi publish large Iberian and Latin American retail books
+    # through the same tenants as their trading desks.
+    "clientes", "cajero", "sucursal", "asesor", "atendimento", "gerente",
 )
 
-# Engineering titles. These reject only when *no* markets anchor appears
-# anywhere in the posting -- a two-sided test, because `Software Engineer,
-# Trading Systems` at Optiver is exactly in scope and `Senior Backend Engineer,
-# Payments Platform` at a retail bank is exactly not. The tag records which
-# anchor rescued it, or that none did.
+# Engineering titles, rejected only for the *absence* of markets. Two-sided
+# because `Software Engineer, Trading Systems` at Optiver is exactly in scope
+# and `Senior Backend Engineer, Payments Platform` at a retail bank is exactly
+# not, and no amount of tuning a one-sided list separates them.
 ENGINEERING = _terms(
     "software engineer", "software developer", "software development",
     "developer", "programmer", "full stack", "fullstack", "front end",
     "frontend", "back end", "backend", "web developer", "mobile developer",
-    "android", "ios", "react", "angular", "node js",
+    "android", "ios developer", "react", "angular",
     "devops", "sre", "site reliability", "cloud engineer", "cloud architect",
     "platform engineer", "infrastructure engineer", "network engineer",
     "systems engineer", "systems administrator", "system administrator",
     "database administrator", "security engineer", "cyber security",
-    "cybersecurity", "information security", "penetration", "qa engineer",
-    "test engineer", "automation engineer", "release engineer",
+    "cybersecurity", "information security", "penetration testing", "qa engineer",
+    "test engineer", "automation engineer", "release engineer", "build engineer",
     "solution architect", "enterprise architect", "technical architect",
     "it support", "help desk", "helpdesk", "service desk", "desktop support",
     "application support", "technical support", "it project", "it business",
-    "salesforce", "sap", "servicenow", "sharepoint", "workday consultant",
-    "scrum master", "product owner", "product manager", "business analyst",
-    "data engineer", "data platform", "etl", "integration engineer",
+    "salesforce", "sap", "servicenow", "sharepoint", "scrum master",
+    "product owner", "product manager", "business analyst", "data engineer",
+    "data platform", "etl", "integration engineer", "ai engineer",
     "systemutvecklare", "utvecklare", "programmerare", "systemadministratör",
     "softwareentwickler", "entwickler", "développeur", "ontwikkelaar",
 )
 
-# Titles that are genuinely ambiguous: quantitative at one firm, commentary at
-# the next. These are never rejected on a title -- they go to `undecided`,
-# which is the queue that says "fetch this body". This is where the economists
-# live, and the reason the description backfill has a priority order.
-AMBIGUOUS_FINANCE = _terms(
+# Genuinely ambiguous: quantitative at one firm, commentary at the next. These
+# are never rejected on a title -- they go to `undecided`, which is the queue
+# that says "fetch this body". The economists live here, and this is why the
+# description backfill has a priority order rather than being 42,730 fetches.
+AMBIGUOUS = _terms(
     "analyst", "senior analyst", "financial analyst", "investment analyst",
     "credit analyst", "risk analyst", "data analyst", "business intelligence",
     "economist", "economics", "strategist", "consultant", "associate",
     "portfolio analyst", "performance analyst", "valuation", "valuations",
     "pricing analyst", "reporting analyst", "analytics", "modeller", "modeler",
+    "data scientist", "data science", "machine learning", "statistician",
+    "researcher", "research analyst", "investment officer", "treasury analyst",
     "analytiker", "ekonom", "nationalekonom", "analytikere", "analiste",
 )
 
 CRYPTO = _terms(
     "crypto", "cryptocurrency", "blockchain", "web3", "defi",
-    "bitcoin", "ethereum", "token economics", "nft",
+    "bitcoin", "ethereum", "nft",
 )
 
 # --------------------------------------------------------------------------
-# Seniority. Titles carry this reliably at the top of the ladder and unreliably
-# in the middle, which is why only the top rejects.
+# Seniority, but only the end of the ladder that rejects
 # --------------------------------------------------------------------------
 
-# `vice president` is deliberately absent. At a bank it is a mid-career grade
-# -- State Street and Citi stamp it on five-year hires -- so treating it as
-# senior would reject a large, genuinely relevant slice of the corpus.
+# `vice president` is deliberately absent. At a bank it is a mid-career grade --
+# State Street and Citi stamp it on five-year hires -- so treating it as an
+# officer title would reject a large and genuinely relevant slice of the corpus.
+#
+# Bare `president` is absent for a duller reason: it is a token of *vice
+# president*, so including it rejected every AVP and VP in the corpus while the
+# comment above claimed the opposite. The list said one thing and did another,
+# which is exactly the kind of confident wrong answer the evidence field exists
+# to expose.
 HEAD_OR_MD = _terms(
     "head of", "global head", "regional head", "group head", "chief",
     "managing director", "senior vice president", "executive vice president",
-    "svp", "evp", "president", "ceo", "cfo", "coo", "cto", "cio",
-    "director", "partner", "vd", "verkställande direktör", "avdelningschef",
+    "svp", "evp", "ceo", "cfo", "coo", "cto", "cio",
+    "director", "partner", "verkställande direktör", "avdelningschef",
     "geschäftsführer", "directeur",
 )
-# Checked first, and they win: a `Director` in these is not the bank grade.
+
+# Checked first and they win: a `Director` inside one of these is not the grade.
 NOT_HEAD = _terms(
     "associate director", "assistant director", "deputy director",
     "director of engineering", "art director", "creative director",
-    "funeral director", "director level", "managing directorate",
+    "funeral director", "board of directors",
 )
 
-LEAD = _terms("lead", "principal", "staff", "senior manager", "team lead")
-SENIOR = _terms("senior", "sr", "vice president", "vp", "avp", "experienced")
-INTERN = _terms(
-    "intern", "internship", "praktikant", "praktik", "praktikplats",
-    "werkstudent", "stagiaire", "stage", "summer analyst", "summer intern",
-    "sommarjobb", "trainee program",
+# Swedish builds occupations by compounding, and token matching cannot see
+# inside a compound: `chaufför` is in the list above and does not match
+# `skåpbilschaufför`, so a van driver's ad reads as unclassifiable rather than
+# as a driver. These are the occupational *heads* -- the last element, which is
+# the one that names the job -- matched as a token suffix.
+#
+# The same trick would be wrong in English, where a compound is two tokens and
+# the suffix test would fire on any word ending in the same letters. It is safe
+# here because the heads are long and Swedish is agglutinative.
+SWEDISH_HEADS = (
+    "chaufför", "förare", "sköterska", "läkare", "lärare", "pedagog",
+    "terapeut", "arbetare", "biträde", "säljare", "montör", "mekaniker",
+    "tekniker", "vaktmästare", "städare", "snickare", "målare", "bagare",
+    "brevbärare", "assistent", "handläggare", "sekreterare", "vårdare",
 )
-NEW_GRAD = _terms(
-    "graduate", "graduate program", "graduate programme", "new grad",
-    "campus", "entry level", "junior", "nyexaminerad", "traineeprogram",
-    "absolvent", "jeune diplômé", "starter",
-)
+MIN_COMPOUND = 9  # shorter than this and a suffix is a coincidence
 
-# Body-only. A posting that requires a *future* graduation date is noise for a
-# graduate with a year of experience, and titles never announce it.
+
+def compound(text: str, heads: tuple[str, ...] = SWEDISH_HEADS) -> str | None:
+    """The first token of `text` that ends in an occupational head."""
+    for token in text.split():
+        if len(token) < MIN_COMPOUND:
+            continue
+        for head in heads:
+            if len(token) > len(head) and token.endswith(head):
+                return token
+    return None
+
+# Body-only, and the one gate a graduate cannot pass. A posting requiring a
+# *future* graduation date is noise for someone who has already graduated, and
+# titles never announce it -- `Summer Analyst` and `Analyst` look identical.
 STUDENT_ONLY = _terms(
     "currently enrolled", "must be enrolled", "are enrolled", "still studying",
     "final year student", "final year students", "penultimate year",
     "graduating in 2027", "graduating in 2028", "expected graduation",
-    "pursuing a degree", "currently pursuing", "student at a university",
+    "pursuing a degree", "currently pursuing a", "enrolled at a university",
     "studerar", "pågående studier", "under utbildning", "ingeschreven student",
 )
 
-HUBS = (
-    ("stockholm", _terms("stockholm", "sverige", "sweden", "solna", "kista")),
-    ("copenhagen", _terms("copenhagen", "københavn", "kobenhavn", "denmark", "danmark")),
-    ("amsterdam", _terms("amsterdam", "netherlands", "nederland", "rotterdam", "utrecht", "den haag")),
-    ("switzerland", _terms("zurich", "zürich", "geneva", "genève", "genf", "zug",
-                           "basel", "lugano", "switzerland", "schweiz", "suisse")),
-    ("hong kong", _terms("hong kong", "hongkong", "kowloon")),
-    ("singapore", _terms("singapore",)),
+# The reasons, so a caller can enumerate them without scraping the rules.
+REASONS = (
+    "unrelated_occupation",
+    "corporate_function",
+    "non_quant_finance",
+    "pure_engineering",
+    "too_senior",
+    "student_only",
+    "crypto_web3",
+    "no_markets_signal",
 )
 
-# `employers.category` is the regulator's own classification, kept verbatim at
-# ingest for exactly this. Matched on the category string, not the firm name.
-FIRM_TYPES = (
-    ("exchange", ("exchange participant", "regulated market", "market infrastructure",
-                  "trading member", "trading-clearing member")),
-    ("broker", ("broker-dealer", "dealing in securities", "dealing in futures",
-                "värdepappersbolag", "beleggingsonderneming", "investment firm")),
-    ("asset_manager", ("adviser", "asset management", "advising on securities",
-                       "portfolio manager", "aifm", "ucits", "fund management",
-                       "kapitalförvaltning", "beleggingsinstelling", "beheerder",
-                       "capital markets services", "collective assets")),
-    ("bank", ("bank", "credit institution", "securities firm", "raiffeisen")),
-    ("pension", ("pension", "tjänstepension")),
-    ("insurance", ("insurance", "försäkring", "reinsurance")),
-)
+
+# --------------------------------------------------------------------------
+# The verdict
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Verdict:
+    verdict: str            # keep | reject | undecided
+    reason: str | None      # one of REASONS, when the verdict is reject
+    evidence: str | None    # the phrase that decided it
+    confidence: str         # strong | weak
+
+
+def judge(
+    title: str,
+    department: str | None = None,
+    description: str | None = None,
+) -> Verdict:
+    """Decide whether a posting is worth reading, and record what decided it.
+
+    `role` is the title and department -- what the posting is *for*. `body` is
+    the description -- what the firm is *like*. Keeping them apart is what stops
+    a quant fund's boilerplate from making its receptionist look relevant.
+
+    The order of the tests is the argument. Occupation runs first because it is
+    the only evidence here that is conclusive; the anchors run before the
+    ambiguous-title tests because a posting that says *quantitative* has already
+    answered the question those tests would be guessing at.
+    """
+    role = normalize(f"{title or ''} {department or ''}")
+    body = normalize(description)
+    has_body = len(body) > MIN_BODY
+
+    quant_role = first(role, QUANT)
+    quant_body = first(body, QUANT)
+    # Split deliberately. A markets word in the title is about the job; the same
+    # word in the body may only be about the employer's customers, which is how
+    # a market-data vendor's every backend engineer came out as a markets hire.
+    markets_role = first(role, MARKETS)
+    markets_body = first(body, MARKETS)
+
+    # 1. A named occupation. The strongest evidence in the module -- but a
+    #    quantitative word in the title *itself* means the title is doing
+    #    something else ("Lead Technical Recruiter, Quant Engineering"), so it
+    #    downgrades the rejection to a read rather than being overridden by it.
+    for terms, reason in (
+        (UNRELATED, "unrelated_occupation"),
+        (CORPORATE, "corporate_function"),
+    ):
+        hit = first(role, terms) or compound(role)
+        if hit:
+            if quant_role:
+                return Verdict("undecided", None, f"{hit} + {quant_role}", "weak")
+            return Verdict("reject", reason, hit, "strong")
+
+    # 2. Too senior to be reachable from under a year of experience. Read from
+    #    the title alone: `Associate - Fund Governance` sits in a department
+    #    called "Director Services", and a department is not a grade.
+    just_title = normalize(title)
+    if not first(just_title, NOT_HEAD):
+        hit = first(just_title, HEAD_OR_MD)
+        if hit:
+            return Verdict("reject", "too_senior", hit, "strong")
+
+    # 3. Crypto and web3 are an exclusion in their own right, and unlike most
+    #    of this list the word means one thing wherever it appears.
+    hit = first(role, CRYPTO)
+    if hit:
+        return Verdict("reject", "crypto_web3", hit, "strong")
+
+    # 4. The title says quantitative. There is nothing further to decide.
+    if quant_role:
+        return Verdict("keep", None, quant_role, "strong")
+
+    # 5. A body demanding a future graduation date.
+    hit = first(body, STUDENT_ONLY)
+    if hit:
+        return Verdict("reject", "student_only", hit, "strong")
+
+    # 6. Finance, but the relationship-and-processing part of it.
+    hit = first(role, NON_QUANT_FINANCE)
+    if hit:
+        if quant_body:
+            return Verdict("undecided", None, f"{hit} + {quant_body}", "weak")
+        return Verdict("reject", "non_quant_finance", hit, "strong")
+
+    # 7. Engineering, and three-sided rather than two. Where the markets word
+    #    was found decides how far it carries: in the title it is the job, in
+    #    the body it is only a maybe, and `undecided` is what a maybe is for.
+    #    Collapsing that middle into `keep` is what filled the board with a
+    #    vendor's backend engineers; collapsing it into `reject` would throw
+    #    away the trading-systems roles this project exists to find.
+    hit = first(role, ENGINEERING)
+    if hit:
+        if quant_body:
+            return Verdict("keep", None, f"{hit} + {quant_body}", "strong")
+        if markets_role:
+            return Verdict("keep", None, f"{hit} + {markets_role}", "weak")
+        if markets_body:
+            return Verdict("undecided", None, f"{hit} + {markets_body}", "weak")
+        return Verdict("reject", "pure_engineering", hit,
+                       "strong" if has_body else "weak")
+
+    # 8. The ambiguous middle -- analysts, economists, strategists, consultants.
+    #    Never rejected on a title. Without a body this is the backfill queue.
+    hit = first(role, AMBIGUOUS)
+    if hit:
+        if quant_body:
+            return Verdict("keep", None, f"{hit} + {quant_body}", "strong")
+        if markets_role or markets_body:
+            return Verdict("undecided", None,
+                           f"{hit} + {markets_role or markets_body}", "weak")
+        if has_body:
+            return Verdict("reject", "non_quant_finance",
+                           f"{hit}, no markets language in the body", "weak")
+        return Verdict("undecided", None, hit, "weak")
+
+    # 9. No rule fired. A full body with no markets word anywhere in it is real
+    #    evidence; a bare unrecognised title is not, and the grade says so.
+    if quant_body:
+        return Verdict("keep", None, quant_body, "weak")
+    if has_body and not (markets_role or markets_body):
+        return Verdict("reject", "no_markets_signal", None, "weak")
+    return Verdict("undecided", None, markets_role or markets_body, "weak")
+
+
+# --------------------------------------------------------------------------
+# Board profile -- the firm-level signal, measured rather than asserted
+# --------------------------------------------------------------------------
+#
+# `TAGGING.md` proposes deriving `firm_type` from `employers.category`, on the
+# grounds that a regulator's classification beats a firm's own marketing. It
+# does -- but it classifies the *licensed entity*, and the board belongs to the
+# *group*. LaSalle Investment Management Asia is a Singapore Capital Markets
+# Services Licensee; the board its domain resolves to is `jll.com`, and that is
+# 2,021 property-management postings. `airbus.com` arrived the same way, via
+# Airbus Aeroassurances, and carries 2,016. The category says markets; the
+# board says aircraft, and the category is not wrong -- it is answering a
+# different question.
+#
+# So the honest firm signal is measured from what the board actually publishes.
+# It also generalises the failure `PLAN.md` recorded and left open: Palmer
+# Square's careers page links to a jewellery retailer's Lever board, and this
+# reads it as a board whose postings are almost entirely somebody else's job.
+
+MIN_BOARD = 10  # below this a share is noise, not a profile
+
+# Sweden's national feed is not a firm's board. Profiling it would return
+# "non_markets", which is true and useless: it carries every job in the country
+# by design, and it is the source that makes Stockholm complete rather than
+# merely well covered.
+NOT_A_BOARD = ("jobtech",)
+
+
+def board_profile(keep: int, undecided: int, rejected: int) -> tuple[str, str] | None:
+    """(profile, evidence) for one board, or None if there is too little to say.
+
+    `undecided` counts towards relevance deliberately. A board of ambiguous
+    finance titles is a finance employer we have not read yet; a board of
+    housekeepers and maintenance technicians is not, and the two have to come
+    out differently or the measure just counts how many bodies we fetched.
+    """
+    total = keep + undecided + rejected
+    if total < MIN_BOARD:
+        return None
+    relevant = keep + undecided
+    share = relevant / total
+    if share >= 0.40:
+        profile = "markets"
+    elif share >= 0.05:
+        profile = "mixed"
+    else:
+        profile = "non_markets"
+    return profile, f"{relevant}/{total} not rejected"

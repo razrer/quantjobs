@@ -6,8 +6,8 @@ import argparse
 import sys
 
 from . import (
-    alerts, ats, audit, db, domains, extract, fca, jobstream, pages, resolve,
-    tagging,
+    alerts, ats, audit, coverage, db, domains, extract, fca, jobstream, pages,
+    resolve, tagging,
 )
 from .registries import REGISTRIES
 
@@ -212,6 +212,39 @@ def _tag(database: str, limit: int, dimension: str) -> int:
     return 0
 
 
+def _coverage(database: str) -> int:
+    connection = db.connect(database)
+
+    print("what the pipeline holds, by hub")
+    print(f"  {'hub':14s} {'postings':>9s} {'employers':>10s} {'worth reading':>14s}")
+    for row in coverage.by_hub(connection):
+        print(
+            f"  {row['hub']:14s} {row['postings']:9,d} {row['employers']:10,d}"
+            f" {row['worth_reading'] or 0:14,d}"
+        )
+
+    result = coverage.estimate(connection)
+    print(f"\ncapture-recapture, {result.hub} (second source: JobStream)")
+    print(f"  ours {result.ours:,d}   theirs {result.theirs:,d}"
+          f"   both {result.overlap:,d}")
+    if result.population is None:
+        print(f"  no estimate -- {result.reason}")
+    else:
+        print(f"  population ~{result.population:,d}, we poll {result.share:.0%}")
+        print(f"  {result.reason}")
+
+    print("\nunmeasured (no second source): " + ", ".join(
+        coverage.unmeasured_hubs(connection)))
+
+    rows = coverage.missed(connection)
+    if rows:
+        print(f"\nhiring, reaching us only through the national feed ({len(rows)})")
+        for row in rows:
+            tier = row["tier"] or "untiered"
+            print(f"  {row['ads']:3d} ads  {row['domain'][:40]:42s} {tier} {row['ats'] or ''}")
+    return 0
+
+
 def _alerts(database: str) -> int:
     connection = db.connect(database)
     found = alerts.check(connection)
@@ -341,10 +374,16 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     commands.add_parser(
+        "coverage", help="estimate how much of the market we see (Stage 10)"
+    )
+
+    commands.add_parser(
         "alerts", help="flag sources that broke quietly (Layer 0 health)"
     )
 
     args = parser.parse_args(argv)
+    if args.command == "coverage":
+        return _coverage(args.db)
     if args.command == "tag":
         return _tag(args.db, args.limit, args.dimension)
     if args.command == "pages":

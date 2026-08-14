@@ -35,7 +35,7 @@ from . import db
 # Bump on every lexicon change: the diff between two versions over the same
 # corpus is a free regression test, and it is the only way to tell "the
 # classifier improved" from "the market moved".
-TAGGER = 6
+TAGGER = 7
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS job_tags (
@@ -396,8 +396,18 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
     for value, evidence in exclusions:
         add("exclusion_reason", value, f"{evidence!r}")
 
+    # `other` and `unknown` are different facts and the difference is the whole
+    # discipline: `other` is a place we read and it was Bangalore, Pune or
+    # Massachusetts; `unknown` is a posting with no location at all. Collapsing
+    # them reported 92% of the corpus as ungeolocated when most of it is simply
+    # somewhere else.
     hub = _first(_HUBS, where)
-    add("hub", hub[0] if hub else "unknown", f"{hub[1]!r}" if hub else None, "strong")
+    if hub:
+        add("hub", hub[0], f"{hub[1]!r}", "strong")
+    elif (row["location"] or "").strip():
+        add("hub", "other", f"{row['location'][:40]!r}", "strong")
+    else:
+        add("hub", "unknown", None, "strong")
 
     return tags
 

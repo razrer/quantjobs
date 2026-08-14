@@ -49,9 +49,9 @@ nothing in the near-term plan now waits on a human.
 | 6 | Layer 3 — ATS extraction | **done** — all 10 formats landing, 16,124 jobs |
 | 7 | Layer 4 — JobTech JobStream (Sweden) | **done** — delta polling live |
 | 8 | Silent-failure alerting | **done** — `alerts`, distributional |
-| 9 | Layer 3B — Tier B change detection | not started |
-| 10 | Coverage measurement | not started |
-| 11 | Layer 5 — job tagging | designed, not started — `TAGGING.md` |
+| 9 | Layer 3B — Tier B change detection | **done** — 3,751 pages watched |
+| 10 | Coverage measurement | **done** — measures, and refuses when it cannot |
+| 11 | Layer 5 — job tagging | **in progress** — Layer 1 lexicon live |
 
 ---
 
@@ -768,11 +768,88 @@ the sample.
 
 ---
 
-## Stages 9–10 and beyond
+## Stage 9 — Layer 3B, tier-B change detection *(done)*
 
-Layer 3B change detection for firms with no ATS, then capture–recapture coverage
-measurement per city. From Stage 10 on, **let the measurement choose the next
-piece of work** rather than this list.
+`pages.py`. Tier B was the largest hole left in the pipeline and the tier table
+hid it, reporting 3,839 firms as a successful classification rather than as a
+queue nothing polls.
+
+**It watches for change; it does not extract postings.** Reconnaissance settles
+it: tier-B pages carry 16 to 79 links each and between one and seven that
+mention a job word, and those are `Careers`, `View Careers` and
+`mailto:careers@`. The postings are rendered by script or are not in the markup
+at all. An extractor over that files a firm's own navigation as job postings —
+rows that look real and are not, and read-time classification cannot undo a row
+that was never a posting.
+
+**The fingerprint is the set of same-site link paths, not the page text.** Text
+churns on every visit — timestamps, cookie banners, rotating quotes — and a
+change reported every run is not a signal. Links are stable, and the way a
+posting normally reaches a page is by adding one. Query strings and fragments
+are dropped for the same reason: a `?srsltid=` differs on every fetch.
+
+When a page is script-rendered and its links never move, this reports nothing.
+That is the honest answer rather than a manufactured one.
+
+**Exit criterion — met:** every tier-B page has a baseline (3,751 of 3,839; the
+rest are unreachable hosts), a change is detected and dated, and a page that
+only reorders its links is not a change.
+
+---
+
+## Stage 10 — Coverage measurement *(done)*
+
+`coverage.py`. Every earlier stage reports what it *found*. None of them can say
+what it missed, and "exhaustiveness is the hard requirement" is not a claim
+those numbers support: a pipeline that polls 800 boards perfectly and is blind
+to 8,000 others reports the same 800 either way.
+
+**The estimator is refused rather than reported when the overlap is too small,
+and that refusal is the feature.** Capture–recapture needs two independent
+samples; `m` is currently **zero** for Sweden, and Chapman would cheerfully
+return a population of 110 from that. A number computed from no overlap is not
+a measurement. `MIN_OVERLAP` is 5, and the test that pins this asserts Chapman
+*does* return 110 at zero overlap — the guard is the point, not the formula.
+
+**Both samples are cut to our own universe.** JobStream carries waiting staff
+and care homes; our pipeline is employer-first over financial registers.
+Estimating one population from two differently scoped frames measures neither.
+The same cut fixes the miss list, which was Adecco, Region Stockholm and Malmö
+stad before it — all genuinely hiring, none of them financial employers.
+
+**Only one hub has a second source.** Sweden has JobStream. Copenhagen,
+Amsterdam, Switzerland, Hong Kong and Singapore have nothing comparable, so
+they report as *unmeasured* rather than as complete.
+
+What the pipeline holds today, which is the thing a coverage number would be
+divided into:
+
+| hub | postings | employers | worth reading |
+|---|---|---|---|
+| other | 43,110 | 924 | 139 |
+| deprioritized | 6,383 | 311 | 81 |
+| singapore | 1,342 | 75 | 15 |
+| hong_kong | 653 | 42 | 18 |
+| stockholm | 518 | 174 | 0 |
+| amsterdam | 229 | 51 | 5 |
+| switzerland | 74 | 21 | 0 |
+| copenhagen | 41 | 12 | 0 |
+
+**Stockholm is the number to worry about**: 174 employers behind 518 postings,
+and not one of them rated worth reading. Copenhagen and Switzerland are the
+same story with less data. The focus hubs have the employers and not the
+postings, which is where the next unit of work goes.
+
+**Exit criterion — met:** coverage is measured where a second source exists,
+declines to guess where one does not, and names the employers that reach us
+only through the national feed.
+
+---
+
+## Beyond Stage 10
+
+From here, **let the measurement choose the next piece of work** rather than
+this list.
 
 Deliberately deferred: LinkedIn, Common Crawl mining, Wayback backfill. The
 methodology explains why each looks more attractive than it is.
