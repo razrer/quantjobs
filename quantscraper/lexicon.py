@@ -176,6 +176,19 @@ QUANT = _terms(
     "quantitatif", "finance quantitative", "modellvalidierung",
 )
 
+# Bare `quantitative` is decisive in a title and nearly worthless in a body.
+# "Strong quantitative skills" is boilerplate in half the job specs ever
+# written, and on its own it promoted an insurance operations manager, a
+# regional VP of P&C operations and a financial-services lawyer into the keep
+# list. So a body is read against the *specific* phrases only -- the ones no
+# firm writes unless the role does the thing.
+GENERIC_IN_BODY = frozenset(_terms(
+    "quant", "quants", "quantitative", "quantitatively",
+    "kvantitativ", "kvantitativa", "kvantitativt", "kvantitative",
+    "quantitativ", "quantitatif", "kwantitatief", "kwantitatieve",
+))
+QUANT_BODY = tuple(term for term in QUANT if term not in GENERIC_IN_BODY)
+
 # Contextual. These say "markets", not "quantitative". They are never enough to
 # keep a posting on their own -- they are the second half of a two-sided test,
 # the part that separates a trading-systems engineer from a payments one.
@@ -228,7 +241,10 @@ UNRELATED = _terms(
     "delivery driver", "chauffeur", "courier", "mechanic", "technician",
     "installer", "fitter", "machine operator", "assembler", "seamstress",
     "operator", "detailer", "car wash", "rental agent", "rental sales",
-    "fleet", "dispatcher", "groundsman", "handyman",
+    "fleet", "dispatcher", "groundsman", "handyman", "lifeguard",
+    "guest service", "station manager", "airport", "buyer", "material planning",
+    "lot attendant", "customer return", "production tech", "service advisor",
+    "bar team", "team member", "crew member", "attendant",
     # health and care
     "nurse", "nursing", "physician", "surgeon", "dentist", "dental",
     "pharmacist", "pharmacy", "therapist", "physiotherapist", "psychologist",
@@ -280,6 +296,12 @@ UNRELATED = _terms(
     "lagerist", "hausmeister", "koch", "fahrer", "mechatroniker",
     "infirmier", "cuisinier", "serveur", "vendeur", "technicien",
     "conducteur", "magasinier", "hôte", "hôtesse",
+    "aushilfe", "minijob", "autovermietung", "bereitschaftsdienst",
+    # Santander and Citi publish large Iberian and Latin American retail books
+    # through the same Workday tenants as their trading desks, so these arrive
+    # mixed into boards that are genuinely markets employers.
+    "técnico", "tecnico", "reparación", "anfitrion", "anfitrión",
+    "ejecutivo", "ejecutiva", "espec", "especialista", "operario", "auxiliar",
 )
 
 CORPORATE = _terms(
@@ -292,13 +314,16 @@ CORPORATE = _terms(
     "facilities", "procurement", "purchasing", "supply chain", "logistics",
     "marketing", "brand", "communications", "public relations", "press officer",
     "copywriter", "social media", "graphic designer", "ux designer",
-    "ui designer", "community manager", "customer success", "event manager",
-    "legal counsel", "paralegal", "attorney", "lawyer", "solicitor",
+    "ui designer", "product designer", "designer", "design lead",
+    "community manager", "customer success", "event manager",
+    "legal counsel", "counsel", "paralegal", "attorney", "lawyer", "solicitor",
     "translator", "interpreter", "archivist", "librarian",
     "project manager", "programme manager", "program manager",
     "operations manager", "service manager", "general manager", "team leader",
     "subject matter expert", "corporate administrator", "senior executive",
     "associate executive", "training", "trainer", "quality assurance",
+    "executive", "program administrator", "property administrator",
+    "office coordinator", "administration",
     "rekryterare", "lönespecialist", "kommunikatör", "marknadsförare",
     "administratör", "avtalsadministratör", "jurist", "personalchef",
     "kundtjänst", "kundservice", "receptionist",
@@ -334,6 +359,9 @@ NON_QUANT_FINANCE = _terms(
     "customer experience", "personal banking", "banking associate",
     "mobile mortgage", "financial services representative", "financial consultant",
     "personal financial", "wealth executive", "consumer banking", "retail banking",
+    "sales agent", "sales development", "account handler", "financial planner",
+    "claim representative", "client manager", "deposit specialist",
+    "commercial banking", "business banking", "premier banking",
     "bankrådgivare", "redovisningsekonom", "redovisningsansvarig",
     "ekonomiassistent", "löneadministratör", "revisor", "försäkringsrådgivare",
     "kundenberater", "bankfiliale", "conseiller clientèle",
@@ -501,7 +529,7 @@ def judge(
     has_body = len(body) > MIN_BODY
 
     quant_role = first(role, QUANT)
-    quant_body = first(body, QUANT)
+    quant_body = first(body, QUANT_BODY)
     # Split deliberately. A markets word in the title is about the job; the same
     # word in the body may only be about the employer's customers, which is how
     # a market-data vendor's every backend engineer came out as a markets hire.
@@ -584,10 +612,15 @@ def judge(
                            f"{hit}, no markets language in the body", "weak")
         return Verdict("undecided", None, hit, "weak")
 
-    # 9. No rule fired. A full body with no markets word anywhere in it is real
-    #    evidence; a bare unrecognised title is not, and the grade says so.
+    # 9. No rule fired, so the title matched nothing in any list -- and a title
+    #    this module cannot place is exactly where body evidence is least
+    #    trustworthy. `quantitative research` in a product designer's posting is
+    #    user research, and `model validation` in a computational chemist's is
+    #    chemistry; both landed in the keep list until this returned a maybe
+    #    instead. A full body with no markets word anywhere in it, by contrast,
+    #    is real evidence -- absence measured over a whole document.
     if quant_body:
-        return Verdict("keep", None, quant_body, "weak")
+        return Verdict("undecided", None, quant_body, "weak")
     if has_body and not (markets_role or markets_body):
         return Verdict("reject", "no_markets_signal", None, "weak")
     return Verdict("undecided", None, markets_role or markets_body, "weak")

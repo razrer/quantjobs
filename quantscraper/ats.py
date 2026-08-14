@@ -130,6 +130,10 @@ _HREF = re.compile(r'href=["\']([^"\']{0,2000})["\']', re.I)
 
 _MAX_CAREERS_PAGES = 3
 
+# Careers pages fetched per domain across both hops. The queue is 19,000
+# domains long, so this is a budget, not a preference.
+_MAX_FETCHES = 6
+
 # A careers page is HTML, not a media file. Fingerprinting runs 23 patterns
 # over the body twice, so an unbounded one stalls the whole pool -- the GIL
 # means one thread scanning a huge string blocks the other fifteen.
@@ -299,20 +303,46 @@ def resolve_domain(domain: str) -> Resolution:
     if not candidates:
         return Resolution(domain, None, None, None, "C", "no careers link on homepage")
 
-    for url in candidates:
-        markup = _fetch(url)
-        if markup is None:
-            continue
-        # The careers URL, not the firm's domain: an ATS on a custom host
-        # serves the board from `careers.firm.se`, and that host is the token.
-        hit = fingerprint(markup, url)
-        if hit:
-            return Resolution(domain, url, hit[0], hit[1], "A", hit[2])
-        # A careers page we can read but not fingerprint is tier B, not a
-        # failure: Layer 3B diffs it, which works on any page structure.
-        first_ok = url
-        return Resolution(domain, first_ok, None, None, "B", "careers page, no ATS fingerprint")
+    # Two hops, and both halves of that matter.
+    #
+    # The loop used to `return` tier B on the *first* readable careers page,
+    # so candidates two and three were fetched by nobody -- the ranking that
+    # put the most promising link first was the only one that ever counted.
+    #
+    # And the board is often a hop further in than the careers landing page.
+    # `swedbank.com` links to a careers page that links to `jobs.swedbank.com`,
+    # a Teamtailor board on their own domain, and one hop finds neither. Six
+    # fetches is the ceiling: this runs over 19,000 domains, and an unbounded
+    # crawl is a different program.
+    seen: set[str] = set()
+    first_ok: str | None = None
+    queue, fetches = candidates, 0
 
+    for depth in (0, 1):
+        deeper: list[str] = []
+        for url in queue:
+            if url in seen or fetches >= _MAX_FETCHES:
+                continue
+            seen.add(url)
+            fetches += 1
+            markup = _fetch(url)
+            if markup is None:
+                continue
+            # The careers URL, not the firm's domain: an ATS on a custom host
+            # serves the board from `careers.firm.se`, and that host is the
+            # token.
+            hit = fingerprint(markup, url)
+            if hit:
+                return Resolution(domain, url, hit[0], hit[1], "A", hit[2])
+            first_ok = first_ok or url
+            if depth == 0:
+                deeper.extend(careers_candidates(markup, domain))
+        queue = deeper
+
+    # A careers page we can read but not fingerprint is tier B, not a failure:
+    # Layer 3B diffs it, which works on any page structure.
+    if first_ok:
+        return Resolution(domain, first_ok, None, None, "B", "careers page, no ATS fingerprint")
     return Resolution(domain, None, None, None, "C", "careers links unreachable")
 
 

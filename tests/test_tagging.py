@@ -147,6 +147,29 @@ class SeniorityTest(unittest.TestCase):
         )
 
 
+class GeographyRanksTest(unittest.TestCase):
+    """Geography ranks results; it never gates them.
+
+    Santander's global board filled the shortlist from `hub: other` while
+    Stockholm showed one entry. The postings are real and keep their rows --
+    they just should not outrank a focus hub.
+    """
+
+    def test_a_focus_hub_outranks_the_same_role_elsewhere(self):
+        here = _tags(title="Junior Quantitative Researcher", location="Amsterdam")
+        there = _tags(title="Junior Quantitative Researcher", location="Sao Paulo")
+
+        self.assertEqual(here["fit"], {"apply_now"})
+        self.assertEqual(there["fit"], {"strong"})
+
+    def test_a_downranked_posting_still_keeps_every_tag(self):
+        """Ranked down, never dropped."""
+        tags = _tags(title="Quantitative Researcher", location="Sao Paulo")
+
+        self.assertEqual(tags["relevance"], {"core"})
+        self.assertEqual(tags["hub"], {"other"})
+
+
 class CompletenessTest(unittest.TestCase):
     def test_every_dimension_carries_a_value(self):
         """A posting with no seniority tag is indistinguishable from one

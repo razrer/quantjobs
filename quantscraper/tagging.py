@@ -35,7 +35,7 @@ from . import db
 # Bump on every lexicon change: the diff between two versions over the same
 # corpus is a free regression test, and it is the only way to tell "the
 # classifier improved" from "the market moved".
-TAGGER = 8
+TAGGER = 9
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS job_tags (
@@ -283,6 +283,11 @@ _HUBS = {
 }
 
 
+_FOCUS_HUBS = frozenset(
+    {"stockholm", "copenhagen", "amsterdam", "switzerland", "hong_kong", "singapore"}
+)
+
+
 @dataclass(frozen=True, slots=True)
 class Tag:
     ats: str
@@ -452,10 +457,17 @@ def _fit(tags: list[Tag]) -> Tag:
         for tag in tags
     )
     _CAP = {"apply_now": "strong", "strong": "plausible"}
+    # Geography ranks results; it never gates them. A core quant role in São
+    # Paulo is a real posting and keeps its row, but it should not outrank one
+    # in Amsterdam -- and it did: Santander's global board filled the shortlist
+    # from `hub: other` while Stockholm showed one entry.
+    outside = hub not in _FOCUS_HUBS
 
     def make(bucket: str, why: str) -> Tag:
         if body_only:
             bucket, why = _CAP.get(bucket, bucket), f"{why}; title said nothing"
+        if outside and bucket in _CAP:
+            bucket, why = _CAP[bucket], f"{why}; outside the focus hubs"
         return Tag(*key, "fit", bucket, "weak", why)
 
     if seniority == "student_only":
@@ -468,9 +480,7 @@ def _fit(tags: list[Tag]) -> Tag:
     if seniority in ("head_or_md", "lead", "senior_6_10"):
         return make("stretch", f"seniority {seniority}")
     if relevance == "core" and seniority in ("junior_0_2", "new_grad", "intern"):
-        focus = hub in ("stockholm", "copenhagen", "amsterdam", "switzerland",
-                        "hong_kong", "singapore")
-        return make("apply_now" if focus else "strong", f"core quant, {seniority}, {hub}")
+        return make("apply_now", f"core quant, {seniority}, {hub}")
     if relevance == "core":
         if depth in ("systems", "hardware"):
             return make("plausible", f"core quant but {depth}")
