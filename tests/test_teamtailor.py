@@ -88,6 +88,21 @@ class TeamtailorTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self._jobs(b"<rss version='2.0'></rss>")
 
+    def test_a_token_with_a_dot_is_already_a_hostname(self):
+        """`{token}.teamtailor.com` would be nonsense for a custom domain."""
+        with mock.patch.object(extract.http, "get", return_value=_EMPTY) as get:
+            extract.teamtailor("careers.lynxhedge.se")
+
+        self.assertEqual(
+            get.call_args.args[0], "https://careers.lynxhedge.se/jobs.rss"
+        )
+
+    def test_a_bare_token_still_gets_the_vendor_host(self):
+        with mock.patch.object(extract.http, "get", return_value=_EMPTY) as get:
+            extract.teamtailor("optiver")
+
+        self.assertEqual(get.call_args.args[0], "https://optiver.teamtailor.com/jobs.rss")
+
     def test_it_is_registered(self):
         self.assertIs(extract.EXTRACTORS["teamtailor"], extract.teamtailor)
 

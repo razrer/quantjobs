@@ -289,7 +289,11 @@ def teamtailor(token: str) -> list[Job]:
     generic scraper covers it. An empty `<channel>` is a real answer here --
     a firm with no openings -- so zero items is not treated as a failure.
     """
-    body = http.get(f"https://{token}.teamtailor.com/jobs.rss", timeout=25, retries=2)
+    # A token carrying a dot is already a hostname: the board is served from
+    # the firm's own domain, `careers.lynxhedge.se`, and `{token}.teamtailor
+    # .com` would be nonsense. See `_VENDOR_ASSETS` in `ats.py`.
+    host = token if "." in token else f"{token}.teamtailor.com"
+    body = http.get(f"https://{host}/jobs.rss", timeout=25, retries=2)
     channel = ElementTree.fromstring(body).find("channel")
     if channel is None:
         raise ValueError(f"teamtailor board {token!r} served no channel")

@@ -60,6 +60,40 @@ class CareersScanTest(unittest.TestCase):
         )
 
 
+class CustomDomainTest(unittest.TestCase):
+    """An ATS serving a board from the firm's own hostname.
+
+    `careers.lynxhedge.se` is Lynx Asset Management -- the Stockholm quant
+    firm this project exists to find -- and it sat in tier B with a live
+    Teamtailor feed behind it, because the board is never spelled
+    `{board}.teamtailor.com` anywhere on the page.
+    """
+
+    def test_a_vendor_cdn_on_a_custom_host_resolves_to_that_host(self):
+        markup = '<img src="https://assets-aws.teamtailor-cdn.com/logo.png">'
+
+        hit = ats.fingerprint(markup, "https://careers.lynxhedge.se/")
+
+        self.assertEqual(hit[:2], ("teamtailor", "careers.lynxhedge.se"))
+
+    def test_a_real_board_token_still_wins(self):
+        """The custom-host rule is a fallback, not a replacement: a page that
+        names the board outright must still yield the board."""
+        markup = (
+            '<img src="https://assets-aws.teamtailor-cdn.com/logo.png">'
+            '<a href="https://optiver.teamtailor.com/jobs">Jobs</a>'
+        )
+
+        hit = ats.fingerprint(markup, "https://careers.optiver.com/")
+
+        self.assertEqual(hit[:2], ("teamtailor", "optiver"))
+
+    def test_without_a_url_there_is_no_custom_host_to_use(self):
+        markup = '<img src="https://assets-aws.teamtailor-cdn.com/logo.png">'
+
+        self.assertIsNone(ats.fingerprint(markup))
+
+
 class FingerprintCostTest(unittest.TestCase):
     def test_a_base64_blob_does_not_stall(self):
         """An inline data URI is a long run of label characters with no dot.

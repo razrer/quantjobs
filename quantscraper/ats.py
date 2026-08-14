@@ -178,11 +178,28 @@ class Resolution:
     evidence: str | None
 
 
-def fingerprint(markup: str) -> tuple[str, str | None, str] | None:
+# An ATS serving a customer's board from the customer's *own* hostname. The
+# board never appears as `{board}.vendor.com`, so every host pattern misses it
+# and the firm is tiered B -- a careers page running on nothing recognisable.
+# The vendor's asset CDN is still in the markup, and the board is reachable at
+# the custom host, so that host is the token.
+#
+# This is not a corner case. `careers.lynxhedge.se` is Lynx Asset Management,
+# which is the Stockholm quant firm this project exists to find, and it sat in
+# tier B with a live feed behind it.
+_VENDOR_ASSETS: tuple[tuple[str, str], ...] = (
+    ("teamtailor", "teamtailor-cdn.com"),
+)
+
+
+def fingerprint(markup: str, url: str | None = None) -> tuple[str, str | None, str] | None:
     """(ats, token, evidence) for the first ATS the markup points at.
 
     A recognised ATS with an unusable token is still a useful answer -- it says
     which feed shape to use -- so the token is dropped rather than the match.
+
+    `url` is where the markup came from, and it is only needed for the
+    custom-domain case below, where the page's own host *is* the board.
     """
     for name, pattern in ATS_PATTERNS:
         for match in pattern.finditer(markup):
@@ -200,7 +217,16 @@ def fingerprint(markup: str) -> tuple[str, str | None, str] | None:
             if name == "workday" and len(groups) != 3:
                 continue  # tenant without a site is not pollable
             return name, token, match.group(0)[:120]
-    # Second pass: the ATS is present but every match was infrastructure.
+    # Second pass: a vendor's assets on a page served from the firm's own
+    # host. Checked before the infrastructure fallback, because it yields a
+    # usable token where that one yields none.
+    if url:
+        host = urllib.parse.urlsplit(url).netloc.casefold()
+        for name, asset_host in _VENDOR_ASSETS:
+            if asset_host in markup and host:
+                return name, host, f"{asset_host} on {host}"
+
+    # Third pass: the ATS is present but every match was infrastructure.
     for name, pattern in ATS_PATTERNS:
         match = pattern.search(markup)
         if match:
@@ -257,7 +283,9 @@ def resolve_domain(domain: str) -> Resolution:
         markup = _fetch(url)
         if markup is None:
             continue
-        hit = fingerprint(markup)
+        # The careers URL, not the firm's domain: an ATS on a custom host
+        # serves the board from `careers.firm.se`, and that host is the token.
+        hit = fingerprint(markup, url)
         if hit:
             return Resolution(domain, url, hit[0], hit[1], "A", hit[2])
         # A careers page we can read but not fingerprint is tier B, not a
