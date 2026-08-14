@@ -7,6 +7,7 @@ import sys
 
 from . import (
     alerts, ats, audit, db, domains, extract, fca, jobstream, pages, resolve,
+    tagging,
 )
 from .registries import REGISTRIES
 
@@ -191,6 +192,26 @@ def _pages(database: str, limit: int, workers: int) -> int:
     return 0
 
 
+def _tag(database: str, limit: int, dimension: str) -> int:
+    connection = db.connect(database)
+    tagged, written = tagging.run(connection, limit)
+    print(f"tagged {tagged:,d} postings, wrote {written:,d} tags")
+
+    print(f"\n{dimension}")
+    for row in tagging.summary(connection, dimension):
+        print(f"  {row['value']:24s} {row['n']:6,d}  ({row['strong'] or 0:,d} strong)")
+
+    rows = tagging.shortlist(connection)
+    if rows:
+        print(f"\nread these first ({len(rows)})")
+        for row in rows:
+            print(
+                f"  {row['fit']:9s} {(row['hub'] or '?'):11s}"
+                f" {(row['title'] or '')[:52]:54s} {(row['location'] or '')[:28]}"
+            )
+    return 0
+
+
 def _alerts(database: str) -> int:
     connection = db.connect(database)
     found = alerts.check(connection)
@@ -311,11 +332,21 @@ def main(argv: list[str] | None = None) -> int:
     pages_command.add_argument("--limit", type=int, default=500)
     pages_command.add_argument("--workers", type=int, default=12)
 
+    tag_command = commands.add_parser(
+        "tag", help="classify postings into rankable tags (Layer 5)"
+    )
+    tag_command.add_argument("--limit", type=int, default=100_000)
+    tag_command.add_argument(
+        "--dimension", default="fit", help="dimension to summarise afterwards"
+    )
+
     commands.add_parser(
         "alerts", help="flag sources that broke quietly (Layer 0 health)"
     )
 
     args = parser.parse_args(argv)
+    if args.command == "tag":
+        return _tag(args.db, args.limit, args.dimension)
     if args.command == "pages":
         return _pages(args.db, args.limit, args.workers)
     if args.command == "alerts":
