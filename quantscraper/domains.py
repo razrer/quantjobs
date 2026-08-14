@@ -340,6 +340,7 @@ def regrade_targets(connection: sqlite3.Connection, limit: int):
         "SELECT query, domain FROM domain_lookups"
         " WHERE method = 'name-strong' AND evidence NOT LIKE '%, but no %'"
         "   AND evidence NOT LIKE '% and ''%'"
+        "   AND evidence NOT LIKE '%[unreachable at regrade]'"
         " ORDER BY checked_at LIMIT ?",
         (limit,),
     ).fetchall()
@@ -373,7 +374,15 @@ def regrade(
         except Exception:  # noqa: BLE001 -- one hostile host must not stop the pass
             return None
         if hit is None:
-            return None  # unreachable today says nothing about the old grade
+            # Unreachable today says nothing about yesterday's evidence, so the
+            # grade and the domain both stand. The attempt is still recorded:
+            # without it the row keeps matching `regrade_targets` and the pass
+            # re-fetches the same dead hosts on every run instead of
+            # converging. 3,422 rows sat in exactly that loop.
+            return Lookup(
+                row["query"], row["domain"], "name-strong",
+                f"{row['evidence']} [unreachable at regrade]",
+            )
         _, strength, evidence = hit
         method = "name-strong" if strength == "strong" else "name-weak"
         return Lookup(row["query"], row["domain"], method, evidence)

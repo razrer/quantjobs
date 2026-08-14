@@ -85,6 +85,7 @@ class CorroborationTest(unittest.TestCase):
                 ("Old Grade Ltd", "old.com", "https://old.com/ names 'old grade'"),
                 ("Kept Ltd", "kept.com", "https://kept.com/ names 'kept' and 'ltd'"),
                 ("Demoted Ltd", "no.com", "https://no.com/ names 'x', but no y"),
+                ("Dead Ltd", "dead.com", "https://dead.com/ names 'dead' [unreachable at regrade]"),
             ],
         )
 

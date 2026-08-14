@@ -43,7 +43,7 @@ nothing in the near-term plan now waits on a human.
 | 1 | Employer identity (entity resolution) | done |
 | 2 | Coverage audit harness | done |
 | 3 | Close audit-flagged gaps | done |
-| 4 | Layer 2 — domain resolution | **in progress** — queue empty, strong grade unsound |
+| 4 | Layer 2 — domain resolution | **done** — queue empty, every strong grade re-checked |
 | 4b | Switzerland (FINMA) | done |
 | 5 | Layer 2 — ATS resolution | **done** — 19,821 tiered, none left untiered |
 | 6 | Layer 3 — ATS extraction | **done** — all 10 formats landing, 16,124 jobs |
@@ -250,7 +250,7 @@ Replaced with two numbers that mean something:
 **Exit criterion:** every firm reported by a focus-region registry has been
 probed at least once, and the strong matches survive a manual read.
 
-**First half met, second half not.** `domains` now reports *nothing left to
+**Both halves now met.** `domains` now reports *nothing left to
 probe in the focus sources* — 55,000 firms looked at, 2,528 strong matches in
 the final pass alone. The second half is where it fails, and the failure is
 worth more than the number.
@@ -316,9 +316,19 @@ Two classes remain, both named rather than papered over:
   *bank* somewhere, so The Bank of Nova Scotia still grades strong. When the
   whole of a firm's identity is a place, nothing on the page can separate it
   from the place.
-- **Existing rows keep their old grade.** Corroboration needs the page text and
-  the page text is not stored, so the 6,223 strong matches already recorded are
-  graded under the old rule until something re-probes them.
+- **Existing rows have now been re-graded.** Corroboration needs the page text
+  and the page text is not stored, so the only way to revise a recorded grade
+  is to ask the host again. `domains --regrade` does that, oldest first:
+  **6,217 re-checked, 1,807 demoted to weak** — 29%, against the 31% the
+  80-match sample predicted. Nothing was deleted and no domain moved; Stage 5
+  tiers every domain regardless of grade, so a demoted row is still
+  fingerprinted and still polled.
+
+  The pass did not converge on its first design. An unreachable host left the
+  row untouched — right, because today's outage says nothing about yesterday's
+  evidence — but that also left it matching the queue, so 3,422 dead hosts were
+  queued for re-fetching on every future run. The attempt is now recorded in
+  the evidence while the grade and domain stand.
 
 ### The problem this stage exists to solve
 
