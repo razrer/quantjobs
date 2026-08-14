@@ -284,23 +284,41 @@ are ordinary English, and a page containing them proves nothing.** The rule
 tests whether the words are industry-generic, never whether they are
 *language*-generic.
 
-Three tightenings were considered and none is a tweak:
+### What was built: a fragment needs a second word
 
-1. Require the landed domain to share a token with the firm name. Catches the
-   PPG case and misses the other three — and it discards `PineBridge Global
-   Funds` → `metlife.com`, which this plan records as a *good* result, since
-   MetLife acquired PineBridge.
-2. Require the match in the title or footer rather than anywhere on the page.
-   `novascotia.com` says "Nova Scotia" in its title.
-3. Weight tokens by how often they appear across the 70,000 names in `firms`,
-   and demand the needle carry a rare one. This is the one that would work, and
-   it is a real piece of work rather than a condition to add.
+**Corpus frequency was the obvious fix and it does not work.** Weighting tokens
+by how often they appear across the 70,000 names in `firms` identifies words
+generic to *this industry*, which `_GENERIC` already does. It says nothing
+about *brown*, *scotia* or *seasons*, each of which is rare in a register of
+financial firms and ordinary in English. No corpus we hold answers the question
+being asked.
 
-Recording it rather than guessing at it, because a wrong domain is worse than
-no domain — it points Layer 3 at somebody else's careers page and the feed goes
-quietly wrong rather than visibly empty. The weak grade already holds back the
-one-word matches for this reason; the finding is that "strong" needs the same
-suspicion.
+What the fragment *discards* answers it instead. "Brown Brothers Harriman"
+throws away the word that identifies it, and the paint distributor's page has
+no reason to say *harriman*. So a fragment now grades strong only if at least
+one **distinctive** leftover token also appears on the page, anywhere; the
+evidence records which one, which is what makes the next manual read fast.
+
+*Distinctive* is doing real work there. The first version asked for any
+leftover identity token and demoted correct matches in bulk: fourteen Federated
+Hermes funds resolve to `federatedhermes.com`, which is right, and were demoted
+for not repeating *sdg*, *scsp* or *small cap* on the manager's homepage. A
+fund vehicle's product words are never on its manager's site.
+
+**Measured on 80 existing strong matches: 31% demote.** That number costs a
+reported figure and not one row of coverage — Stage 5 tiers every domain in
+`domain_lookups` regardless of grade, so a demoted domain is still fingerprinted
+and still polled. What changes is which matches claim to need no review.
+
+Two classes remain, both named rather than papered over:
+
+- **Place-name collisions survive.** `novascotia.com` really does print the word
+  *bank* somewhere, so The Bank of Nova Scotia still grades strong. When the
+  whole of a firm's identity is a place, nothing on the page can separate it
+  from the place.
+- **Existing rows keep their old grade.** Corroboration needs the page text and
+  the page text is not stored, so the 6,223 strong matches already recorded are
+  graded under the old rule until something re-probes them.
 
 ### The problem this stage exists to solve
 
@@ -492,11 +510,8 @@ silent — and the tier table reports them as the success they are not.
 | `pinpoint` | 7 |
 | `homerun`, `eightfold`, `varbi`, `join`, `jobylon` | 3–5 each |
 
-**Teamtailor is the one that matters here.** It is third-largest overall, ahead
-of BambooHR and Ashby, and it is the system this project singled out as
-load-bearing: without it Stockholm and Copenhagen are not exhaustive, because
-no generic scraper covers the Nordic group. Thirty-three resolved Nordic boards
-currently yield nothing.
+**Teamtailor is the one that mattered, and it is now built** — see Stage 6.
+Thirty-three resolved Nordic boards had been yielding nothing.
 
 `successfactors` (24) and `emply` (5) resolve with no usable token at all —
 their board identifier is not in the page markup the way the others' is, so
@@ -523,9 +538,35 @@ recorded here for a later stage instead of being bolted on now.
 endpoint shape, so this is one small function per format rather than one scraper
 per firm. That is the payoff the employer-first architecture was bought for.
 
-Ten formats implemented and verified against live boards: **greenhouse, lever,
-ashby, smartrecruiters, workable, recruitee, bamboohr, breezy, personio,
-workday**. First run: **473 postings from 30 boards across 8 formats.**
+Eleven formats implemented and verified against live boards: **greenhouse,
+lever, ashby, smartrecruiters, workable, recruitee, bamboohr, breezy, personio,
+teamtailor, workday**. First run: **473 postings from 30 boards across 8
+formats.**
+
+### Teamtailor, added last and wanted first
+
+Teamtailor is why the Nordic group was fingerprinted at all: it is what
+Stockholm and Copenhagen mid-market firms hire through, no generic scraper
+covers it, and thirty-three boards sat resolved and unpolled without it.
+
+Its public feed comes in two shapes and the tidier one is the wrong one.
+`/jobs.json` is a clean JSON Feed 1.1 — and carries **no location and no
+department**, which for a project that ranks on geography makes a Nordic
+posting indistinguishable from noise in a US-dominated table. `/jobs.rss`
+carries both, under Teamtailor's own `tt:` namespace, so that is what the
+extractor parses.
+
+Two things worth knowing about that feed:
+
+- **`tt:` is a namespace.** A plain `find("tt:city")` silently returns nothing,
+  and every Nordic posting loses the one field it is ranked on. Pinned by test.
+- **An empty `<channel>` is a true answer.** ABG Sundal Collier returns zero
+  items with HTTP 200 because it has no openings, which is exactly the shape
+  principle 2 treats as a failure elsewhere. Here it is not one, and the test
+  says so.
+
+First run against live boards: Pareto Securities 13, TF Bank 43, Breega 8 —
+including an *Internship, Equity Research* in Frankfurt.
 
 Postings land in `jobs`, unclassified. Whether a posting is a quant role is a
 read-time question — titles are not comparable across firms ("Strat" at Goldman,

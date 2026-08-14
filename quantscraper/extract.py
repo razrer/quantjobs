@@ -28,6 +28,7 @@ import re
 import sqlite3
 import urllib.error
 import urllib.parse
+import xml.etree.ElementTree as ElementTree
 from collections.abc import Callable
 
 from . import db, http
@@ -263,6 +264,58 @@ def personio(token: str) -> list[Job]:
     ]
 
 
+# Teamtailor's own RSS extension. The plain JSON feed at `/jobs.json` is
+# tidier, but it carries no location and no department, and this project ranks
+# on geography -- so the feed with the extra fields is the one worth parsing.
+_TT = "{https://teamtailor.com/locations}"
+
+
+def _tt_location(item: ElementTree.Element) -> str | None:
+    """City and country from a `tt:locations` block, which is often empty."""
+    parts: list[str] = []
+    for location in item.iterfind(f"{_TT}locations/{_TT}location"):
+        for tag in ("name", "city", "country"):
+            value = (location.findtext(f"{_TT}{tag}") or "").strip()
+            if value and value not in parts:
+                parts.append(value)
+    return ", ".join(parts) or None
+
+
+def teamtailor(token: str) -> list[Job]:
+    """Teamtailor's public RSS.
+
+    Teamtailor is why the Nordic group was fingerprinted in the first place:
+    it is what Stockholm and Copenhagen mid-market firms hire through, and no
+    generic scraper covers it. An empty `<channel>` is a real answer here --
+    a firm with no openings -- so zero items is not treated as a failure.
+    """
+    body = http.get(f"https://{token}.teamtailor.com/jobs.rss", timeout=25, retries=2)
+    channel = ElementTree.fromstring(body).find("channel")
+    if channel is None:
+        raise ValueError(f"teamtailor board {token!r} served no channel")
+
+    jobs: list[Job] = []
+    for item in channel.iterfind("item"):
+        link = (item.findtext("link") or "").strip()
+        guid = (item.findtext("guid") or "").strip()
+        if not guid and not link:
+            continue
+        jobs.append(
+            Job(
+                ats="teamtailor",
+                token=token,
+                job_id=guid or link,
+                title=(item.findtext("title") or "").strip(),
+                url=link or None,
+                location=_tt_location(item),
+                department=(item.findtext(f"{_TT}department") or "").strip() or None,
+                posted_at=(item.findtext("pubDate") or "").strip() or None,
+                description=_text(item.findtext("description")),
+            )
+        )
+    return jobs
+
+
 def workday(token: str) -> list[Job]:
     """Workday CXS. `token` is `tenant|wdN|site` -- see `ats.py`."""
     parts = token.split("|")
@@ -325,6 +378,7 @@ EXTRACTORS: dict[str, Callable[[str], list[Job]]] = {
     "bamboohr": bamboohr,
     "breezy": breezy,
     "personio": personio,
+    "teamtailor": teamtailor,
     "workday": workday,
 }
 

@@ -183,6 +183,32 @@ def _needles(normalized: str) -> list[tuple[str, str]]:
     return [(needle, strength) for needle, strength in needles if len(needle) > 3]
 
 
+def _corroborators(normalized: str, needle: str) -> list[str]:
+    """Identity tokens the needle leaves out.
+
+    A two-word fragment is 74% of every strong match, and it is where the
+    grade fails: *brown brothers*, *nova scotia* and *four seasons* are
+    ordinary English, so a page containing one proves nothing. `_GENERIC`
+    only ever asked whether a word is generic to the *industry*, never
+    whether it is generic to the *language*, and no list of finance words
+    can answer the second question.
+
+    What the fragment discards is the answer. "Brown Brothers Harriman"
+    throws away the word that identifies it, and the paint distributor's page
+    that owns *brown brothers* has no reason to say *harriman*.
+
+    Only *distinctive* leftovers count. Demanding an industry word back --
+    "Partners Group Life II (EUR) S.C.A., SICAV" wanting *life* on
+    `partnersgroup.com` -- downgrades correct matches wholesale, because a
+    fund vehicle's structure words appear nowhere on its manager's site.
+    Short tokens are skipped too: a page matching "ii" or "sa" is chance.
+    """
+    tokens = [token for token in normalized.split() if token]
+    _, distinctive = _token_sets(tokens)
+    used = set(needle.split())
+    return [t for t in distinctive if t not in used and len(t) > 2]
+
+
 def verify(candidate: str, normalized: str) -> tuple[str, str, str] | None:
     """Fetch `candidate` and decide whether it belongs to this firm.
 
@@ -204,13 +230,28 @@ def verify(candidate: str, normalized: str) -> tuple[str, str, str] | None:
 
         for needle, strength in _needles(normalized):
             # Padded, so "marex" does not match "marexpo".
-            if f" {needle} " in text:
-                # Record where we landed, not where we knocked.
-                return (
-                    domain_of(landed) or candidate,
-                    strength,
-                    f"{landed} names {needle!r}",
-                )
+            if f" {needle} " not in text:
+                continue
+
+            # A fragment needs a second, independent word from the name
+            # somewhere on the page. Without one the grade is weak: held with
+            # its evidence, not counted, and not handed to Layer 3.
+            note = ""
+            rest = _corroborators(normalized, needle)
+            if strength == "strong" and rest:
+                found = next((t for t in rest if f" {t} " in text), None)
+                if found is None:
+                    strength = "weak"
+                    note = f", but no {'/'.join(rest[:3])}"
+                else:
+                    note = f" and {found!r}"
+
+            # Record where we landed, not where we knocked.
+            return (
+                domain_of(landed) or candidate,
+                strength,
+                f"{landed} names {needle!r}{note}",
+            )
     return None
 
 
