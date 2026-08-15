@@ -80,6 +80,23 @@ class RelevanceTest(unittest.TestCase):
                     _tags(title=title, department="Trading")["relevance"], {"rejected"}
                 )
 
+    def test_a_domain_word_beside_a_desk_word_demotes_rather_than_rejects(self):
+        """"Credit Risk Quant" is quant work; "Credit Risk Operations (Debt
+        Collections)" is a collections job, and only the qualifier tells them
+        apart. The second reached the shortlist as apply_now.
+
+        Demoted, not rejected: a missed posting is the expensive failure, so
+        it stays readable at a lower rank."""
+        tags = _tags(title="Associate, Credit Risk Operations (Debt Collections)")
+
+        self.assertEqual(tags["relevance"], {"adjacent"})
+        self.assertNotIn("apply_now", tags["fit"])
+
+    def test_an_unambiguous_quant_word_is_not_demoted_by_one(self):
+        self.assertEqual(
+            _tags(title="Credit Risk Quant, Operations")["relevance"], {"core"}
+        )
+
     def test_a_quant_title_outranks_a_desk_word(self):
         self.assertEqual(
             _tags(title="Quantitative Researcher, Trading Operations")["relevance"],

@@ -35,7 +35,7 @@ from . import db
 # Bump on every lexicon change: the diff between two versions over the same
 # corpus is a free regression test, and it is the only way to tell "the
 # classifier improved" from "the market moved".
-TAGGER = 10
+TAGGER = 11
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS job_tags (
@@ -136,8 +136,9 @@ _QUANT_CORE_TITLE = (
 _DESK_ADJACENT = (
     "trading operations", "trading services", "trading support",
     "middle office", "back office", "settlements", "reconciliation",
-    "trade support", "operations analyst", "recruiter", "recruitment",
-    "sales trader", "client service", "compliance",
+    "trade support", "operations analyst", "operations", "recruiter",
+    "recruitment", "sales trader", "client service", "compliance",
+    "debt collections", "collections", "underwriting",
 )
 
 _QUANT_ADJACENT = (
@@ -577,7 +578,15 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
     # throughout. It is the title winning where the two disagree about what
     # the job *is*.
     title = fold(row["title"], row["department"])
-    core = _hit(title, _QUANT_CORE + _QUANT_CORE_TITLE)
+    # Two grades of core needle, because a desk word qualifies one and not the
+    # other. `_QUANT_CORE` is unambiguous -- nothing called *quantitative* or
+    # *statistical arbitrage* is an ops role. `_QUANT_CORE_TITLE` names a
+    # *domain*: "Credit Risk Quant" is quant work and "Credit Risk Operations
+    # (Debt Collections)" is a collections job, and only the qualifier tells
+    # them apart. That one reached the shortlist as `apply_now`.
+    certain = _hit(title, _QUANT_CORE)
+    domain_only = _hit(title, _QUANT_CORE_TITLE)
+    core = certain or domain_only
     adjacent = _hit(title, _QUANT_ADJACENT)
     desk = _hit(title, _DESK_ADJACENT)
 
@@ -585,6 +594,11 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
         # "Trading Operations Engineer" is not a trading role, and neither is
         # "Campus Recruiter" filed under a Trading department.
         add("relevance", "rejected", f"desk support: {desk!r}")
+    elif desk and not certain:
+        # A desk word beside a domain word demotes, it does not reject. A
+        # missed posting is the expensive failure here, so `Algorithmic Sales
+        # Trader` stays readable at a lower rank rather than disappearing.
+        add("relevance", "adjacent", f"{domain_only!r} qualified by {desk!r}")
     elif core:
         add("relevance", "core", f"title {core!r}")
     elif rejecting:
