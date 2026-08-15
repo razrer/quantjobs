@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import datetime, timezone
 
 from . import (
     alerts, ats, audit, coverage, db, domains, extract, fca, jobstream, pages,
@@ -151,10 +152,15 @@ def _jobs(database: str, limit: int) -> int:
     return 0
 
 
-def _jobstream(database: str) -> int:
+def _jobstream(database: str, since_text: str | None = None) -> int:
     connection = db.connect(database)
-    since = jobstream.cursor(connection)
-    seen, written, withdrawn = jobstream.run(connection)
+    override = (
+        datetime.fromisoformat(since_text).replace(tzinfo=timezone.utc)
+        if since_text
+        else None
+    )
+    since = override or jobstream.cursor(connection)
+    seen, written, withdrawn = jobstream.run(connection, override)
     print(
         f"polled JobStream from {since:%Y-%m-%d %H:%M} UTC: "
         f"{seen:,d} changes, {written:,d} written, {withdrawn:,d} withdrawn"
@@ -261,7 +267,7 @@ def _list(database: str, args) -> int:
         "hub": split(args.hub),
         "relevance": split(args.relevance),
         "seniority": split(args.seniority),
-        "role_family": split(args.role),
+        "role_class": split(args.role),
         "language": split(args.language),
     }
     exclude = {
@@ -394,8 +400,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     jobs_command.add_argument("--limit", type=int, default=100)
 
-    commands.add_parser(
+    jobstream_command = commands.add_parser(
         "jobstream", help="poll Sweden's JobTech delta feed (Layer 4)"
+    )
+    jobstream_command.add_argument(
+        "--since",
+        help="replay from this UTC timestamp instead of the stored cursor,"
+        " e.g. 2026-08-12 -- for backfilling a newly added column",
     )
 
     pages_command = commands.add_parser(
@@ -450,7 +461,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "alerts":
         return _alerts(args.db)
     if args.command == "jobstream":
-        return _jobstream(args.db)
+        return _jobstream(args.db, args.since)
     if args.command == "jobs":
         return _jobs(args.db, args.limit)
     if args.command == "ats":

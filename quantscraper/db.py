@@ -42,11 +42,14 @@ CREATE TABLE IF NOT EXISTS jobs (
     token        TEXT NOT NULL,   -- that ATS's board identifier
     job_id       TEXT NOT NULL,   -- the ATS's own posting id
     domain       TEXT,            -- firm domain this board was reached from
+    employer     TEXT,            -- advertiser as the source named it, where
+                                  -- the board is not the firm's own (JobStream)
     title        TEXT NOT NULL,
     url          TEXT,
     location     TEXT,
     department   TEXT,
     posted_at    TEXT,
+    deadline     TEXT,            -- closing date, only where the source states one
     description  TEXT,
     removed_at   TEXT,            -- withdrawn by the employer; never deleted
     first_seen   TEXT NOT NULL,
@@ -88,7 +91,11 @@ def connect(path: Path | str = DEFAULT_PATH) -> sqlite3.Connection:
 # Columns added after `jobs` already existed somewhere. `CREATE TABLE IF NOT
 # EXISTS` is a no-op on an existing table, so a new column has to be added
 # explicitly or every install predating it reads as corrupt.
-_ADDED_COLUMNS = (("jobs", "removed_at", "TEXT"),)
+_ADDED_COLUMNS = (
+    ("jobs", "removed_at", "TEXT"),
+    ("jobs", "deadline", "TEXT"),
+    ("jobs", "employer", "TEXT"),
+)
 
 
 def _migrate(connection: sqlite3.Connection) -> None:
@@ -161,11 +168,13 @@ def upsert_jobs(
             job.token,
             job.job_id,
             domain,
+            job.employer,
             job.title,
             job.url,
             job.location,
             job.department,
             job.posted_at,
+            job.deadline,
             job.description,
             timestamp,
             timestamp,
@@ -175,16 +184,21 @@ def upsert_jobs(
     with connection:
         connection.executemany(
             """
-            INSERT INTO jobs (ats, token, job_id, domain, title, url, location,
-                              department, posted_at, description,
-                              first_seen, last_seen)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO jobs (ats, token, job_id, domain, employer, title, url,
+                              location, department, posted_at, deadline,
+                              description, first_seen, last_seen)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (ats, token, job_id) DO UPDATE SET
+                employer    = COALESCE(excluded.employer, jobs.employer),
                 title       = excluded.title,
                 url         = excluded.url,
                 location    = excluded.location,
                 department  = excluded.department,
                 posted_at   = excluded.posted_at,
+                -- An employer moving its closing date must move ours, so a new
+                -- value wins; a source that simply stopped publishing one must
+                -- not silently erase a date we already showed, so NULL loses.
+                deadline    = COALESCE(excluded.deadline, jobs.deadline),
                 description = COALESCE(excluded.description, jobs.description),
                 last_seen   = excluded.last_seen
             """,

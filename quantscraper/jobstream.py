@@ -94,6 +94,10 @@ def _job(ad: dict) -> Job:
         token=TOKEN,
         job_id=str(ad["id"]),
         title=ad.get("headline") or "",
+        # A national feed advertises for everyone, and only half of its ads
+        # carry an employer URL we can resolve to a domain. Without the name
+        # the other half are postings from nobody.
+        employer=employer.get("name") or employer.get("workplace"),
         url=ad.get("webpage_url"),
         location=", ".join(
             part
@@ -104,6 +108,10 @@ def _job(ad: dict) -> Job:
         # The taxonomy label, not a guess. Classification stays a read-time job.
         department=occupation.get("label"),
         posted_at=ad.get("publication_date"),
+        # The only source in the pipeline that publishes a closing date as a
+        # field rather than as prose. Every ad carries one, which is what makes
+        # the board's deadline ordering real instead of decorative.
+        deadline=ad.get("application_deadline"),
         description=ad.get("description", {}).get("text")
         if isinstance(ad.get("description"), dict)
         else ad.get("description"),
@@ -136,10 +144,19 @@ def apply(connection: sqlite3.Connection, ads: list[dict]) -> tuple[int, int, in
     return written, len(gone), latest
 
 
-def run(connection: sqlite3.Connection) -> tuple[int, int, int]:
-    """One delta poll. Returns (ads seen, written, withdrawn)."""
+def run(
+    connection: sqlite3.Connection, since: datetime | None = None
+) -> tuple[int, int, int]:
+    """One delta poll. Returns (ads seen, written, withdrawn).
+
+    `since` overrides the stored cursor to replay a window already polled. That
+    is what a new column needs: the ads are held but the field was dropped on
+    the way in, and re-reading the feed is one request against a source that is
+    designed for exactly this. Replay is safe -- every write is an idempotent
+    upsert, and the cursor only ever moves to the newest timestamp seen.
+    """
     connection.executescript(SCHEMA)
-    since = cursor(connection)
+    since = since or cursor(connection)
     ads = fetch(since)
     if not ads:
         return 0, 0, 0

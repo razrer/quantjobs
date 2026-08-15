@@ -35,7 +35,7 @@ from . import db
 # Bump on every lexicon change: the diff between two versions over the same
 # corpus is a free regression test, and it is the only way to tell "the
 # classifier improved" from "the market moved".
-TAGGER = 9
+TAGGER = 10
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS job_tags (
@@ -65,6 +65,12 @@ _SYMBOLS = (
     ("f#", " fsharp "),
     ("q/kdb", " kdb "),
     ("kdb+", " kdb "),
+    # `Ph.D.` folds to the two tokens "ph d", so every needle spelled `phd`
+    # silently missed the postings that punctuate it -- which is most of them.
+    # Folded here so both spellings reach the lexicon as one word.
+    ("ph.d", " phd "),
+    ("ph. d", " phd "),
+    ("d.phil", " phd "),
 )
 
 
@@ -75,6 +81,18 @@ def fold(*parts: str | None) -> str:
     for symbol, replacement in _SYMBOLS:
         text = text.replace(symbol, replacement)
     return " " + " ".join(re.sub(r"[^a-z0-9+#]+", " ", text).split()) + " "
+
+
+def _terms(*phrases: str) -> tuple[str, ...]:
+    """Fold needles the same way the text is folded, once, at import.
+
+    A needle carrying punctuation or a diacritic can never match otherwise:
+    `fold` strips `ç` and `ß` outright, so a hand-written "français courant"
+    is a needle that cannot fire and looks exactly like one that never
+    matched. Folding both sides is the same discipline `domains.py` learned
+    when it compared a normalized firm name against raw page text.
+    """
+    return tuple(fold(phrase).strip() for phrase in phrases)
 
 
 def _hit(text: str, needles: tuple[str, ...]) -> str | None:
@@ -129,57 +147,206 @@ _QUANT_ADJACENT = (
     "risk analyst", "analytics", "research engineer", "datavetenskap",
 )
 
-_ROLE_FAMILY = {
-    "research": (
-        "research", "researcher", "alpha research", "signal research",
-        "forskning", "onderzoek", "recherche",
+# What kind of job this is, as **one** value rather than a set.
+#
+# It replaces `role_family`, which was multi-valued and therefore said almost
+# nothing: a single Schonfeld posting came back as research *and* trading *and*
+# quant_dev *and* risk *and* execution *and* portfolio_construction *and*
+# strategist, because every one of those words appears somewhere in a long
+# body. Seven values is not a classification, it is a word count.
+#
+# Order is the priority and it carries two deliberate decisions:
+#
+# - `operations` runs first so "Trading Operations Analyst" is operations
+#   rather than trading. The desk's name is not the role's name -- the same
+#   rule that stopped `Trading Operations Engineer` scoring as a trading role.
+# - `quant_dev` runs before `quant_research` so a title naming both -- and
+#   `Quantitative Research / Developer` is a real posting, folding to
+#   "research developer" -- lands on the building half. A title that says only
+#   *researcher* still falls through to `quant_research` on the next line.
+_ROLE_CLASS = {
+    "operations": _terms(
+        "trading operations", "trade operations", "trading services",
+        "trade support", "trading support", "middle office", "back office",
+        "settlements", "reconciliation", "reconciliations", "trade lifecycle",
+        "operations analyst", "operations associate", "trade capture",
+        "corporate actions", "post trade", "handelsstod",
     ),
-    "trading": (
-        "trader", "trading", "market making", "market maker", "handelaar",
-        "handlare", "haendler",
-    ),
-    "quant_dev": (
+    "quant_dev": _terms(
         "quant developer", "quantitative developer", "quant dev",
-        "software engineer", "developer", "utvecklare", "ontwikkelaar",
-        "engineer", "programmer",
+        "research developer", "research engineer", "quantitative engineer",
+        "quant engineer", "strat", "strats", "trading systems",
+        "trading technology", "low latency engineer", "forward deployed",
     ),
-    "risk": ("risk", "risiko", "risico", "risque", "riskhantering"),
-    "model_validation": ("model validation", "model risk", "validation"),
-    "data_science": ("data scientist", "data science", "machine learning"),
-    "portfolio_construction": ("portfolio construction", "portfolio manager"),
-    "execution": ("execution", "algo execution", "transaction cost"),
-    "strategist": ("strategist", "strat", "strats", "strateg"),
+    "quant_research": _terms(
+        "quantitative research", "quantitative researcher", "quantitative analyst",
+        "quant researcher", "quant research", "quant analyst",
+        "alpha research", "signal research", "alpha generation",
+        "model validation", "model risk", "derivatives pricing",
+        "pricing models", "quantitative strategies", "financial engineering",
+        "econometrics", "econometrician", "statistician",
+        "researcher", "research analyst", "kvantitativ analytiker",
+        "kvantitativ", "forskning", "onderzoek", "recherche",
+    ),
+    "trading": _terms(
+        "trader", "trading", "market making", "market maker",
+        "handelaar", "handlare", "haendler", "portfolio trading",
+    ),
+    "portfolio_management": _terms(
+        "portfolio manager", "portfolio management", "portfolio construction",
+        "asset allocation", "investment manager", "fund manager",
+        "portfolio analyst",
+    ),
+    "risk": _terms(
+        "market risk", "credit risk", "risk analyst", "risk manager",
+        "risk management", "counterparty risk", "risk analytics",
+        "riskhantering", "risico", "risiko",
+    ),
+    "data_science": _terms(
+        "data scientist", "data science", "machine learning", "deep learning",
+        "datavetenskap",
+    ),
+    "engineering": _terms(
+        "software engineer", "software developer", "developer", "programmer",
+        "platform engineer", "infrastructure engineer", "data engineer",
+        "devops", "site reliability", "utvecklare", "ontwikkelaar",
+        "systemutvecklare", "engineer",
+    ),
 }
 
-# `student_only` is its own bucket rather than a flavour of intern: the user
-# has graduated, so a posting demanding a *future* graduation date is noise --
-# and it is noise a title never announces.
+# Where the role sits, which the title almost never says and the body almost
+# always does. This is the dimension that separates two postings the title
+# cannot: `Quantitative Trading Associate` reads like a desk seat and its body
+# is market-hours oversight, runbooks, incident response and position
+# reconciliation -- middle office wearing a quant title.
+#
+# `front_office` is checked **first** on purpose. A front-office posting names
+# middle-office machinery all the time -- a trading-floor STRAT role asks for a
+# "grasp of trade-lifecycle workflows" -- while the reverse is rare, so the
+# specific claim ("you will sit on the trading floor") has to win over the
+# incidental mention.
+_DESK = {
+    "front_office": _terms(
+        "front office", "trading floor", "trading desk", "on the desk",
+        "revenue generating", "sit with the traders", "sit on the desk",
+        "sits with the portfolio managers", "risk taking", "own a book",
+        "market facing", "handelsgolv",
+    ),
+    "middle_office": _terms(
+        "middle office", "trade support", "trading support", "trade lifecycle",
+        "reconciliation", "reconciliations", "position reconciliation",
+        "incident response", "runbook", "runbooks", "trade capture",
+        "collateral management", "operational oversight", "control thresholds",
+        "trading operations", "operational runbooks", "p l production",
+        "break resolution", "trade breaks",
+    ),
+    "back_office": _terms(
+        "back office", "settlements", "settlement processing", "custody",
+        "clearing operations", "corporate actions", "fund accounting",
+        "transfer agency", "post trade processing", "static data",
+    ),
+}
+
+# **`intern` is no longer a rank**, and one posting is the whole argument.
+# Schonfeld's `Quantitative Research / Developer - Intern` demands "2-3 years
+# buy- or sell-side experience" and converts to full time; it is an internship
+# *contract* wrapped around a mid-level *bar*. The old ladder had `intern` as
+# a seniority value, so it swallowed that posting whole and reported the rank
+# as "intern" while the body asked for three years.
+#
+# So the two facts are now stored separately, as they always should have been:
+#
+# - **is it an internship** -- `contract: internship`, which already existed
+# - **what does it demand** -- `seniority`, which now always carries a level
+#
+# `student_intern` stays in the ladder because it is genuinely a rank: a
+# posting requiring a *future* graduation date is unreachable for someone who
+# has already graduated, whatever else it says.
 _SENIORITY = {
     # Specific phrases only. A bare "student" or "students" fired on any body
     # that merely welcomes them, and marked a full-time PhD-level research
     # role at Radix Trading as student-only.
-    "student_only": (
+    "student_intern": _terms(
         "currently enrolled", "must be enrolled", "final year student",
         "final year students", "penultimate year", "still studying",
         "graduating in 2027", "graduating in 2028", "graduating in 2029",
         "expected graduation", "pursuing a degree", "studerande vid",
     ),
-    "intern": ("intern", "internship", "praktik", "stage", "praktikant"),
-    "new_grad": (
-        "graduate programme", "graduate program", "new grad", "campus hire",
-        "traineeprogram", "trainee",
-    ),
-    "head_or_md": (
+    "head_or_md": _terms(
         "head of", "managing director", "chief", "partner", "global head",
         "director of",
     ),
-    "lead": ("lead", "principal", "staff engineer", "team lead"),
-    "senior_6_10": (
+    "lead": _terms("lead", "principal", "staff engineer", "team lead"),
+    "senior_6_10": _terms(
         "senior", "vp", "vice president", "erfaren", "associate director",
         "executive director", "avp",
     ),
-    "junior_0_2": ("junior", "associate", "entry level", "graduate"),
+    # `graduate` moved up from `junior_0_2`. In a *title* it names the intake
+    # -- `Graduate Trader`, `Graduate Programme` -- and a graduate scheme is a
+    # different prospect from a job wanting two years, which is exactly the
+    # distinction the ladder exists to draw. Only 168 postings in 55,455 read
+    # `new_grad` before this, against 3,174 `junior_0_2`.
+    "new_grad": _terms(
+        "graduate programme", "graduate program", "new grad", "campus hire",
+        "traineeprogram", "trainee", "graduate", "graduates", "nyexaminerad",
+    ),
+    "junior_0_2": _terms("junior", "associate", "entry level"),
+    "mid_3_5": _terms("mid level", "experienced hire"),
 }
+
+# A number attached to "years of experience" is the least ambiguous statement a
+# body ever makes, and it is why `PLAN.md`'s "the rank is in the title" rule
+# needs one carve-out rather than an exception.
+#
+# That rule was written against *stray words*: a body saying "you report to the
+# Head of Trading" made `Graduate Trader` a `head_or_md` posting, because the
+# words describe somebody else's rank. A years figure is not that -- it is the
+# posting stating its own bar, and where it disagrees with the title the title
+# is simply wrong. `Quantitative Trading Associate` says associate and asks for
+# "3+ years"; `Quantitative Research / Developer - Intern` says intern and asks
+# for "2-3 years". Both are mid, and only the body knows.
+_YEARS = (
+    # "3+ years". `+` survives folding precisely so this can be read.
+    re.compile(r" (\d{1,2}) *\+ *(?:years|yrs|year) "),
+    re.compile(r" (?:at least|minimum|minimum of|min|over) (\d{1,2}) (?:years|yrs) "),
+    # "2-3 years" and "2 to 3 years": the floor is the smaller number.
+    re.compile(r" (\d{1,2}) (?:to|or) (\d{1,2}) (?:years|yrs) "),
+    re.compile(r" (\d{1,2}) (\d{1,2}) (?:years|yrs) "),
+    re.compile(
+        r" (\d{1,2}) (?:years|yrs)(?: of)?"
+        r"(?: relevant| professional| work| industry| prior)? experience "
+    ),
+)
+MAX_YEARS = 30  # above this it is a date, a salary band or a typo
+
+
+def experience_floor(text: str) -> int | None:
+    """The smallest number of years the text demands, or None.
+
+    Smallest, because a posting saying "3+ years, 5+ preferred" has a floor of
+    three and the preference is not a bar. Same asymmetry as everywhere else
+    here: over-stating what a posting requires costs a real opening.
+    """
+    found = [
+        int(group)
+        for pattern in _YEARS
+        for match in pattern.finditer(text)
+        for group in match.groups()
+        if group and int(group) <= MAX_YEARS
+    ]
+    return min(found) if found else None
+
+
+# Where a stated floor puts the posting on the ladder. Only ever consulted for
+# the grades a number can actually settle -- a floor never turns a posting into
+# `head_or_md`, `lead` or `student_intern`, because those are structural facts
+# about the role rather than a length of service.
+_FLOOR_RANK = ((6, "senior_6_10"), (3, "mid_3_5"), (0, "junior_0_2"))
+# `new_grad` is left out with the structural grades. A graduate scheme is a
+# graduate scheme whatever stray number its body carries, and the asymmetry
+# points one way: preserving it costs a few seconds of reading, overriding it
+# to `senior_6_10` drops the posting out of the shortlist entirely.
+_FLOOR_DECIDES = frozenset({"junior_0_2", "mid_3_5", "senior_6_10", "unknown"})
 
 # The ladder the user actually cares about. 4 and 5 down-rank, never drop:
 # `CLAUDE.md` is explicit that many quant-dev roles list C++ second and fit.
@@ -228,18 +395,76 @@ _HORIZON = {
 # market each gate costs. "Half of Amsterdam wants no sponsorship" is worth
 # knowing as a number, not as an empty result list.
 _HARD_GATES = {
-    "phd_required": ("phd required", "phd is required", "must hold a phd", "doctorate required"),
-    "visa_sponsorship_none": (
+    # Education is read **only** when a doctorate is compulsory. Everything
+    # softer -- "PhD preferred", "MSc or PhD", "advanced degree a plus" -- is
+    # not a gate and is deliberately not tagged: a degree preference is how
+    # every quantitative posting on earth is written, so tagging it would
+    # produce a dimension that fires on the whole corpus and separates nothing.
+    "phd_required": _terms(
+        "phd required", "phd is required", "phd is a requirement",
+        "must hold a phd", "must have a phd", "requires a phd",
+        "phd mandatory", "phd degree required", "doctorate required",
+        "doctorate is required", "phd essential",
+    ),
+    "visa_sponsorship_none": _terms(
         "no visa sponsorship", "not able to sponsor", "unable to sponsor",
         "without sponsorship", "must have the right to work",
     ),
-    "security_clearance": ("security clearance", "clearance required"),
-    "local_language_required": (
-        "fluent in swedish", "fluent in danish", "fluent in dutch",
-        "fluent in german", "flytande svenska", "vloeiend nederlands",
-        "dansk pa modersmalsniveau",
-    ),
-    "onsite_only": ("onsite only", "fully onsite", "in office five days", "no remote"),
+    "security_clearance": _terms("security clearance", "clearance required"),
+    "onsite_only": _terms(
+        "onsite only", "fully onsite", "in office five days", "no remote"),
+}
+
+# Checked before the gate above, and it has to be: matching is on token runs,
+# so " no phd required " *contains* " phd required " and a posting saying the
+# opposite of the gate would otherwise trip it.
+_PHD_NOT_REQUIRED = _terms(
+    "no phd required", "phd not required", "phd is not required",
+    "phd is not a requirement", "without a phd", "phd or equivalent experience",
+)
+
+# A soft filter, not a gate. The user reads and writes English and Swedish, so
+# a posting demanding either is not filtered by language at all -- which is why
+# neither appears here, and why the old `local_language_required` gate was
+# wrong: it flagged "flytande svenska" on Stockholm postings, the one hub the
+# project cares most about, as though it were an obstacle.
+#
+# Multi-valued, because Hong Kong asks for two. Requirement phrasing only: a
+# posting that merely *offers* language classes is not asking for one.
+_SPOKEN_REQUIRED = {
+    "dutch": _terms(
+        "fluent in dutch", "dutch is required", "dutch fluency", "native dutch",
+        "dutch speaking", "vloeiend nederlands", "nederlands is vereist"),
+    "german": _terms(
+        "fluent in german", "german is required", "german fluency",
+        "native german", "verhandlungssicher", "gute deutschkenntnisse",
+        "deutsch erforderlich"),
+    "danish": _terms(
+        "fluent in danish", "danish is required", "native danish",
+        "dansk pa modersmalsniveau", "flydende dansk"),
+    "norwegian": _terms(
+        "fluent in norwegian", "norwegian is required", "native norwegian",
+        "flytende norsk"),
+    "finnish": _terms(
+        "fluent in finnish", "finnish is required", "native finnish"),
+    "french": _terms(
+        "fluent in french", "french is required", "french fluency",
+        "native french", "francais courant"),
+    "mandarin": _terms(
+        "fluent in mandarin", "mandarin is required", "native mandarin",
+        "fluent in chinese", "mandarin chinese is required", "putonghua",
+        "fluency in mandarin"),
+    "cantonese": _terms(
+        "fluent in cantonese", "cantonese is required", "native cantonese",
+        "fluency in cantonese"),
+    "japanese": _terms(
+        "fluent in japanese", "japanese is required", "native japanese"),
+    "spanish": _terms(
+        "fluent in spanish", "spanish is required", "native spanish"),
+    "italian": _terms(
+        "fluent in italian", "italian is required", "native italian"),
+    "portuguese": _terms(
+        "fluent in portuguese", "portuguese is required", "native portuguese"),
 }
 
 _CONTRACT = {
@@ -302,7 +527,7 @@ class Tag:
 def _first(mapping: dict[str, tuple[str, ...]], text: str) -> tuple[str, str] | None:
     """First bucket whose lexicon hits, in the mapping's own order.
 
-    Order is the priority: `student_only` before `intern`, `hardware` before
+    Order is the priority: `head_or_md` before `junior_0_2`, `hardware` before
     `systems`. A dict preserves it, so the lexicon reads as the ladder it is.
     """
     for value, needles in mapping.items():
@@ -378,8 +603,17 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
     else:
         add("relevance", "unknown", None)
 
+    # One value, and from the title first. `_ROLE_CLASS` replaced the
+    # multi-valued `role_family` because seven values is a word count rather
+    # than a classification, and its order is the priority: `operations`
+    # before `trading` so "Trading Operations Analyst" is operations, and
+    # `quant_dev` before `quant_research` so a title naming both lands on the
+    # building half. Reading the title first is what makes that order mean
+    # anything -- over a long body every class matches something.
+    role = _first(_ROLE_CLASS, title) or _first(_ROLE_CLASS, text)
+    add("role_class", role[0] if role else "unknown", f"{role[1]!r}" if role else None)
+
     for dimension, mapping in (
-        ("role_family", _ROLE_FAMILY),
         ("asset_class", _ASSET_CLASS),
         ("horizon", _HORIZON),
         ("hard_gates", _HARD_GATES),
@@ -395,15 +629,15 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
     # Trader* a `head_or_md` posting, and one saying "work with senior
     # colleagues" made it `senior_6_10`. The rank is in the title.
     #
-    # `student_only` is the exception and is checked against the body first,
+    # `student_intern` is the exception and is checked against the body first,
     # because that is the only place it is ever written: no title announces
     # "must be graduating in 2028", which is exactly why it needs its own
     # bucket. Its needles are specific phrases for the same reason -- a bare
     # "students" tripped on bodies that merely welcome them.
-    gate = _hit(text, _SENIORITY["student_only"])
+    gate = _hit(text, _SENIORITY["student_intern"])
     rank = _first(_SENIORITY, title) or _first(_SENIORITY, text)
     if gate:
-        add("seniority", "student_only", f"{gate!r}")
+        add("seniority", "student_intern", f"{gate!r}")
     else:
         add("seniority", rank[0] if rank else "unknown", f"{rank[1]!r}" if rank else None)
 
@@ -470,7 +704,7 @@ def _fit(tags: list[Tag]) -> Tag:
             bucket, why = _CAP[bucket], f"{why}; outside the focus hubs"
         return Tag(*key, "fit", bucket, "weak", why)
 
-    if seniority == "student_only":
+    if seniority == "student_intern":
         return make("out_of_scope", "requires a future graduation date")
     if relevance == "rejected":
         return make("out_of_scope", f"excluded: {'/'.join(sorted(gates)) or 'no quant signal'}")
@@ -479,7 +713,7 @@ def _fit(tags: list[Tag]) -> Tag:
     # dimension. `CLAUDE.md` puts "too senior" on the exclude list.
     if seniority in ("head_or_md", "lead", "senior_6_10"):
         return make("stretch", f"seniority {seniority}")
-    if relevance == "core" and seniority in ("junior_0_2", "new_grad", "intern"):
+    if relevance == "core" and seniority in ("junior_0_2", "new_grad"):
         return make("apply_now", f"core quant, {seniority}, {hub}")
     if relevance == "core":
         if depth in ("systems", "hardware"):

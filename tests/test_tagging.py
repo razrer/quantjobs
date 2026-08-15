@@ -88,7 +88,7 @@ class RelevanceTest(unittest.TestCase):
 
 
 class SeniorityTest(unittest.TestCase):
-    def test_student_only_is_not_a_flavour_of_intern(self):
+    def test_a_graduation_gate_is_its_own_bucket(self):
         """The user has graduated, so a future graduation date is noise -- and
         titles never announce it."""
         tags = _tags(
@@ -96,7 +96,7 @@ class SeniorityTest(unittest.TestCase):
             description="You must be enrolled and graduating in 2028. " * 20,
         )
 
-        self.assertEqual(tags["seniority"], {"student_only"})
+        self.assertEqual(tags["seniority"], {"student_intern"})
         self.assertEqual(tags["fit"], {"out_of_scope"})
 
     def test_the_title_decides_the_rank_too(self):
@@ -112,7 +112,7 @@ class SeniorityTest(unittest.TestCase):
         self.assertEqual(tags["seniority"] & {"head_or_md", "senior_6_10", "lead"}, set())
         self.assertTrue(tags["seniority"] & {"new_grad", "junior_0_2"})
 
-    def test_a_body_welcoming_students_is_not_a_student_only_role(self):
+    def test_a_body_welcoming_students_is_not_gated_on_graduation(self):
         """A full-time PhD-level research role at Radix was marked
         student-only because its body said "students"."""
         tags = _tags(
@@ -120,7 +120,7 @@ class SeniorityTest(unittest.TestCase):
             description="We welcome students and graduates alike. " * 20,
         )
 
-        self.assertNotIn("student_only", tags["seniority"])
+        self.assertNotIn("student_intern", tags["seniority"])
 
     def test_a_real_graduation_gate_still_wins_from_the_body(self):
         """No title announces it, which is why the bucket exists at all."""
@@ -129,7 +129,7 @@ class SeniorityTest(unittest.TestCase):
             description="Applicants must be graduating in 2028. " * 20,
         )
 
-        self.assertEqual(tags["seniority"], {"student_only"})
+        self.assertEqual(tags["seniority"], {"student_intern"})
 
     def test_associate_director_is_not_an_associate(self):
         self.assertEqual(
@@ -178,7 +178,7 @@ class CompletenessTest(unittest.TestCase):
         tags = _tags(title="Something Entirely Unrelated", location="")
 
         for dimension in (
-            "relevance", "role_family", "seniority", "code_depth", "contract",
+            "relevance", "role_class", "seniority", "code_depth", "contract",
             "asset_class", "horizon", "hard_gates", "hub", "fit",
         ):
             with self.subTest(dimension=dimension):

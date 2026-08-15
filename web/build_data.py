@@ -4,8 +4,10 @@ The board is a static file -- it is opened from disk, not served -- so the
 data arrives as a plain script that assigns `window.BOARD`, not as `fetch`,
 which a `file://` page is not allowed to make.
 
-Everything interesting here is date handling. Ten applicant tracking systems
-publish ten different things, and one of them publishes a sentence:
+Two things here are worth reading before changing anything.
+
+**Dates.** Ten applicant tracking systems publish ten different things, and one
+of them publishes a sentence:
 
     workday          "Posted 30+ Days Ago"     -- relative, and a bucket
     lever            "1782419562496"           -- epoch milliseconds
@@ -16,10 +18,26 @@ publish ten different things, and one of them publishes a sentence:
 So the sort key carries its own precision, and the board says which it has
 rather than rendering a guess as a date. `first_seen` is the floor: whatever
 else is unknown, we know when we first saw the posting.
+
+**Deadlines are read, never inferred.** `jobs.deadline` is set only where the
+source published a closing date as a *field* -- today that is JobStream, which
+sets one on every ad. It is deliberately not mined out of descriptions: "tjänsten
+kan tillsättas innan sista ansökningsdag" appears on hundreds of Swedish ads and
+carries no date at all, and Ashby prints "unless a specific application deadline
+is stated" on every posting it has. Since the board pins an approaching deadline
+above everything else, a false positive would nail the wrong card to the top of
+the page for weeks -- the same asymmetry as the roster's `GRASSHOPPER
+ESCAPEMENT, LLC`, one layer up.
+
+**Defaults are omitted, not written.** A dimension whose value is the "nothing
+known" bucket (`unknown`, `unstated`) is left off the record entirely and the
+board reads a missing key as exactly that. Most postings are unknown in most
+dimensions, so this is the difference between a 30 MB file and a 50 MB one.
 """
 
 from __future__ import annotations
 
+import html
 import json
 import re
 import sqlite3
@@ -55,6 +73,30 @@ _HUBS = (
     ("hong kong", ("hong kong", "hongkong", "kowloon")),
     ("singapore", ("singapore",)),
 )
+
+# The value each dimension takes when nothing was decided. Omitted from the
+# payload; the board reads a missing key as this.
+_NOTHING_KNOWN = {"unknown", "unstated", "other", ""}
+
+# Dimensions a posting can hold several of at once -- a multi-asset desk, two
+# languages -- shipped as lists. The rest are one verdict and ship as a scalar.
+_MULTI = {
+    "role_class": "role",
+    "asset_class": "asset",
+    "language": "lang",
+    "hard_gates": "gates",
+    "exclusion_reason": "excl",
+    "horizon": "hz",
+}
+_SINGLE = {
+    "fit": "fit",
+    "relevance": "rel",
+    "seniority": "sen",
+    "code_depth": "cd",
+    "contract": "ct",
+}
+
+TEASER = 260
 
 
 def display_name(names: list[str], domain: str) -> str:
@@ -153,6 +195,40 @@ def posted(raw: str | None, first_seen: str) -> tuple[str, str]:
     return seen, "seen"
 
 
+_TAG = re.compile(r"<[^>]{0,200}>")
+_SPACE = re.compile(r"\s+")
+
+
+def teaser(description: str | None) -> str | None:
+    """A first sentence or two for the hover panel, markup stripped.
+
+    Half the corpus stores HTML and half stores plain text, and neither is
+    labelled. Stripping at read time keeps `jobs.description` verbatim, which
+    is what lets the tagger be re-run over it.
+    """
+    if not description:
+        return None
+    text = _SPACE.sub(" ", html.unescape(_TAG.sub(" ", description))).strip()
+    if len(text) <= TEASER:
+        return text or None
+    cut = text[:TEASER]
+    stop = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "))
+    return (cut[: stop + 1] if stop > TEASER // 2 else cut.rsplit(" ", 1)[0] + "…") or None
+
+
+def firm_key(domain: str | None, employer: str | None) -> str:
+    """What the board groups a posting under.
+
+    The domain wherever we have one, because that is the identity every other
+    layer agrees on. JobStream advertises for the whole country and only half of
+    its ads carry a resolvable employer URL, so the rest group on the name the
+    feed printed -- prefixed, so a name can never collide with a domain.
+    """
+    if domain:
+        return domain
+    return "~" + (employer or "unknown").casefold()
+
+
 def main() -> None:
     connection = sqlite3.connect(DB)
     connection.row_factory = sqlite3.Row
@@ -172,52 +248,81 @@ def main() -> None:
         "SELECT ats, token, job_id, dimension, value FROM job_tags WHERE tagger = ?",
         (tagging.TAGGER,),
     ):
+        if row["value"] in _NOTHING_KNOWN and row["dimension"] != "hub":
+            continue
         key = (row["ats"], row["token"], row["job_id"])
         tags.setdefault(key, {}).setdefault(row["dimension"], []).append(row["value"])
 
     firms: dict[str, dict] = {}
     jobs = []
     for row in connection.execute(
-        "SELECT ats, token, job_id, domain, title, url, location, department,"
+        "SELECT ats, token, job_id, domain, employer, title, url, location,"
         # Withdrawn postings keep their row and stop being offered. The board
         # was showing them: `removed_at` was in the schema and not in this
         # query, so every ad JobStream had already retired still listed.
-        " posted_at, first_seen FROM jobs WHERE removed_at IS NULL"
+        " department, posted_at, deadline, description, first_seen"
+        " FROM jobs WHERE removed_at IS NULL"
     ):
-        domain = row["domain"] or "unknown"
-        if domain not in firms:
-            firms[domain] = {
-                "domain": domain,
-                "name": display_name(names.get(domain, []), domain),
+        key = firm_key(row["domain"], row["employer"])
+        if key not in firms:
+            firms[key] = {
+                "name": row["employer"] or display_name(names.get(row["domain"], []), key),
+                "domain": row["domain"],
                 "ats": row["ats"],
+                "n": 0,
             }
+        firms[key]["n"] += 1
+
         when, precision = posted(row["posted_at"], row["first_seen"])
         mine = tags.get((row["ats"], row["token"], row["job_id"]), {})
         tagged_hub = (mine.get("hub") or [None])[0]
-        jobs.append(
-            {
-                "id": f"{row['ats']}:{row['token']}:{row['job_id']}",
-                "firm": domain,
-                "title": (row["title"] or "").strip(),
-                "url": row["url"],
-                "location": (row["location"] or "").strip() or None,
-                # The tagger's hub, falling back to the local reading only for
-                # a posting it has not seen yet -- an untagged posting must
-                # still be findable.
-                "hub": (tagged_hub if tagged_hub not in (None, "other", "unknown")
-                        else hub(row["location"])),
-                "team": (row["department"] or "").strip() or None,
-                "posted": when,
-                "precision": precision,
-                "fit": (mine.get("fit") or [None])[0],
-                "rel": (mine.get("relevance") or [None])[0],
-                "sen": (mine.get("seniority") or [None])[0],
-            }
-        )
 
+        job = {
+            "id": f"{row['ats']}:{row['token']}:{row['job_id']}",
+            "firm": key,
+            "title": (row["title"] or "").strip(),
+            "posted": when,
+            "ats": row["ats"],
+        }
+        if row["url"]:
+            job["url"] = row["url"]
+        if precision != "exact":
+            job["prec"] = precision
+        if row["deadline"]:
+            job["due"] = row["deadline"][:10]
+        if (row["location"] or "").strip():
+            job["loc"] = row["location"].strip()
+        if (row["department"] or "").strip():
+            job["team"] = row["department"].strip()
+
+        # The tagger's hub, falling back to the local reading only for a
+        # posting it has not seen yet -- an untagged posting must still be
+        # findable.
+        where = tagged_hub if tagged_hub not in (None, "other", "unknown") else hub(row["location"])
+        if where:
+            job["hub"] = where.replace("_", " ")
+
+        for dimension, short in _SINGLE.items():
+            value = (mine.get(dimension) or [None])[0]
+            if value:
+                job[short] = value
+        for dimension, short in _MULTI.items():
+            values = mine.get(dimension)
+            if values:
+                job[short] = sorted(values)
+
+        snippet = teaser(row["description"])
+        if snippet:
+            job["about"] = snippet
+
+        jobs.append(job)
+
+    # A stable base order. The board re-sorts on every render -- deadline
+    # first, then whichever spine is selected -- so this only decides ties.
     jobs.sort(key=lambda j: (j["posted"], j["title"]), reverse=True)
     payload = {
         "built": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "tagger": tagging.TAGGER,
         "firms": firms,
         "jobs": jobs,
     }
@@ -225,10 +330,12 @@ def main() -> None:
         "window.BOARD = " + json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + ";\n",
         encoding="utf-8",
     )
-    shortlist = sum(1 for j in jobs if j["fit"] in ("apply_now", "strong"))
+    shortlist = sum(1 for j in jobs if j.get("fit") in ("apply_now", "strong"))
+    dated = sum(1 for j in jobs if "due" in j)
     print(
         f"{len(jobs):,d} postings from {len(firms):,d} firms -> {OUT.name}"
-        f"  ({shortlist:,d} worth reading)"
+        f"  ({shortlist:,d} worth reading, {dated:,d} with a closing date,"
+        f" {OUT.stat().st_size / 1e6:.1f} MB)"
     )
 
 

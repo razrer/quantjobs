@@ -37,8 +37,19 @@ class Job:
     token: str
     job_id: str
     title: str
+    # Only the sources whose board is not one firm's own set this. Everywhere
+    # else the domain the board was reached from *is* the employer, and a
+    # second name for it would be a second identity to keep in step.
+    employer: str | None = None
     url: str | None = None
     location: str | None = None
     department: str | None = None
     posted_at: str | None = None
+    # Only where the source publishes one as a field. It is never inferred from
+    # the description: "tjänsten kan tillsättas innan sista ansökningsdag" is
+    # boilerplate on a third of Swedish ads and carries no date, and Ashby
+    # prints "unless a specific application deadline is stated" on every
+    # posting it has. A guessed deadline would pin the wrong card to the top of
+    # the board permanently, which is the expensive direction to be wrong in.
+    deadline: str | None = None
     description: str | None = None

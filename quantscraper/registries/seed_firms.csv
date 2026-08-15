@@ -1,7 +1,11 @@
 name,city,country,category,website
 # ── Amsterdam: sponsored-access / MiFID II Art. 2(1)(d) exempt firms ──────────
-# Da Vinci trades through another firm's exchange membership and appears in no
-# public register (not AFM, not FIA EPTA, not Eurex, not Euronext).
+# Da Vinci trades through another firm's exchange membership. It was in no
+# public register when this file was written; `esma_eea` has since picked it
+# up, as `euronext` did Nino Options and `finanstilsynet_dk` did ORA Traders.
+# The rows stay -- resolve merges them onto the registry entity, and a seed row
+# that a registry later covers costs one merge, while deleting it would bet
+# that the registry never drops the firm again.
 Da Vinci Derivatives,Amsterdam,NL,Prop trading firm,https://davinciderivatives.com
 # Small options / market-making shops with no known licence registration.
 Maverick Derivatives,Amsterdam,NL,Prop trading firm,
@@ -26,3 +30,232 @@ ADQ,Abu Dhabi,AE,Sovereign wealth fund,https://www.adq.ae
 Mubadala Investment Company,Abu Dhabi,AE,Sovereign wealth fund,https://www.mubadala.com
 GIC,Singapore,SG,Sovereign wealth fund,https://www.gic.com.sg
 Temasek,Singapore,SG,Sovereign wealth fund,https://www.temasek.com.sg
+# ── Hong Kong / Singapore: own-account prop firms outside SFC and MAS ─────────
+# SFC licensing attaches to dealing *for clients*; a firm trading only its own
+# book needs no licence, so sfc_hk cannot see it. MAS is the same -- mas_sg
+# lists fund managers, not proprietary traders. Every firm below was found on
+# a trading-firm directory or its own careers page and is absent from all 13
+# registries. Websites are recorded only where the host was confirmed; a
+# guessed domain yields a silently empty feed, which is worse than none.
+Eclipse Trading,Hong Kong,HK,Prop trading firm,https://www.eclipsetrading.com
+XY Capital,Hong Kong,HK,Prop trading firm,https://www.xycapitalgroup.com
+Bastion Trading,Hong Kong,HK,Prop trading firm,https://bastiontrading.com
+Liquid Capital Group,Hong Kong,HK,Prop trading firm,
+Genk Capital,Singapore,SG,Prop trading firm,https://genkcapital.com
+Quantbox Research,Singapore,SG,Prop trading firm,https://www.quantboxresearch.com
+# India-origin HFT firms with Singapore and Hong Kong desks. Registered with
+# SEBI, which is not a source here, and with nothing in the EU or the US.
+Graviton Research Capital,Singapore,SG,Prop trading firm,https://www.gravitontrading.com
+Quadeye Securities,Singapore,SG,Prop trading firm,https://www.quadeye.com
+NK Securities Research,Singapore,SG,Prop trading firm,
+iRage Capital,Mumbai,IN,Prop trading firm,
+Estee Advisors,Gurugram,IN,Prop trading firm,
+# ── Amsterdam: prop shops still absent from AFM, Eurex, Euronext and Cboe ─────
+Pinely,Amsterdam,NL,Prop trading firm,https://pinely.com
+# ── Energy and environmental trading houses ──────────────────────────────────
+# These trade power, gas, weather and carbon rather than securities, so they
+# hold no MiFID licence and appear in no financial register -- yet they run
+# algorithmic desks and hire quants. Sourced from quantjobs.nl, a Dutch quant
+# careers directory, and each firm's own vacancies page.
+Northpool,Leiden,NL,Energy trading firm,https://www.northpool.nl
+Priogen,Amsterdam,NL,Energy trading firm,https://priogen.com
+OTC Flow,Amsterdam,NL,Environmental commodities trading firm,https://www.otcflow.com
+STX Group,Amsterdam,NL,Environmental commodities trading firm,
+ACT Commodities Group,Amsterdam,NL,Environmental commodities trading firm,
+Eneco,Rotterdam,NL,Energy trading firm,
+Essent,'s-Hertogenbosch,NL,Energy trading firm,
+Greenchoice,Rotterdam,NL,Energy trading firm,
+Scholt Energy,Valkenswaard,NL,Energy trading firm,
+VARO Energy,Rotterdam,NL,Energy trading firm,
+# ── Switzerland: quant employers FINMA does not license ──────────────────────
+# FINMA licenses banks, insurers and asset managers. A quant technology vendor
+# or a token market maker is none of those, so finma_ch cannot see them.
+swissQuant Group,Zurich,CH,Quant technology vendor,https://swissquant.com
+Tindeco Financial Services,Zug,CH,Quant technology vendor,https://tindecofs.com
+flov technologies (flovtec),Zurich,CH,Crypto market maker,https://flovtec.com
+# ── Copenhagen ───────────────────────────────────────────────────────────────
+# A proprietary trading partnership trading its own book, so Finanstilsynet
+# does not register it.
+Capital Systems,Copenhagen,DK,Prop trading firm,https://capitalsystemsaps.com
+# ── Nordic ───────────────────────────────────────────────────────────────────
+Genio Capital,Helsinki,FI,Systematic asset manager,https://www.geniocapital.com
+# ── UK and US: no enumerable registry reaches them ───────────────────────────
+# CLAUDE.md records that the FCA cannot be enumerated, so a UK firm enters the
+# universe only via exchange membership or an SEC filing. G-Research is neither
+# an exchange member nor an SEC registrant and so appears nowhere. Geographic
+# priority ranks results, it does not gate ingestion, so these are kept.
+G-Research,London,GB,Systematic asset manager,
+Geneva Trading,Dublin,IE,Prop trading firm,https://www.genevatrading.com
+Chicago Trading Company,Chicago,US,Prop trading firm,
+Allston Trading,Chicago,US,Prop trading firm,
+Marquette Partners,Chicago,US,Prop trading firm,
+TransMarket Group,Chicago,US,Prop trading firm,
+Volant Trading,New York,US,Prop trading firm,
+Valkyrie Trading,Chicago,US,Prop trading firm,
+Spot Trading,Chicago,US,Prop trading firm,
+Town Square Trading,Chicago,US,Prop trading firm,
+Grace Hall Trading,Chicago,US,Prop trading firm,
+Emergent Trading,Chicago,US,Prop trading firm,
+Atto Trading,Austin,US,Prop trading firm,
+Trillium Trading,New York,US,Prop trading firm,
+HAP Capital,New York,US,Prop trading firm,
+Mana Partners,New York,US,Quant hedge fund,
+Seven Eight Capital,New York,US,Quant hedge fund,
+BlackEdge Capital,Chicago,US,Prop trading firm,
+Boulder Hill Capital,Chicago,US,Prop trading firm,
+Cipher Capital,New York,US,Quant hedge fund,
+Duality Group,New York,US,Quant hedge fund,
+Edgehog Trading,New York,US,Prop trading firm,
+Elk Capital Markets,New York,US,Prop trading firm,
+Ergoteles Capital,New York,US,Quant hedge fund,
+Eschaton Trading,Chicago,US,Prop trading firm,
+Kula Investments,New York,US,Quant hedge fund,
+Monoceros,New York,US,Quant hedge fund,
+QMS Capital Management,Durham,US,Quant hedge fund,
+Sensato Investors,San Mateo,US,Quant hedge fund,
+Xantium,New York,US,Prop trading firm,
+A Priori Investments,New York,US,Quant hedge fund,
+Albatross Labs,New York,US,Quant hedge fund,
+Alphataraxia Management,Los Angeles,US,Quant hedge fund,
+Jocassee Quantitative,New York,US,Quant hedge fund,
+Vatic Investments,New York,US,Prop trading firm,
+TGS Management,Irvine,US,Quant hedge fund,
+Ansatz Capital,New York,US,Quant hedge fund,
+Dexterity Capital,San Francisco,US,Prop trading firm,
+Athena Capital Research,Chicago,US,Prop trading firm,
+Linden Shore,New York,US,Quant hedge fund,
+SandiaPoint,New York,US,Quant hedge fund,
+Ramp Capital,Chicago,US,Prop trading firm,
+Voloridge Investment Management,Jupiter,US,Quant hedge fund,
+Tradelink Holdings,Chicago,US,Prop trading firm,
+# ── Crypto-native market makers ──────────────────────────────────────────────
+# Kept because principle 4 says classify at read time: the tagger drops crypto
+# roles, and a firm stored is a firm that can be re-classified later. They hold
+# no securities licence, so no register here reaches them.
+Mathrix,Singapore,SG,Crypto market maker,
+Caladan,Singapore,SG,Crypto market maker,
+QCP Group,Singapore,SG,Crypto market maker,
+Amber Group,Singapore,SG,Crypto market maker,
+DWF Labs,Singapore,SG,Crypto market maker,
+Auros,Hong Kong,HK,Crypto market maker,
+Flowdesk,Paris,FR,Crypto market maker,
+Tokka Labs,Singapore,SG,Crypto market maker,
+Deribit,Amsterdam,NL,Crypto derivatives exchange,
+BlockTech,Amsterdam,NL,Crypto market maker,
+# ── Aarhus: the Danish energy-trading cluster ────────────────────────────────
+# Denmark's second city is the densest concentration of algorithmic power and
+# gas trading in Europe -- Danske Commodities, Nitor and Norlys are already in
+# via `euronext`, which is what makes the three below visible as gaps rather
+# than as a guess. They trade physical energy, hold no MiFID licence, and hire
+# quantitative traders and researchers directly. Closest real cluster to the
+# Copenhagen focus hub.
+InCommodities,Aarhus,DK,Energy trading firm,https://incommodities.com
+Aros Commodities,Aarhus,DK,Energy trading firm,https://www.aroscommodities.com
+MFT Energy,Aarhus,DK,Energy trading firm,https://mftenergy.com
+# ── Small European prop shops with no licence and little web presence ────────
+Quantlane,Prague,CZ,Prop trading firm,https://quantlane.com
+Arfima Trading,Madrid,ES,Prop trading firm,https://www.arfima.com
+Axinoss,,,Prop trading firm,https://www.axinoss.com
+Gravity Team,Riga,LV,Crypto market maker,https://www.gravityteam.co
+Invemo Capital,Baar,CH,Crypto market maker,
+OSTC,Newport,GB,Prop trading firm,
+Rayleigh Research,Helsinki,FI,Prop trading firm,
+Kvantium Research,,,Prop trading firm,
+# ── Asia-Pacific ─────────────────────────────────────────────────────────────
+APT Portfolio,Singapore,SG,Quant hedge fund,
+Quantrend Technology,Hong Kong,HK,Crypto market maker,
+Teesta Investment,Hong Kong,HK,Prop trading firm,
+Futures First,Gurugram,IN,Prop trading firm,https://www.futuresfirst.com
+Hyperithm,Seoul,KR,Crypto market maker,https://www.hyperithm.com
+Spatium Capital,Melbourne,AU,Quant hedge fund,https://www.spatiumcapital.com
+# ── US shops named only in practitioner forums ───────────────────────────────
+Domeyard,Boston,US,Prop trading firm,https://www.domeyard.com
+Quest Partners,New York,US,Quant hedge fund,https://www.questpartnersllc.com
+Hull Tactical,Chicago,US,Quant hedge fund,https://www.hulltactical.com
+HC Technologies,Chicago,US,Prop trading firm,
+Convex Asset Management,New York,US,Quant hedge fund,
+Enlightenment Research,New York,US,Quant hedge fund,
+Exponential Trading,Chicago,US,Prop trading firm,
+Life Trading,Chicago,US,Prop trading firm,
+Seven Technologies,New York,US,Prop trading firm,
+Rosetta Analytics,San Diego,US,Quant hedge fund,
+Castleton Commodities,Stamford,US,Commodity trading firm,
+Sarpen Quant Investments,Sao Paulo,BR,Prop trading firm,
+# ── Single-source, unverified ────────────────────────────────────────────────
+# Named by exactly one trading-firm directory and not corroborated by a live
+# site. Kept because a false split costs a row and a miss costs a listing, but
+# prune them if `domains` cannot resolve a host.
+Aquion,Singapore,SG,Prop trading firm,
+Fenix One,Singapore,SG,Prop trading firm,
+Bondi Tech,Singapore,SG,Prop trading firm,
+Lucida,Hong Kong,HK,Prop trading firm,
+Contrarian Technology (Contek),Hong Kong,HK,Prop trading firm,
+Accent Groupe,Amsterdam,NL,Prop trading firm,
+G-20 Group,Zurich,CH,Prop trading firm,
+# The long tail of a prop-firm directory. Real-looking names, no corroborating
+# site checked. Left for `domains` to adjudicate: it grades a guessed host
+# against the page and only counts strong matches, so a name that resolves to
+# nothing costs one probe and a name that resolves is a firm we would have
+# missed. Prune whatever still has no domain after a regrade.
+Ace Capital Saires,,,Prop trading firm,
+Apolis SAM,Monaco,MC,Quant hedge fund,
+Armada Technologies,,,Prop trading firm,
+Aureas Finance,Paris,FR,Prop trading firm,
+Automaton Trading,,US,Prop trading firm,
+BD Energy,,,Energy trading firm,
+Birkoa Capital Management,,US,Quant hedge fund,
+Black Eagle Financial Group,,,Prop trading firm,
+Boston Energy Trading and Marketing,Boston,US,Energy trading firm,
+Campbell and Company,Baltimore,US,Quant hedge fund,
+Capstone Trading,,US,Prop trading firm,
+Cascade Systems,,,Prop trading firm,
+Charlesworth Research,,,Quant hedge fund,
+Chengdu ZhaoYu Investment,Chengdu,CN,Prop trading firm,
+Cor Capital,,AU,Quant hedge fund,
+CTS Global Equity Group,,US,Prop trading firm,
+Daler Trading,,,Prop trading firm,
+Delchain,,BS,Crypto market maker,
+DSV Fund,,,Quant hedge fund,
+Elliott Bay Energy Trading,Seattle,US,Energy trading firm,
+Enigma Quant Capital,,,Quant hedge fund,
+Entropy Trading Group,,US,Prop trading firm,
+Ethflow,,,Crypto market maker,
+ETS Asset Management Factory,Madrid,ES,Quant hedge fund,
+Forest Creek Capital,,US,Quant hedge fund,
+Giant Steps Capital,Sao Paulo,BR,Quant hedge fund,
+Gift Street Capital,,,Prop trading firm,
+Golden Meadow Investment,,,Quant hedge fund,
+GRW Partners,,US,Prop trading firm,
+Humbility,,,Prop trading firm,
+Independent Trading Group,Toronto,CA,Prop trading firm,
+J.E. Moody,,US,Quant hedge fund,
+Kadima Asset Management,,US,Quant hedge fund,
+Kershner Trading Group,Austin,US,Prop trading firm,
+League Trading,,US,Prop trading firm,
+Lehi Capital,,US,Prop trading firm,
+Mesh Capital,,US,Quant hedge fund,
+Midpoint Markets,,,Prop trading firm,
+Mirazur Capital,Monaco,MC,Quant hedge fund,
+Murano Group,,,Prop trading firm,
+Old Growth Harbor,,US,Quant hedge fund,
+One Eleven Capital,,US,Quant hedge fund,
+Optica,,,Prop trading firm,
+OSF Management,,US,Quant hedge fund,
+OTS Capital,,,Prop trading firm,
+Plutus Research,,,Quant hedge fund,
+Quantique,,FR,Prop trading firm,
+RAON Trading,Seoul,KR,Prop trading firm,
+Revolution Capital Management,Denver,US,Quant hedge fund,
+Saichild Proprietary Trading,,,Prop trading firm,
+Silver Valley Management,,US,Quant hedge fund,
+Sovereign Blue Capital,,,Quant hedge fund,
+SQM Technologies,,,Prop trading firm,
+SQS Capital,,,Quant hedge fund,
+Stronghold Capital Management,,US,Quant hedge fund,
+Tidal Energy Marketing,Calgary,CA,Energy trading firm,
+TRV Trading,London,GB,Prop trading firm,
+UC Capital,,,Prop trading firm,
+VICI Holdings,,US,Prop trading firm,
+Wallsoft Labs,,,Prop trading firm,
+26 Miles Capital,,US,Quant hedge fund,
+Quant Matter,Singapore,SG,Crypto market maker,
