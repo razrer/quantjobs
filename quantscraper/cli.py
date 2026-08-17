@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 
 from . import (
     alerts, ats, audit, bodies, coverage, db, discover, domains, extract,
-    fca, jobstream, labels, pages, resolve, tagging,
+    fca, jobstream, labels, mycareersfuture, pages, resolve, tagging,
 )
 from .registries import REGISTRIES
 
@@ -163,6 +163,23 @@ def _discover(database: str, limit: int, roster: bool, workers: int) -> int:
     if stranded:
         print(f"\n{len(stranded)} board(s) found for a firm holding no domain,")
         print("so nothing polls them yet: " + ", ".join(sorted(stranded)))
+    return 0
+
+
+def _singapore(database: str, since: str | None) -> int:
+    connection = db.connect(database)
+    swept = mycareersfuture.run(connection, since=since)
+    print(
+        f"swept {swept.pages:,d} pages: {swept.seen:,d} postings, "
+        f"{swept.written:,d} written, {swept.repeats:,d} served twice"
+    )
+    if not swept.partial:
+        print(f"  the portal advertised {swept.advertised:,d}")
+    # The sweep audits its own arithmetic: a round number in the output is
+    # what a cap looks like from the outside, and nothing else would say so.
+    if swept.problem:
+        print(f"  FAIL {swept.problem}", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -544,6 +561,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     discover_command.add_argument("--workers", type=int, default=6)
 
+    singapore_command = commands.add_parser(
+        "singapore", help="sweep MyCareersFuture, Singapore's statutory portal"
+    )
+    singapore_command.add_argument(
+        "--since",
+        help="only read back to this ISO date -- a top-up between full sweeps,"
+        " which are cheap enough (~850 requests) to just do",
+    )
+
     bodies_command = commands.add_parser(
         "bodies", help="fetch descriptions a list endpoint omitted (Layer 3C)"
     )
@@ -646,6 +672,8 @@ def main(argv: list[str] | None = None) -> int:
         return _discover(args.db, args.limit, args.roster, args.workers)
     if args.command == "bodies":
         return _bodies(args.db, args.limit, args.workers)
+    if args.command == "singapore":
+        return _singapore(args.db, args.since)
     if args.command == "jobs":
         return _jobs(args.db, args.limit)
     if args.command == "ats":
