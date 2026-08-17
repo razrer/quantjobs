@@ -57,6 +57,7 @@ nothing in the near-term plan now waits on a human.
 | 13b | Platsbanken is not a census | **done** — 0 of 55 Stockholm employers are in it |
 | 14 | Readers for recognised-but-unread ATSes | **done** — iCIMS + Pinpoint, 2,068 postings |
 | 15 | The board, and the body it was reading | **done** — board unknowns 5,611 → 2,341 |
+| 16 | The last ATSes, and Singapore | **done** — Jobvite/Varbi/Homerun read, MCF swept |
 
 ---
 
@@ -1531,6 +1532,49 @@ questions and became answered ones.
 **Still body-less and worth doing next:** smartrecruiters (575), bamboohr
 (322), breezy (153), personio (135) all list without a description too, and
 iCIMS (1,538) has no body to fetch at all — its portal publishes none.
+
+---
+
+## Stage 16 — the last ATSes, and Singapore *(done)*
+
+**Three of the six remaining formats do publish a feed; the board page just
+never says so.** The first pass gave up on Varbi and Homerun because the
+surfaces they serve to a browser are dead ends — Varbi's `/{lang}/what:list/`
+answers *404 Unallowed call* for every language, and Homerun's board is
+script-rendered and links out to the firm's own careers host, so Tiqets serves
+from `jobs.tiqets.work`. Reading the page's own link shapes rather than
+guessing paths found both feeds: `/what:rssfeed/` on the Varbi host, and
+`feed.homerun.co/{token}`. Both carry the full description the board pages do
+not.
+
+**Jobvite was hiding a cap behind a round number.** The careersite is a plain
+table — better than iCIMS, because the title is anchor text so no casing is
+lost and there is a location column. It first came back at exactly 50
+postings, and Sikich's own pagination text says `1-50 of 73`. The next link is
+`/{token}/search/?p=1`, and the slash before the query is load-bearing:
+`/{token}/search?p=1` answers the first page while looking like it paged, so
+`?p=2` returning nothing read as "there is no second page". It reaches 73 of 73
+now, and the advertised total is checked on every board — `pragmaticplay` came
+back at exactly 100 and the portal agrees it holds 100.
+
+**310 postings landed** from 10 live boards; seven of the seventeen have no
+openings today, which is a real answer and not a failure.
+
+**The other three are recorded as investigated, not as untried:**
+
+| ATS | Boards | Why it stops here |
+|---|---|---|
+| Taleo | 11 | The REST shape is right — `POST /careersection/rest/jobboard/searchjobs` answers with `requisitionList`/`pagingData` keys — but it needs a per-board numeric portal id, and the section page is a 1,534-byte redirect stub that does not carry one. Answers `careerSectionUnAvailable: true` without it. |
+| Eightfold | 4 | `/api/apply/v2/jobs` returns the page's *config* rather than postings; `positions` and `search` serve HTML; `careerhub/api/jobs` redirects to a login. The real path is inside a JS bundle. Millennium is here. |
+| Join | 4 | The route is real and rejects every paging value tried — `page` 0/1 and `pageSize` 10/20/25 all return HTTP 422 `Invalid value`. |
+
+That leaves **20 boards** unreadable, down from 88 before Stage 14.
+
+**And Singapore.** `mycareersfuture` swept into `jobs` — the portal is a
+register substantially complete by law for exactly the roles a foreigner could
+take, and it carries a description and a published closing date on every row,
+so it needs no Layer 3C backfill. Ingested in full rather than filtered, per
+principle 4: the category taxonomy is a read-time gate, not a write-time one.
 
 ---
 
