@@ -124,6 +124,16 @@ _SINGLE = {
 
 TEASER = 260
 
+# Words that mark a *vehicle* rather than the firm that runs it. Matched as
+# whole words so "Fundamental" and "Trustee Services" are untouched, and kept
+# to markers that no operating company puts in its own name -- `Capital` and
+# `Investment` are firm words, not fund words, however often funds use them.
+_VEHICLE = re.compile(
+    r"\b(ucits|sicav|sicaf|oeic|etfs?|fcp|fonds|fond|sub-?fund|fund|funds"
+    r"|compartment|feeder|umbrella|trust|plc\s+fund)\b",
+    re.IGNORECASE,
+)
+
 
 def display_name(names: list[str], domain: str) -> str:
     """The shortest registry name, cleaned -- else the domain's own label.
@@ -131,10 +141,19 @@ def display_name(names: list[str], domain: str) -> str:
     Registry names are legal names and several map to one domain: State Street
     alone arrives as five. The shortest is the least encumbered by branch and
     subsidiary wording, which is what makes it the best label.
+
+    **A fund is not its manager, and "shortest" reaches for one.** `pimco.com`
+    carries 42 names, of which the shortest is *PIMCO ETFs* -- a product range,
+    not the employer, and the card then advertises a job at a fund. A manager's
+    own name is never the one carrying `UCITS` or `SICAV`, so vehicles are set
+    aside when anything else is available. When a domain has nothing *but*
+    fund names, the shortest of those is still better than the bare domain.
     """
     candidates = [n for n in names if n and len(n) < 60]
     if not candidates:
         return domain.split(".")[0].replace("-", " ").title()
+    operating = [n for n in candidates if not _VEHICLE.search(n)]
+    candidates = operating or candidates
 
     best = min(candidates, key=len)
     # Strip the legal form first, so `DPE INVESTMENT GESELLSCHAFT MBH` does not
