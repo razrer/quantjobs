@@ -56,6 +56,7 @@ nothing in the near-term plan now waits on a human.
 | 13 | Layer 2C — board discovery | **done** — 23 boards, 989 postings, roster 16→49 |
 | 13b | Platsbanken is not a census | **done** — 0 of 55 Stockholm employers are in it |
 | 14 | Readers for recognised-but-unread ATSes | **done** — iCIMS + Pinpoint, 2,068 postings |
+| 15 | The board, and the body it was reading | **in progress** — 55,828 postings had no description |
 
 ---
 
@@ -1466,6 +1467,54 @@ tier-A row holds an infrastructure token.
 Homerun and Join are 41 boards between them, and each now has a recorded reason
 its obvious endpoint does not work. None is a quant employer of note, which is
 why they wait.
+
+---
+
+## Stage 15 — the board, and the body it was reading *(in progress)*
+
+**The board was feature-complete and still opened on the wrong thing.** Six
+sorts, a sixteen-facet rail, stacking, deadline pinning — all built, all
+working, and the first screen was a Swedish purchasing manager and a graduate
+audit role, because the default spine was recency and 89% of what reaches the
+board carries `fit: unknown`. It now opens on Flow Traders' Junior Quantitative
+Researcher, Squarepoint's ML Alpha Research and Point72's Cubist seats.
+
+Nothing is hidden by that and no card is removed: `order()` still pins an
+approaching deadline above every spine, which is the rule Stage 12 actually
+committed to. Only the default selection changed.
+
+**Then the naming, which was making the board look untrustworthy.** Three
+defects, all on the first screen: a domain resolving to nothing but fund
+vehicles took a fund's name (`cards.barclaycardus.com` → *Barclays US Equities
+Volatility Premium Fund*, so the card advertised a job at a fund); the
+domain-label fallback took the leftmost label, so that host would have been
+*Cards* and `gresearch.co.uk` would be *Co*; and suffix stripping could leave a
+name on a connector, since `_SUFFIX` carries both `europe` and `nv` and turned
+*Cigna Life Insurance Company of Europe NV* into *Cigna Life Insurance Company
+of*.
+
+**And the finding underneath all of it: 55,828 of 72,471 postings have no
+body.** `fit: unknown` and `relevance: unknown` are the same 12,365 postings,
+and the largest block of them is Workday — whose CXS *list* endpoint returns a
+title, a location and a path and no description at all. Every other reader gets
+a body from the request that lists the job, so nothing ever made this visible.
+
+This is why the `unknown` bucket could not be fixed with vocabulary. Its titles
+are `Analyst`, `Engineer`, `Specialist`, `Associate`, `Consultant` — the words
+every employer uses — and `judge` correctly refuses to reject any of them on a
+title alone. The bucket is not a broken rule or a missing word; it is a
+classifier that was handed six words and asked to decide.
+
+`bodies.py` fetches them from Workday's detail endpoint, on demand rather than
+during extraction: a body is one request per posting, so backfilling Workday is
+53,000 requests where listing it was 3,000, and most of those postings are
+gated off the board anyway. The queue is the postings whose verdict a body
+could actually change — relevance unknown, not already gated — and it is
+resumable, because a filled body is its own record of having been fetched.
+
+**Exit criterion:** the Workday backfill queue is empty, the corpus is
+re-tagged, and the `unknown` share of the board is measured before and after so
+the change is a number rather than an impression.
 
 ---
 
