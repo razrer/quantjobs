@@ -185,12 +185,89 @@ class IcimsFingerprintTest(unittest.TestCase):
         self.assertEqual(ats.fingerprint(markup)[:2], ("icims", "realboard"))
 
 
+def _jv_row(job_id: str, title: str, place: str, token: str = "acme") -> str:
+    return (
+        f'<tr><td class="jv-job-list-name">'
+        f'<a href="/{token}/job/{job_id}">{title}</a></td>'
+        f'<td class="jv-job-list-type">Full-Time</td>'
+        f'<td class="jv-job-list-location">\n {place}\n </td></tr>'
+    )
+
+
+def _jv_page(*rows: str, shown: int = 0, total: int = 0) -> str:
+    body = "<table><tbody>" + "".join(rows) + "</tbody></table>"
+    if total:
+        body += f'<div class="jv-pagination-text">1-{shown} of {total}</div>'
+    return body
+
+
+class JobviteTest(unittest.TestCase):
+    """Jobvite pages at 50 and the trailing slash is load-bearing.
+
+    The board first came back at exactly 50 postings, which is what a cap
+    looks like from the outside -- and it was one. `/search?p=1` answers the
+    first page while looking like it paged; `/search/?p=1` actually pages.
+    """
+
+    def test_it_pages_past_the_first_fifty(self):
+        pages = [
+            _jv_page(*[_jv_row(str(n), f"Job {n}", "London") for n in range(50)],
+                     shown=50, total=73),
+            _jv_page(*[_jv_row(str(n), f"Job {n}", "London") for n in range(50, 73)]),
+            _jv_page(),
+        ]
+        with mock.patch.object(extract.http, "get_text", side_effect=pages):
+            jobs = extract.jobvite("acme")
+        self.assertEqual(len(jobs), 73)
+
+    def test_the_paged_url_carries_the_trailing_slash(self):
+        seen: list[str] = []
+
+        def capture(url, **kwargs):
+            seen.append(url)
+            return _jv_page(_jv_row("1", "Quant", "London")) if len(seen) == 1 else _jv_page()
+
+        with mock.patch.object(extract.http, "get_text", capture):
+            extract.jobvite("acme")
+
+        self.assertEqual(seen[0], "https://jobs.jobvite.com/acme/search/")
+        self.assertEqual(seen[1], "https://jobs.jobvite.com/acme/search/?p=1")
+
+    def test_a_page_adding_nothing_ends_the_walk(self):
+        page = _jv_page(_jv_row("1", "Quant Researcher", "London"))
+        with mock.patch.object(extract.http, "get_text", return_value=page) as fetch:
+            jobs = extract.jobvite("acme")
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(fetch.call_count, 2)
+
+    def test_title_and_location_are_read_from_their_own_cells(self):
+        page = _jv_page(_jv_row("oX1", "Equity Analyst, Public Real Estate", "Chicago, Illinois"))
+        with mock.patch.object(extract.http, "get_text", side_effect=[page, _jv_page()]):
+            job = extract.jobvite("acme")[0]
+        self.assertEqual(job.title, "Equity Analyst, Public Real Estate")
+        self.assertEqual(job.location, "Chicago, Illinois")
+        self.assertEqual(job.url, "https://jobs.jobvite.com/acme/job/oX1")
+
+    def test_a_mismatched_table_drops_locations_rather_than_pairing_them_wrongly(self):
+        """A location paired with the wrong posting sends the geography gate a
+        wrong answer, and that gate deletes rather than reorders."""
+        page = (
+            '<td class="jv-job-list-name"><a href="/acme/job/1">A</a></td>'
+            '<td class="jv-job-list-name"><a href="/acme/job/2">B</a></td>'
+            '<td class="jv-job-list-location"> London </td>'
+        )
+        with mock.patch.object(extract.http, "get_text", side_effect=[page, _jv_page()]):
+            jobs = extract.jobvite("acme")
+        self.assertEqual([j.location for j in jobs], [None, None])
+
+
 class RegistrationTest(unittest.TestCase):
     def test_both_are_wired_into_the_extractor_table(self):
         """The bug this stage fixes is a board resolved to an ATS nothing
         reads, so the registration is the fix and belongs in a test."""
         self.assertIn("icims", extract.EXTRACTORS)
         self.assertIn("pinpoint", extract.EXTRACTORS)
+        self.assertIn("jobvite", extract.EXTRACTORS)
 
 
 if __name__ == "__main__":

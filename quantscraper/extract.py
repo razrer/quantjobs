@@ -353,6 +353,96 @@ def icims(token: str) -> list[Job]:
     return jobs
 
 
+# Jobvite publishes no feed either -- `?format=rss` serves the careersite HTML
+# and the v2 API wants a key -- but its careersite is a plain table, which is
+# more than iCIMS gives. One row is a name cell and a location cell:
+#
+#   <td class="jv-job-list-name"><a href="/{token}/job/{id}">Title</a></td>
+#   <td class="jv-job-list-location"> London, England </td>
+#
+# Parsed as two passes rather than one regex spanning both cells: a single
+# pattern reaching from the anchor across to the location has to cross
+# unbounded markup, which is the shape that stalled this project twice.
+_JOBVITE_NAME = re.compile(
+    r'jv-job-list-name["\'>][\s\S]{0,300}?/job/([A-Za-z0-9]{1,24})["\'][^>]{0,120}>'
+    r'([^<]{1,200})</a>',
+    re.I,
+)
+_JOBVITE_PLACE = re.compile(
+    r'jv-job-list-location["\'][^>]{0,80}>([\s\S]{0,300}?)</td>', re.I
+)
+# "1-50 of 73". The board states its own size, which is the cheapest possible
+# check that paging reached the end.
+_JOBVITE_TOTAL = re.compile(r"\d{1,6}\s*-\s*\d{1,6}\s+of\s+(\d{1,6})", re.I)
+
+# A backstop against a careersite that never runs out, not a limit on board
+# size: at 50 a page this is 5,000 postings, and paging stops when a page adds
+# nothing long before that.
+_JOBVITE_PAGES = 100
+
+
+def jobvite(token: str) -> list[Job]:
+    """Jobvite, by reading the careersite table. Quantlab is on this.
+
+    **50 per page, and the trailing slash is load-bearing.** The board first
+    came back at exactly 50 postings, which is what a cap looks like from the
+    outside -- and it was one: Sikich advertises `1-50 of 73`. The next link is
+    `/{token}/search/?p=1`, with a slash before the query that
+    `/{token}/search?p=1` does not have, and without it the server answers the
+    first page while looking like it paged. `p` is zero-based, so page one is
+    the bare URL and `p=1` is the second.
+
+    Unlike iCIMS this carries the real title as anchor text, so no casing is
+    lost, and a location column besides. There is still no description.
+    """
+    jobs: list[Job] = []
+    seen: set[str] = set()
+    advertised = 0
+    for page in range(_JOBVITE_PAGES):
+        url = f"https://jobs.jobvite.com/{token}/search/"
+        if page:
+            url += f"?p={page}"
+        body = http.get_text(url, timeout=25, retries=2)
+
+        if not advertised:
+            total = _JOBVITE_TOTAL.search(body)
+            advertised = int(total.group(1)) if total else 0
+
+        names = _JOBVITE_NAME.findall(body)
+        places = [
+            " ".join(_TAGS.sub(" ", p).split()) for p in _JOBVITE_PLACE.findall(body)
+        ]
+        # Zipped only when the table is well formed. A mismatch means the
+        # markup is not the shape assumed here, and a location silently paired
+        # with the wrong posting sends the geography gate the wrong answer --
+        # which deletes a posting rather than mis-ranking it.
+        if len(places) != len(names):
+            places = [None] * len(names)
+
+        fresh = 0
+        for (job_id, title), place in zip(names, places):
+            if job_id in seen:
+                continue
+            seen.add(job_id)
+            fresh += 1
+            jobs.append(
+                Job(
+                    ats="jobvite",
+                    token=token,
+                    job_id=job_id,
+                    title=" ".join(title.split()),
+                    url=f"https://jobs.jobvite.com/{token}/job/{job_id}",
+                    location=place or None,
+                )
+            )
+        # Stop when a page adds nothing -- the same rule iCIMS and Workday
+        # need, and for the same reason: a server ignoring the page parameter
+        # serves page one forever and never returns an empty page.
+        if not fresh:
+            break
+    return jobs
+
+
 def pinpoint(token: str) -> list[Job]:
     """Pinpoint. Systematica is on this, and it was tier A polling nothing.
 
@@ -524,6 +614,7 @@ EXTRACTORS: dict[str, Callable[[str], list[Job]]] = {
     "bamboohr": bamboohr,
     "breezy": breezy,
     "icims": icims,
+    "jobvite": jobvite,
     "personio": personio,
     "pinpoint": pinpoint,
     "teamtailor": teamtailor,
