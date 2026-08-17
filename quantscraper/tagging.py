@@ -35,7 +35,7 @@ from . import db, lexicon
 # Bump on every lexicon change: the diff between two versions over the same
 # corpus is a free regression test, and it is the only way to tell "the
 # classifier improved" from "the market moved".
-TAGGER = 30
+TAGGER = 31
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS job_tags (
