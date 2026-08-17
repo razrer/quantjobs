@@ -56,7 +56,7 @@ nothing in the near-term plan now waits on a human.
 | 13 | Layer 2C — board discovery | **done** — 23 boards, 989 postings, roster 16→49 |
 | 13b | Platsbanken is not a census | **done** — 0 of 55 Stockholm employers are in it |
 | 14 | Readers for recognised-but-unread ATSes | **done** — iCIMS + Pinpoint, 2,068 postings |
-| 15 | The board, and the body it was reading | **in progress** — 55,828 postings had no description |
+| 15 | The board, and the body it was reading | **done** — board unknowns 5,611 → 2,341 |
 
 ---
 
@@ -1470,7 +1470,7 @@ why they wait.
 
 ---
 
-## Stage 15 — the board, and the body it was reading *(in progress)*
+## Stage 15 — the board, and the body it was reading *(done)*
 
 **The board was feature-complete and still opened on the wrong thing.** Six
 sorts, a sixteen-facet rail, stacking, deadline pinning — all built, all
@@ -1512,9 +1512,25 @@ gated off the board anyway. The queue is the postings whose verdict a body
 could actually change — relevance unknown, not already gated — and it is
 resumable, because a filled body is its own record of having been fetched.
 
-**Exit criterion:** the Workday backfill queue is empty, the corpus is
-re-tagged, and the `unknown` share of the board is measured before and after so
-the change is a number rather than an impression.
+**Exit criterion — met, and the number is the point.** 4,366 descriptions
+fetched, corpus re-tagged at lexicon 30:
+
+| | before | after |
+|---|---|---|
+| corpus `relevance: unknown` | 12,365 | **9,095** |
+| board postings | 6,284 | **3,066** |
+| board postings with no verdict | 5,611 | **2,341** |
+| of those, Workday's | 4,696 | **1,426** |
+| **postings worth reading** | **60** | **60** |
+
+The last row is the one that matters. The board halved and the shortlist did
+not move by one posting, so what came off was noise the tagger could finally
+read and reject — not coverage. 3,218 postings stopped being unanswerable
+questions and became answered ones.
+
+**Still body-less and worth doing next:** smartrecruiters (575), bamboohr
+(322), breezy (153), personio (135) all list without a description too, and
+iCIMS (1,538) has no body to fetch at all — its portal publishes none.
 
 ---
 
