@@ -108,6 +108,44 @@ class CustomDomainTest(unittest.TestCase):
         self.assertIsNone(ats.fingerprint(markup))
 
 
+class InfrastructureTokenTest(unittest.TestCase):
+    """A vendor's own host recorded as a board polls nothing, forever.
+
+    It is the quiet failure: the row reads tier A, every summary counts it as
+    resolved, and the feed is silent because there is no board there.
+    """
+
+    def test_an_asset_path_with_underscores_is_not_a_board(self):
+        """`jobs.jobvite.com/__assets__` was recorded against three unrelated
+        firms at once -- Five Rings among them. `assets` was already on the
+        list; only the underscores were hiding it."""
+        self.assertTrue(ats._is_infrastructure("__assets__"))
+
+    def test_one_infrastructure_piece_is_enough_when_it_is_unambiguous(self):
+        """`vs-errors.eightfold.ai` survived the all-pieces rule, because
+        `errors` is the vendor's error host and `vs` is nothing."""
+        self.assertTrue(ats._is_infrastructure("vs-errors"))
+
+    def test_a_hyphenated_firm_name_still_survives(self):
+        """The all-pieces rule exists for these, and must keep working."""
+        for token in ("jane-street", "da-vinci", "old-mission", "five-rings"):
+            self.assertFalse(ats._is_infrastructure(token), token)
+
+    def test_a_compound_workday_token_is_judged_on_its_tenant(self):
+        """The site half is very often literally called `Careers`."""
+        self.assertFalse(ats._is_infrastructure("lseg|wd3|LSEG_Careers"))
+        self.assertFalse(
+            ats._is_infrastructure("brevanhoward|wd3|BH_ExternalCareers|myworkdaysite.com")
+        )
+
+    def test_the_fingerprinter_skips_past_an_asset_path_to_a_real_board(self):
+        markup = (
+            '<script src="https://jobs.jobvite.com/__assets__/scripts/x.js">'
+            '<a href="https://jobs.jobvite.com/quantlab/jobs">Careers</a>'
+        )
+        self.assertEqual(ats.fingerprint(markup)[:2], ("jobvite", "quantlab"))
+
+
 class FingerprintCostTest(unittest.TestCase):
     def test_a_base64_blob_does_not_stall(self):
         """An inline data URI is a long run of label characters with no dot.

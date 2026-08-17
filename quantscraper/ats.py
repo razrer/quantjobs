@@ -121,6 +121,16 @@ ATS_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("personio", re.compile(_HOST_LABEL + r"\.jobs\.personio\.(?:de|com)", re.I)),
     ("bamboohr", re.compile(_HOST_LABEL + r"\.bamboohr\.com", re.I)),
     ("icims", re.compile(r"careers-" + _LABEL + r"\.icims\.com", re.I)),
+    # SIG's board is `careers-sig.icims.com` and its careers page says so
+    # nowhere. The only place the token appears is the vendor's cookie banner
+    # script -- `cookie-policy-scripts.icims.com/sig/careers.sig.com/script.js`
+    # -- where it is the first path segment. Same shape as the Teamtailor CDN
+    # rule below: the vendor's own asset URL is the evidence when the firm
+    # fronts the board on its own hostname.
+    (
+        "icims",
+        re.compile(r"cookie-policy-scripts\.icims\.com/([a-z0-9-]{1,63})/", re.I),
+    ),
     ("taleo", re.compile(_HOST_LABEL + r"\.taleo\.net", re.I)),
     ("successfactors", re.compile(_HOST_LABEL + r"\.jobs\.sap\.com|career\d*\.successfactors\.(?:eu|com)", re.I)),
     ("eightfold", re.compile(_HOST_LABEL + r"\.eightfold\.ai", re.I)),
@@ -172,8 +182,19 @@ _NOT_A_TOKEN = {
     # three, `staticfe.bamboohr.com` by one -- a token several unrelated
     # domains agree on is the vendor's infrastructure, not anyone's board.
     "career", "careers", "jobs", "job", "analytics", "staticfe", "portal",
-    "login", "account", "accounts",
+    "login", "account", "accounts", "profile", "profiles",
     *(f"v{n}" for n in range(1, 10)),
+}
+
+# Pieces that are never part of a real board name, wherever they sit in the
+# token. `_NOT_A_TOKEN` is an *all* rule -- every piece must be infrastructure
+# -- which is what lets `jane-street` and `da-vinci` through, and it is exactly
+# why `vs-errors.eightfold.ai` survived it: `errors` is the vendor's error
+# host and `vs` is nothing, so not every piece qualified. These are checked
+# with `any` instead.
+_NEVER_A_PIECE = {
+    "assets", "cdn", "static", "staticfe", "errors", "sentry",
+    "preview", "staging", "sandbox",
 }
 
 
@@ -188,9 +209,21 @@ def _is_infrastructure(token: str) -> bool:
     Within that component, a piece counts only if *every* hyphenated part of
     it is infrastructure: `assets-cdn.breezy.hr` polled as the board
     "assets-cdn" and returned HTML, while `jane-street` must survive.
+
+    **Underscores split too, because a vendor's asset path uses them.**
+    `jobs.jobvite.com/__assets__` was read as the board `__assets__` and
+    recorded against three unrelated firms at once -- Five Rings among them --
+    which is the same "a token several domains agree on is the vendor's
+    infrastructure" signal the list above was built from. `assets` was already
+    in that list; only the underscores were hiding it.
     """
     head = token.split("|")[0].casefold()
-    return all(piece in _NOT_A_TOKEN for piece in head.split("-"))
+    pieces = [piece for piece in re.split(r"[-_]+", head) if piece]
+    if not pieces:
+        return True
+    if any(piece in _NEVER_A_PIECE for piece in pieces):
+        return True
+    return all(piece in _NOT_A_TOKEN for piece in pieces)
 
 
 @dataclass(frozen=True, slots=True)

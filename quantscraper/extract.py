@@ -264,6 +264,135 @@ def personio(token: str) -> list[Job]:
     ]
 
 
+# iCIMS publishes no feed of any kind -- the `format=rss` the vendor once
+# offered now 302s to a staff login page -- so the portal's own HTML is the
+# only public surface. Job links have a fixed shape, which is what makes this
+# parseable at all: `/jobs/{id}/{slug}/job`.
+#
+# Both halves are length-bounded, for the reason the whole of `ats.py` is: an
+# unbounded run inside a quoted attribute over 100 KB of markup is where two
+# runs of this pipeline previously sat at full CPU for two and a half hours.
+_ICIMS_JOB = re.compile(
+    r"https://[a-z0-9.\-]{1,80}\.icims\.com/jobs/(\d{1,12})/([^/\"']{1,120})/job",
+    re.I,
+)
+
+# The portal serves 50 per page and answers `pr` as the page number. The bound
+# is a guard against a portal that never runs out, not a limit on board size:
+# paging stops when a page adds no new posting, which is the same rule Workday
+# needs for a tenant that ignores `offset`.
+_ICIMS_PAGES = 60
+
+
+def _icims_title(slug: str) -> str:
+    """A readable title from the URL slug, which is all the list page gives.
+
+    **The list page carries no anchor text**, so the slug is the only title
+    available without fetching all 50 job pages per page of results -- which
+    for 38 boards is thousands of extra requests for a field the tagger
+    lowercases anyway.
+
+    It is lossy and the losses are worth naming: `c++` survives a slug as `c`,
+    and original casing is gone, so `EMEA` comes back as `Emea`. `fold` maps
+    both sides to lowercase tokens before any needle runs, so the tagger is
+    unaffected; what suffers is only how the card reads on the board.
+    """
+    words = urllib.parse.unquote(slug).replace("-", " ").split()
+    return " ".join(word[:1].upper() + word[1:] for word in words)
+
+
+def icims(token: str) -> list[Job]:
+    """iCIMS, by reading the careers portal. SIG is on this.
+
+    38 boards resolved to iCIMS and none of them were ever polled, because
+    `ats.py` recognises the host and `extract.py` had no reader -- tier A, a
+    token, and silence. It is the largest single block of that kind.
+
+    **Titles and links only.** There is no location, department or description
+    on the list page, so postings from here reach the tagger with a title and
+    nothing else. That is thin, and it is still worth having: `judge` already
+    refuses to reject on a title alone, so these land in `unknown` rather than
+    being wrongly excluded, and every one carries a URL that opens.
+    """
+    jobs: list[Job] = []
+    seen: set[str] = set()
+    for page in range(_ICIMS_PAGES):
+        url = (
+            f"https://careers-{token}.icims.com/jobs/search"
+            f"?ss=1&in_iframe=1&pr={page}"
+        )
+        try:
+            body = http.get_text(url, timeout=25, retries=2)
+        except urllib.error.HTTPError as exc:
+            # A board that has ended answers 404 on the first page. Anything
+            # after that is a paging edge, not a failure worth losing the
+            # postings already read for.
+            if page == 0:
+                raise
+            break
+        fresh = 0
+        for match in _ICIMS_JOB.finditer(body):
+            job_id, slug = match.group(1), match.group(2)
+            if job_id in seen:
+                continue
+            seen.add(job_id)
+            fresh += 1
+            jobs.append(
+                Job(
+                    ats="icims",
+                    token=token,
+                    job_id=job_id,
+                    title=_icims_title(slug),
+                    url=f"https://careers-{token}.icims.com/jobs/{job_id}/{slug}/job",
+                )
+            )
+        # Stop when a page adds nothing. A portal that ignores `pr` serves page
+        # one forever, and the empty-page test alone would never catch it.
+        if not fresh:
+            break
+    return jobs
+
+
+def pinpoint(token: str) -> list[Job]:
+    """Pinpoint. Systematica is on this, and it was tier A polling nothing.
+
+    `/postings.json` is the whole board in one request -- no paging, no key.
+    There is also a `/jobs.rss`, which is how the board was fingerprinted in
+    the first place; the JSON carries the description and the RSS does not.
+
+    **`deadline_at` is a published field, so it is mapped** even though every
+    board sampled leaves it null. That is the rule this project already
+    follows: a closing date is taken when the source states one and never
+    mined out of prose. A field that is always empty costs nothing; a date
+    guessed from a description pins the wrong card to the top of the board.
+    """
+    payload = _json(f"https://{token}.pinpointhq.com/postings.json")
+    jobs = []
+    for job in payload.get("data") or []:
+        # `location` is an object, and which key carries the readable form
+        # varies: `name` is "Manchester, UK" on one board and absent on
+        # another, where only `city` is set.
+        location = job.get("location")
+        if isinstance(location, dict):
+            place = location.get("name") or location.get("city")
+        else:
+            place = location if isinstance(location, str) else None
+        jobs.append(
+            Job(
+                ats="pinpoint",
+                token=token,
+                job_id=str(job["id"]),
+                title=job.get("title") or "",
+                url=job.get("url"),
+                location=place,
+                department=job.get("department"),
+                deadline=job.get("deadline_at"),
+                description=_text(job.get("description")),
+            )
+        )
+    return jobs
+
+
 # Teamtailor's own RSS extension. The plain JSON feed at `/jobs.json` is
 # tidier, but it carries no location and no department, and this project ranks
 # on geography -- so the feed with the extra fields is the one worth parsing.
@@ -394,7 +523,9 @@ EXTRACTORS: dict[str, Callable[[str], list[Job]]] = {
     "recruitee": recruitee,
     "bamboohr": bamboohr,
     "breezy": breezy,
+    "icims": icims,
     "personio": personio,
+    "pinpoint": pinpoint,
     "teamtailor": teamtailor,
     "workday": workday,
 }
