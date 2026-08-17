@@ -35,7 +35,7 @@ from . import db, lexicon
 # Bump on every lexicon change: the diff between two versions over the same
 # corpus is a free regression test, and it is the only way to tell "the
 # classifier improved" from "the market moved".
-TAGGER = 28
+TAGGER = 29
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS job_tags (
@@ -481,19 +481,22 @@ _DESK = {
 # - **is it an internship** -- `contract: internship`, which already existed
 # - **what does it demand** -- `seniority`, which now always carries a level
 #
-# `student_intern` stays in the ladder because it is genuinely a rank: a
-# posting requiring a *future* graduation date is unreachable for someone who
-# has already graduated, whatever else it says.
+# **`student_intern` has left the ladder, at the user's decision.** It was here
+# because a posting demanding a future graduation date is unreachable for
+# someone who has already graduated, which is true and is not a *rank*. Being a
+# student is an eligibility fact and a contract, and both were already recorded
+# elsewhere: `contract: internship` carries it for 1,307 postings, and
+# `lexicon.judge` rejects on `student_only` for the same phrases.
+#
+# It was doing almost no work on this ladder -- 67 postings against those 1,307
+# -- while costing something real. The labelling sheet offered `student_intern`
+# as a seniority value, so every intern-titled row was labelled that way and
+# disagreed with a tagger that reads rank from the title and finds no grade
+# word. The scale asked a question the tagger does not answer.
+#
+# The phrases did not go anywhere: they are `_HARD_GATES["student_only"]` now,
+# which is where a thing you cannot pass belongs, and they still rank.
 _SENIORITY = {
-    # Specific phrases only. A bare "student" or "students" fired on any body
-    # that merely welcomes them, and marked a full-time PhD-level research
-    # role at Radix Trading as student-only.
-    "student_intern": _terms(
-        "currently enrolled", "must be enrolled", "final year student",
-        "final year students", "penultimate year", "still studying",
-        "graduating in 2027", "graduating in 2028", "graduating in 2029",
-        "expected graduation", "pursuing a degree", "studerande vid",
-    ),
     "head_or_md": _terms(
         "head of", "managing director", "chief", "partner", "global head",
         "director of",
@@ -561,8 +564,8 @@ def experience_floor(text: str) -> int | None:
 
 # Where a stated floor puts the posting on the ladder. Only ever consulted for
 # the grades a number can actually settle -- a floor never turns a posting into
-# `head_or_md`, `lead` or `student_intern`, because those are structural facts
-# about the role rather than a length of service.
+# `head_or_md` or `lead`, because those are structural facts about the role
+# rather than a length of service.
 _FLOOR_RANK = ((6, "senior_6_10"), (3, "mid_3_5"), (0, "junior_0_2"))
 # `new_grad` is left out with the structural grades. A graduate scheme is a
 # graduate scheme whatever stray number its body carries, and the asymmetry
@@ -631,6 +634,17 @@ _HARD_GATES = {
     "visa_sponsorship_none": _terms(
         "no visa sponsorship", "not able to sponsor", "unable to sponsor",
         "without sponsorship", "must have the right to work",
+    ),
+    # Moved off the seniority ladder, where it was pretending to be a rank. A
+    # posting demanding a *future* graduation date is one this reader cannot
+    # pass, which is exactly what a hard gate is. Specific phrases only: a bare
+    # "student" fired on any body that merely welcomes them, and marked a
+    # full-time PhD-level research role at Radix Trading as student-only.
+    "student_only": _terms(
+        "currently enrolled", "must be enrolled", "final year student",
+        "final year students", "penultimate year", "still studying",
+        "graduating in 2027", "graduating in 2028", "graduating in 2029",
+        "expected graduation", "pursuing a degree", "studerande vid",
     ),
     "security_clearance": _terms("security clearance", "clearance required"),
     "onsite_only": _terms(
@@ -1544,14 +1558,10 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
     # Trader* a `head_or_md` posting, and one saying "work with senior
     # colleagues" made it `senior_6_10`. The rank is in the title.
     #
-    # `student_intern` is the exception and is checked against the body first,
-    # because that is the only place it is ever written: no title announces
-    # "must be graduating in 2028", which is exactly why it needs its own
-    # bucket. Its needles are specific phrases for the same reason -- a bare
-    # "students" tripped on bodies that merely welcome them.
-    gate = _hit(text, _SENIORITY["student_intern"])
-    # **Title only**, and the body reaches rank through exactly two doors: the
-    # student gate above and an explicit years figure below.
+    # **Title only, and the body now reaches rank through one door**: an
+    # explicit years figure. The student gate was the second door and it has
+    # been closed -- being a student is an eligibility fact rather than a
+    # grade, so it is `hard_gates: student_only` now. See `_SENIORITY`.
     #
     # The old fall-through to the body was the same bug `PLAN.md` recorded and
     # only half fixed. It said "the rank is in the title" and then, whenever a
@@ -1577,10 +1587,7 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
         f"{floor} years demanded" if floor is not None else None)
 
     named = rank[0] if rank else "unknown"
-    if gate:
-        seniority_value = "student_intern"
-        add("seniority", seniority_value, f"{gate!r}")
-    elif floor is not None and named in _FLOOR_DECIDES:
+    if floor is not None and named in _FLOOR_DECIDES:
         by_floor = next(value for lower, value in _FLOOR_RANK if floor >= lower)
         evidence = f"{floor} years demanded"
         if by_floor != named and rank:
@@ -1729,7 +1736,10 @@ def _fit(tags: list[Tag]) -> Tag:
             bucket, why = _CAP.get(bucket, bucket), f"{why}; {notch}"
         return Tag(*key, "fit", bucket, "weak", why)
 
-    if seniority == "student_intern":
+    # Reads the hard gate now rather than the seniority ladder, which is where
+    # this fact moved: a future graduation date is something the reader cannot
+    # pass, not a grade they might grow into.
+    if "student_only" in hard:
         return make("out_of_scope", "requires a future graduation date")
     if relevance == "rejected":
         return make("out_of_scope", f"excluded: {'/'.join(sorted(gates)) or 'no quant signal'}")

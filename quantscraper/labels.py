@@ -60,8 +60,15 @@ HEADER = ("n", *FILL, *CONTEXT, *KEYS)
 FIELDS = (*KEYS, *FILL)
 
 RELEVANCE = ("relevant", "less_relevant", "adjacent", "rejected")
+# `student_intern` was here and is gone, at the user's decision. It was the
+# only value on this scale the tagger reads from a *body* rather than a title,
+# so every intern-titled row got labelled `student_intern` and disagreed with a
+# tagger that finds no grade word in the title -- the scale was asking a
+# question the tagger does not answer. Being a student is an eligibility fact
+# and a contract, and both are recorded: `contract: internship` and
+# `hard_gates: student_only`.
 SENIORITY = (
-    "student_intern", "new_grad", "junior_0_2", "mid_3_5",
+    "new_grad", "junior_0_2", "mid_3_5",
     "senior_6_10", "lead", "head_or_md", "unknown",
 )
 
@@ -71,8 +78,15 @@ SENIORITY = (
 LEGACY = {
     "core": "relevant",
     "less relevant": "less_relevant",
-    "student_only": "student_intern",
-    "student only": "student_intern",
+    # Rows written while `student_intern` was on the scale. They are read as
+    # `unknown`, which is what the scale now says about them: the sheet no
+    # longer distinguishes a student contract from an unstated grade, and
+    # silently dropping the rows instead would cost an afternoon's labelling
+    # over a scale change the labeller did not make.
+    "student_only": "unknown",
+    "student only": "unknown",
+    "student_intern": "unknown",
+    "student intern": "unknown",
 }
 
 # How much of the sample each fit bucket gets. `out_of_scope` and `unknown`

@@ -706,12 +706,29 @@ are the whole method. `posting_language` keeps diacritics, and returns
 `unknown` below four stopword hits rather than guessing, because 81% of the
 corpus is a six-word title.
 
-**The board has three gates now, not one, and they are the whole list.** They
+**The board has four gates now, not one, and they are the whole list.** They
 live in `web/build_data.py`'s `GATES`: `off_industry` (another profession),
-`off_location` (outside the target and semi-target geography) and
-`out_of_reach` (director, VP, manager, project leader, product owner — a rank
-nobody reaches from under a year of experience). Each is counted separately on
-every build, because one total would hide which of the three ate a hub.
+`off_location` (outside the target and semi-target geography), `out_of_reach`
+(director, VP, manager, project leader, product owner — a rank nobody reaches
+from under a year of experience) and `rejected` (the tagger read it and it is
+not this line of work). Each is counted separately on every build, because one
+total would hide which of the four ate a hub.
+
+**`rejected` is the widest gate and the one to be most careful with.** It
+removes 12,637 postings, more than the other three combined, and it is the only
+one whose evidence is a *judgement* rather than a named fact — the others read a
+place, a rank or an occupation. It went in on the strength of a 1,000-posting
+machine-labelled sample that found no false rejection anywhere in it, which is
+real evidence and not proof: a model grading a model shares the grader's blind
+spots. Delete the line if the board ever looks too empty; it needs no re-tag,
+and `list --exclude rejected` shows what it ate.
+
+**`student_intern` is not a seniority.** It was the one value on that ladder
+read from a *body* rather than a title, so the labelling sheet kept asking a
+question the tagger does not answer, and every intern-titled row disagreed. It
+was carrying 67 postings while `contract: internship` carried 1,307. Being a
+student is an eligibility fact — `hard_gates: student_only` — and a contract,
+and both were already recorded.
 
 **The `unknown` bucket is a vocabulary gap, not a broken rule, and only volume
 showed it.** A 1,000-posting machine-labelled sample's largest single

@@ -86,7 +86,13 @@ _NOTHING_KNOWN = {"unknown", "unstated", "other", "none", ""}
 # a fixture that offers rows the board refuses to show is measuring a
 # classifier nobody reads. Ordered, because a posting can carry more than one
 # reason and the count attributes it to the first that would have caught it.
-GATES = tagging.GATES
+GATES = {
+    **tagging.GATES,
+    # Not an `exclusion_reason` like the other three -- it is the `relevance`
+    # verdict itself, matched separately below. It lives in this table so the
+    # per-reason counts printed on every build cover all four.
+    "rejected": "read, and not this line of work",
+}
 
 # Dimensions a posting can hold several of at once -- a multi-asset desk, two
 # languages -- shipped as lists. The rest are one verdict and ship as a scalar.
@@ -306,12 +312,22 @@ def main() -> None:
         #   tag is set, for why the database is still untouched by it.
         # - `out_of_reach` -- a rank nobody reaches from under a year of
         #   experience: director, VP, manager, project leader, product owner.
+        # - `rejected` -- the tagger read the posting and it is not this line
+        #   of work. This is the widest of the four and the last one added, at
+        #   the reader's request. It is also the one with the most evidence
+        #   behind it *and* the most to lose: a 1,000-posting machine-labelled
+        #   sample found no false rejection anywhere in it, and a false
+        #   rejection is the failure this project calls disqualifying. Both
+        #   things are true, which is why it is one line to delete and why
+        #   `list` still shows every row it removes.
         #
         # Each is counted separately because a gate that removes silently is
         # how a widened lexicon quietly eats a hub, and one total would hide
-        # which of the three did it.
+        # which of the four did it.
         reasons = mine.get("exclusion_reason", ())
         hit = next((reason for reason in GATES if reason in reasons), None)
+        if hit is None and (mine.get("relevance") or ("unknown",))[0] == "rejected":
+            hit = "rejected"
         if hit:
             gated[hit] += 1
             continue

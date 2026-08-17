@@ -7,8 +7,10 @@ Nothing here is urgent — the project runs fine without any of it. These are th
 places where I hit a wall that needed a human, not a decision I should make for
 you.
 
-**Two things are genuinely waiting on you** — items 1 and 2. Everything below
-them is resolved or optional.
+**Two things are genuinely waiting on you** — item 1, the labelling sheet, and
+item 2, two national registers that want an account. Everything below them is
+resolved or optional, and the two design decisions I had open are answered and
+recorded at the end of item 1.
 
 ---
 
@@ -22,14 +24,12 @@ career, not mine.
 already filled in was touched. The criterion is 90% on both dimensions, no
 false rejection, and at least 100 rows.
 
-**Scored against lexicon 25: relevance 86.4%, seniority 46.9%.** Relevance was
-64.7% two passes ago; the jump is items 5 and 6 below. Seniority went *down*,
-and that is arithmetic rather than regression — you labelled six more rows in
-the dimension where the tagger deliberately answers `unknown`. The reason is a
-question for you, not a bug: see "One decision I need" further down.
+**Scored against lexicon 29: relevance 86.4%, seniority 50.0%.** Relevance was
+64.7% three passes ago; the jump is items 5 and 6 below. Seniority rose once
+`student_intern` left the scale — see the end of this item.
 
 **The sheet no longer offers VP roles or postings in Kiruna.** It had been
-gating on `off_industry` alone while the board gates on three reasons, so it
+gating on `off_industry` alone while the board gates on four reasons, so it
 kept handing you rows the board would not show — **102 of your 193 unlabelled
 rows, more than half**, were out-of-area or out-of-reach. Both now read the
 same list (`tagging.GATES`), and those rows are gone.
@@ -126,7 +126,7 @@ questions:
 
 - **650 from what the board actually shows** — is what you are being offered
   right?
-- **350 from what the three gates removed** — did a gate eat something? That is
+- **350 from what the gates removed** — did a gate eat something? That is
   the false-rejection check, and it is the failure this project treats as
   expensive. It is also the part I most wanted a second opinion on, having just
   widened the gates a great deal on your instruction.
@@ -153,70 +153,25 @@ What is left is the backfill queue by design — bare `Analyst`, `Associate`,
 `Data Scientist` — which the lexicon refuses to reject without a body, and
 should keep refusing.
 
-### One decision left, and it is the biggest lever on the board
+### Both open decisions are now made — nothing here is waiting on you
 
-**12,448 of the 17,840 postings on the board are `relevance: rejected`.** They
-are shown, ranked below everything else, because the board only *removes* for
-the three gate reasons. Gating `rejected` too would leave about **5,400
-postings** — a board roughly a third the size, and almost all of the remainder
-either positively rated or genuinely undecided.
+**You chose to gate `rejected`.** The board is 5,855 postings, from 17,840:
+12,637 removed as read-and-not-this-line-of-work, on top of the three earlier
+gates. `data.js` is 2.7 MB, so the page is quick now.
 
-- **For it:** the 1,000-row machine-labelled sample found no false rejection at
-  all, which is real evidence it would be safe.
-- **Against it:** it is the one filter that could hide the failure this project
-  treats as disqualifying, and `rejected` includes contestable calls a human
-  might overturn — which is exactly what your sheet keeps finding.
+It is the widest gate and the one whose evidence is a judgement rather than a
+named fact, so if the board ever looks too thin, that is the line to delete —
+`web/build_data.py`, `GATES`, no re-tag needed. `list --exclude rejected` shows
+what it removed, any time.
 
-I have not done it. Say the word and it is one line in `web/build_data.py`'s
-`GATES`, with no re-tag needed.
+**You chose to drop `student_intern` from the sheet.** The seniority column
+offers seven values now, not eight. Being a student is recorded as
+`contract: internship` and `hard_gates: student_only` instead, which is what it
+always was — an eligibility fact, not a rank. Your one row labelled
+`student_intern` reads as `unknown` rather than being thrown away.
 
-### The relevance rows still disagreeing, and why I left them
-
-Eight of 59, and none of them is one bad rule — which is the argument for
-reading more rows rather than tuning against 59.
-
-- **Three still read `unknown`** — `Wealth Advisor`, `Real Estate & Land
-  Acquisition Manager`, `Arbetsledare Handel & Hyra`. Each mentions markets
-  somewhere in a long body, so the new rule correctly declines to call it, and
-  closing them needs a new occupation word instead. `CLAUDE.md` requires every
-  such needle to be dry-run over all 70,000 postings first — five
-  innocent-looking trade words have already turned out to name jobs worth
-  keeping — so these wait for a batch rather than going in one at a time.
-- **Two are `adjacent` where you said `rejected`** — `Associate Portfolio
-  Manager Program` and `Principal Engineer - Trading Core`. Both are a real
-  markets firm with a title naming the desk rather than the seat, which is the
-  softest call the lexicon makes, and `adjacent` already means "probably not".
-- **Two are `less_relevant` where you said `adjacent`** — the FX trader and the
-  digital-assets trader. One notch, and you recorded that trading is not wrong.
-  `Digital Assets Trader` is arguably crypto and would be a hard exclusion, but
-  you labelled it `adjacent` rather than `rejected`, so I have not gated it.
-- **One is the tagger being more generous** on a credit quant, which is fine.
-
-### One decision I need: does an intern *title* set the rank?
-
-**This is the whole reason seniority sits at 53.8% and did not move.** Six of
-the twelve disagreements are rows where you read a level out of the body and
-the tagger said `unknown`, which is the title-only rule working as designed.
-But one is a straight inconsistency: `Summer 2027 Asset Management Intern`
-reads `unknown`, while a posting whose *body* says "currently enrolled" reads
-`student_intern`.
-
-That is deliberate — `intern` was taken off the ladder because it is a contract
-and it was hiding a "2–3 years" bar — and the contract is recorded separately.
-But the sheet offers you `student_intern` as a seniority value, so you will
-keep labelling intern titles that way, and we will keep disagreeing.
-
-Two ways out, and it is your call because it is about your own search:
-
-- **(a) An intern title sets `student_intern`**, with an explicit years figure
-  still allowed to override it. Cheap, and it makes the sheet and the tagger
-  agree. Costs you the internships that are open to recent graduates, since
-  `student_intern` ranks down.
-- **(b) Leave it.** `contract: internship` already carries the fact, and you
-  filter on that instead. Then I should drop `student_intern` from the
-  seniority column on the sheet so it stops being offered.
-
-Tell me which, or just keep labelling and let the 200 rows decide it.
+Seniority agreement rose from 46.9% to 50.0% on your sheet as a direct result,
+because the scale stopped asking a question the tagger does not answer.
 
 **Why it matters.** The tagger rates 5 postings `apply_now` and 20 `strong` out
 of 69,895. I believe that is roughly right, and *believing* is the problem.
@@ -265,7 +220,7 @@ the criterion is met. You can run it after ten rows; it just says so.
 | column | values |
 |---|---|
 | `relevance` | `relevant` · `less_relevant` · `adjacent` · `rejected` |
-| `seniority` | `student_intern` · `new_grad` · `junior_0_2` · `mid_3_5` · `senior_6_10` · `lead` · `head_or_md` · `unknown` |
+| `seniority` | `new_grad` · `junior_0_2` · `mid_3_5` · `senior_6_10` · `lead` · `head_or_md` · `unknown` |
 
 `relevance` measures **distance from what you want**, not what kind of job it
 is — `role_class` already records that, so you do not need to encode it twice:

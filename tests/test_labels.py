@@ -311,7 +311,11 @@ class FileTest(unittest.TestCase):
         label = labels.load(self.path)[0]
 
         self.assertEqual(label.relevance, "relevant")
-        self.assertEqual(label.seniority, "student_intern")
+        # `student_intern` has left the scale, so a row written against it
+        # reads as `unknown` -- what the scale now says about such a posting.
+        # Discarding the row instead would cost an afternoon's labelling over
+        # a scale change the labeller did not make.
+        self.assertEqual(label.seniority, "unknown")
 
     def test_intern_as_a_rank_is_refused_with_the_reason(self):
         self._store("1", "Quantitative Researcher")

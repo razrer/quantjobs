@@ -354,15 +354,20 @@ class DistanceFromTheCentreTest(unittest.TestCase):
 
 
 class SeniorityTest(unittest.TestCase):
-    def test_a_graduation_gate_is_its_own_bucket(self):
+    def test_a_graduation_gate_is_a_hard_gate_not_a_rank(self):
         """The user has graduated, so a future graduation date is noise -- and
-        titles never announce it."""
+        titles never announce it.
+
+        It moved off the seniority ladder: being a student is something you
+        cannot pass rather than a grade you grow into, so it is a hard gate,
+        and the *rank* is whatever the title said, which here is nothing."""
         tags = _tags(
             title="Quantitative Analyst",
             description="You must be enrolled and graduating in 2028. " * 20,
         )
 
-        self.assertEqual(tags["seniority"], {"student_intern"})
+        self.assertIn("student_only", tags["hard_gates"])
+        self.assertEqual(tags["seniority"], {"unknown"})
         self.assertEqual(tags["fit"], {"out_of_scope"})
 
     def test_the_title_decides_the_rank_too(self):
@@ -389,13 +394,21 @@ class SeniorityTest(unittest.TestCase):
         self.assertNotIn("student_intern", tags["seniority"])
 
     def test_a_real_graduation_gate_still_wins_from_the_body(self):
-        """No title announces it, which is why the bucket exists at all."""
+        """No title announces it, which is why the gate is read from the body.
+        It still costs the posting its fit; it just no longer claims to be a
+        rank."""
         tags = _tags(
             title="Quantitative Analyst",
             description="Applicants must be graduating in 2028. " * 20,
         )
 
-        self.assertEqual(tags["seniority"], {"student_intern"})
+        self.assertIn("student_only", tags["hard_gates"])
+        self.assertEqual(tags["fit"], {"out_of_scope"})
+
+    def test_the_ladder_no_longer_offers_a_student_grade(self):
+        """It was the one value read from a body rather than a title, so the
+        labelling sheet kept asking a question the tagger does not answer."""
+        self.assertNotIn("student_intern", tagging._SENIORITY)
 
     def test_associate_director_is_not_an_associate(self):
         self.assertEqual(

@@ -51,7 +51,7 @@ nothing in the near-term plan now waits on a human.
 | 8 | Silent-failure alerting | **done** — `alerts`, distributional |
 | 9 | Layer 3B — Tier B change detection | **done** — 3,751 pages watched |
 | 10 | Coverage measurement | **done** — measures, and refuses when it cannot |
-| 11 | Layer 5 — job tagging | **in progress** — lexicon 28 live, 59/268 hand-labelled + 1,000 machine-labelled, relevance 86% |
+| 11 | Layer 5 — job tagging | **in progress** — lexicon 29 live, 59/268 hand-labelled + 1,000 machine-labelled, relevance 86% |
 | 12 | Layer 6 — the board | **done** — card grid, facet rail, deadlines |
 | 13 | Layer 2C — board discovery | **done** — 23 boards, 989 postings, roster 16→49 |
 
@@ -1077,11 +1077,37 @@ Analyst` — titles `judge` refuses to reject without a body, which is the
 documented design and the thing standing between this project and a false
 rejection.
 
-**The remaining lever is a decision, not a bug.** 12,448 of the 17,840 postings
-on the board are `relevance: rejected`; gating that reason would leave ~5,400.
-The machine-labelled sample found no false rejection, which is real evidence it
-would be safe — but it is the one gate that could hide the failure this project
-calls expensive, so it is the user's call rather than a default.
+### Lexicon 29: the fourth gate, and a value that was never a rank
+
+Both decisions came back from the user, and both are recorded here because
+each overturns something this file argued for earlier.
+
+**`rejected` gates the board now.** 12,637 postings, more than the other three
+gates combined, and the board goes 17,840 -> 5,855 (`data.js` 8.9 MB -> 2.7 MB).
+It is the only gate whose evidence is a judgement rather than a named fact --
+the others read a place, a rank or an occupation -- so it is also the one most
+worth distrusting. It went in on the strength of the 1,000-posting sample
+finding no false rejection anywhere in it, which is evidence and not proof. One
+line in `GATES` removes it, with no re-tag.
+
+**`student_intern` has left the seniority ladder.** It was the only value there
+read from a *body* rather than a title, so the labelling sheet offered a
+question the tagger does not answer and every intern-titled row disagreed. It
+held 67 postings while `contract: internship` held 1,307 and `lexicon.judge`
+already rejected the same phrases as `student_only`. The needles moved to
+`_HARD_GATES["student_only"]`, which is where something you cannot pass belongs,
+and `_fit` reads them there. `labels.LEGACY` maps old `student_intern` rows to
+`unknown` rather than discarding them -- a scale change the labeller did not
+make should not cost them an afternoon.
+
+**Both seniority scores rose**: hand-labelled 46.9% -> 50.0%, machine 42.7% ->
+46.5%. Relevance is unchanged at 86.4% and 65.0%, which is the point -- neither
+change was about relevance.
+
+The shortlist went from 20 postings to 57, and that is **not** from either
+change: Layer 2C board discovery landed in the same tree and brought Tower
+Research, Squarepoint and Point72 with it -- roster firms that had produced no
+postings at all. See Stage 13.
 
 ---
 
