@@ -98,6 +98,10 @@ def _job(ad: dict) -> Job:
         # carry an employer URL we can resolve to a domain. Without the name
         # the other half are postings from nobody.
         employer=employer.get("name") or employer.get("workplace"),
+        # The coarse taxonomy bucket -- "Hälso- och sjukvård", "Data/IT" --
+        # not the leaf occupation, which is already in `department`. Twenty-odd
+        # values, and most of them are trades this project can never want.
+        category=(ad.get("occupation_field") or {}).get("label"),
         url=ad.get("webpage_url"),
         location=", ".join(
             part

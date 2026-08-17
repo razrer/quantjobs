@@ -7,8 +7,8 @@ Nothing here is urgent — the project runs fine without any of it. These are th
 places where I hit a wall that needed a human, not a decision I should make for
 you.
 
-**One thing is genuinely waiting on you** — item 1. Everything below it is
-resolved or optional.
+**Two things are genuinely waiting on you** — items 1 and 2. Everything below
+them is resolved or optional.
 
 ---
 
@@ -18,46 +18,349 @@ resolved or optional.
 only kind of work I cannot do for you: it needs your judgement about your own
 career, not mine.
 
-**Why it matters.** The tagger currently rates 13 postings `apply_now` and 264
-`strong` out of 55,455. I believe that is roughly right, and *believing* is the
-problem. Stage 2 hit this exact wall with coverage: the numbers were checked by
-ad-hoc greps until `roster.csv` made them repeatable, and that fixture
-immediately found a false hit nobody had suspected. Tagging has no equivalent
-yet, so "the lexicon improved" and "the market moved" are indistinguishable.
+**Where it stands: 59 of 268 labelled**, with **209 rows waiting**. Nothing you
+already filled in was touched. The criterion is 90% on both dimensions, no
+false rejection, and at least 100 rows.
 
-Six false positives have already been found by reading output by hand — a
-recruiter role scored as a trading role, an insurance accounting role scored as
-core quant three times over, `Graduate Trader` scored as a managing director.
-Each was found by luck, in whatever happened to be on screen. A fixture finds
-them on purpose.
+**Scored against lexicon 25: relevance 86.4%, seniority 46.9%.** Relevance was
+64.7% two passes ago; the jump is items 5 and 6 below. Seniority went *down*,
+and that is arithmetic rather than regression — you labelled six more rows in
+the dimension where the tagger deliberately answers `unknown`. The reason is a
+question for you, not a bug: see "One decision I need" further down.
 
-**What to do.** Run this to get a spread across formats, hubs and verdicts:
+**The sheet no longer offers VP roles or postings in Kiruna.** It had been
+gating on `off_industry` alone while the board gates on three reasons, so it
+kept handing you rows the board would not show — **102 of your 193 unlabelled
+rows, more than half**, were out-of-area or out-of-reach. Both now read the
+same list (`tagging.GATES`), and those rows are gone.
+
+**One consequence worth knowing: the near-miss frame is nearly exhausted.** It
+was 2,061 postings and the gates took it to 637, of which you have done 59 and
+209 are on the sheet. There is not a third sheet of this kind to draw — which
+is a good sign rather than a bad one, since it means most of the ambiguity the
+frame existed to surface has been removed rather than deferred.
+
+**Six things your labels taught the lexicon**, each now a rule with tests:
+
+1. **No management roles.** A management title rejects unless an unambiguous
+   quant word appears — so `Director of Trading` and `Product Manager - B2C
+   Credit` go, while `Head of Quantitative Research` stays and its *seniority*
+   is what puts it out of reach.
+2. **No asset-management or investment-banking work.** `investment analyst` and
+   `portfolio analyst` had been weak *positives*; nine of your rows in a row
+   said otherwise. Now an exclusion, still rescued by a quant qualifier.
+3. **Trading stays.** You said it is not wrong, so it sits at `less_relevant`
+   — one step out from research, still readable.
+4. **Cyprus and Bulgaria.** Geography ranks and never gates, so nothing is
+   dropped; the *sheet* now prefers your hubs and the deprioritized ones, which
+   costs the fixture nothing because relevance and seniority do not depend on
+   where the desk is.
+5. **A method word is not a markets word.** Nine of your rejections came back
+   `unknown` because one phrase in the body had rescued them — a computational
+   chemist on *model validation*, a NetSuite consultant on *time series*, a
+   payments-company data scientist on *statistical modelling*. Requiring two
+   phrases was the obvious fix and measuring it showed it fails: a
+   thermal-fluids analyst carries two and is still a mechanical engineer. The
+   rule now asks a different question — does the posting mention markets *at
+   all* — and the phrases that name markets outright (*statistical arbitrage*,
+   *smart order routing*) are exempt because there is nothing left to
+   corroborate. **103 postings moved, 85 distinct titles, all hand-read**; the
+   pick of them is a garage-door salesman who had been kept by *options
+   pricing*.
+6. **`Associate Director` and `Assistant Director` are out of reach.** Both
+   were deliberately protected as a bank's mid-career grade, and that is true
+   and does not help — from under a year they are as unreachable as a real
+   director. Three reached your sheet after the gate went in, because the
+   protection routed them to `seniority`, where a body asking for three years
+   read `mid_3_5` and cleared the bar.
+
+**One row needs your hand**: row 24 of the old sheet, `Senior Lending Analyst —
+Portfolio & Risk Analytics`. The columns are shifted — `relevance` reads
+`slightly` and `seniority` reads `adjacent`. `labels` skips it and scores the
+rest rather than refusing the file. It has kept its position in the new sheet;
+search the file for `slightly`.
+
+**Two calls you made when asked, recorded so they are not re-argued:**
+
+- **`Director` and `Partner` stay `head_or_md`**, not `senior_6_10`. Both
+  readings put the posting at `stretch`, so this changes the label and not what
+  reaches you. Three of your rows disagree with the lexicon on this and will
+  keep doing so; that is the intended answer, not a bug.
+- **Ten of your rejections sat at `unknown`** — seven of those are now closed,
+  including `NetSuite Consultant` and `Computational Chemist`. See item 5
+  above.
+
+**Your rows have now paid for themselves three times.** The first ten moved
+relevance from 52% to 71% by exposing three real bugs: `Equity Research
+Analyst` scored as quant research on the words *research analyst*; a data
+governance role scored as research because its body said "model validation"
+once; and `Wealth Advisor`, `Alliance Director` and `Head of Security` all came
+back `unknown` — "nothing looked at this" — because the module written to name
+non-quant occupations was never asked. The next forty took relevance to 80.4%
+by exposing the method-versus-markets bug. All fixed, all with tests.
+
+**Nothing you labelled is a false rejection, at either lexicon version.** Every
+remaining disagreement is the tagger being *more generous* than you, which is
+the safe direction: it costs you a few seconds of reading rather than a missed
+opening.
+
+### There is now a machine-labelled sheet beside yours, and it is not the same thing
+
+`quantscraper/auto_labels.csv` — 1,000 postings labelled by Haiku subagents
+against the same rubric you use, drawn so that **not one of them is on your
+sheet**. Score it the same way:
 
 ```bash
-python -m quantscraper list --limit 100 > sample.txt
+python -m quantscraper labels --file quantscraper/auto_labels.csv
 ```
 
-Then for each posting write one line in `quantscraper/labels.csv`:
+**It is not ground truth and must never be used as the exit criterion.** The
+criterion in `TAGGING.md` says a hand-labelled sample for a reason: a model
+grading a model agrees with it for the wrong reasons, and this one shares a
+family with the thing being graded. What a thousand cheap labels *are* good for
+is finding **systematic** disagreement — a rule that is wrong the same way forty
+times is visible here and invisible in fifty-nine hand-read rows.
 
-    ats,token,job_id,relevance,seniority,note
+It is deliberately drawn in two halves, because they answer different
+questions:
 
-`relevance` is one of `core`, `adjacent`, `rejected`. `seniority` is one of
-`intern`, `student_only`, `new_grad`, `junior_0_2`, `mid_3_5`, `senior_6_10`,
-`lead`, `head_or_md`. The `note` is free text and is the most valuable column —
-it is where "this says Trader but the body is an ops role" goes.
+- **650 from what the board actually shows** — is what you are being offered
+  right?
+- **350 from what the three gates removed** — did a gate eat something? That is
+  the false-rejection check, and it is the failure this project treats as
+  expensive. It is also the part I most wanted a second opinion on, having just
+  widened the gates a great deal on your instruction.
 
-**The one rule that matters:** label what the posting *is*, not what the tagger
-said. If you find yourself agreeing with a tag because it is already there, the
-fixture is measuring nothing.
+**What it says so far.** Agreement is 62.5% on relevance, and that is
+agreement-with-Haiku rather than accuracy: the agent labelled `Slack
+Administrator` and `FCP Onboarding Specialist` as `adjacent`, so where the two
+differ it is often the agent that is wrong. **The good news is the direction:
+nothing in the sample shows the lexicon throwing real quant work away**, gates
+included.
 
-**What I will build once it exists.** `python -m quantscraper labels`, which
-scores the current lexicon against your sample and prints every disagreement.
-The exit criterion in `TAGGING.md` is ≥90% on `relevance` and `seniority` and
-**no false `rejected`** — a wrongly rejected posting is the expensive failure,
-a false positive costs you a few seconds of reading.
+**The finding worth your attention is the opposite one.** The biggest single
+disagreement is 235 postings the agent rejected outright and the tagger left at
+`unknown` — `Event Coordinator (Casual)`, `Senior Meeting Planning &
+Hospitality Specialist`. The board's own numbers agree: **6,852 of its 18,598
+postings sit at `relevance: unknown`** against 283 with any positive verdict.
+That was missing vocabulary rather than a broken rule, and it is **now done**:
+venue and front-of-house words gate, retail branch banking rejects, and German
+enrolment-bound programmes (`Duales Studium`, `Werkstudent`) reject on the
+title. Board `unknown` went **6,852 → 5,109** and not one posting lost a
+positive verdict.
 
-**Effort:** an hour or so, once. It does not need doing again unless the
-lexicon changes shape.
+What is left is the backfill queue by design — bare `Analyst`, `Associate`,
+`Data Scientist` — which the lexicon refuses to reject without a body, and
+should keep refusing.
+
+### One decision left, and it is the biggest lever on the board
+
+**12,448 of the 17,840 postings on the board are `relevance: rejected`.** They
+are shown, ranked below everything else, because the board only *removes* for
+the three gate reasons. Gating `rejected` too would leave about **5,400
+postings** — a board roughly a third the size, and almost all of the remainder
+either positively rated or genuinely undecided.
+
+- **For it:** the 1,000-row machine-labelled sample found no false rejection at
+  all, which is real evidence it would be safe.
+- **Against it:** it is the one filter that could hide the failure this project
+  treats as disqualifying, and `rejected` includes contestable calls a human
+  might overturn — which is exactly what your sheet keeps finding.
+
+I have not done it. Say the word and it is one line in `web/build_data.py`'s
+`GATES`, with no re-tag needed.
+
+### The relevance rows still disagreeing, and why I left them
+
+Eight of 59, and none of them is one bad rule — which is the argument for
+reading more rows rather than tuning against 59.
+
+- **Three still read `unknown`** — `Wealth Advisor`, `Real Estate & Land
+  Acquisition Manager`, `Arbetsledare Handel & Hyra`. Each mentions markets
+  somewhere in a long body, so the new rule correctly declines to call it, and
+  closing them needs a new occupation word instead. `CLAUDE.md` requires every
+  such needle to be dry-run over all 70,000 postings first — five
+  innocent-looking trade words have already turned out to name jobs worth
+  keeping — so these wait for a batch rather than going in one at a time.
+- **Two are `adjacent` where you said `rejected`** — `Associate Portfolio
+  Manager Program` and `Principal Engineer - Trading Core`. Both are a real
+  markets firm with a title naming the desk rather than the seat, which is the
+  softest call the lexicon makes, and `adjacent` already means "probably not".
+- **Two are `less_relevant` where you said `adjacent`** — the FX trader and the
+  digital-assets trader. One notch, and you recorded that trading is not wrong.
+  `Digital Assets Trader` is arguably crypto and would be a hard exclusion, but
+  you labelled it `adjacent` rather than `rejected`, so I have not gated it.
+- **One is the tagger being more generous** on a credit quant, which is fine.
+
+### One decision I need: does an intern *title* set the rank?
+
+**This is the whole reason seniority sits at 53.8% and did not move.** Six of
+the twelve disagreements are rows where you read a level out of the body and
+the tagger said `unknown`, which is the title-only rule working as designed.
+But one is a straight inconsistency: `Summer 2027 Asset Management Intern`
+reads `unknown`, while a posting whose *body* says "currently enrolled" reads
+`student_intern`.
+
+That is deliberate — `intern` was taken off the ladder because it is a contract
+and it was hiding a "2–3 years" bar — and the contract is recorded separately.
+But the sheet offers you `student_intern` as a seniority value, so you will
+keep labelling intern titles that way, and we will keep disagreeing.
+
+Two ways out, and it is your call because it is about your own search:
+
+- **(a) An intern title sets `student_intern`**, with an explicit years figure
+  still allowed to override it. Cheap, and it makes the sheet and the tagger
+  agree. Costs you the internships that are open to recent graduates, since
+  `student_intern` ranks down.
+- **(b) Leave it.** `contract: internship` already carries the fact, and you
+  filter on that instead. Then I should drop `student_intern` from the
+  seniority column on the sheet so it stops being offered.
+
+Tell me which, or just keep labelling and let the 200 rows decide it.
+
+**Why it matters.** The tagger rates 5 postings `apply_now` and 20 `strong` out
+of 69,895. I believe that is roughly right, and *believing* is the problem.
+Stage 2 hit this exact wall with coverage: the numbers were checked by ad-hoc
+greps until `roster.csv` made them repeatable, and that fixture immediately
+found a false hit nobody had suspected.
+
+Your first three labels already earned their keep. Scored against the lexicon
+as it stood, they disagreed on relevance three times out of three and on
+seniority twice — and both seniority disagreements were the lexicon's fault,
+not yours. One of them was a stray "partner" in Schonfeld's diversity paragraph
+turning an internship into a managing-director posting. That is now fixed, with
+a test, and it was invisible until three rows of ground truth existed.
+
+Everything found before that was found by luck, in whatever happened to be on
+screen. A fixture finds them on purpose.
+
+**The sheet is already drawn and waiting**: `quantscraper/labels.csv`, **252
+postings — your 52 at the top of the file wherever they fell, and 200 blank
+ones**. Open it in a spreadsheet, fill in two columns, save as CSV. Keep the
+UTF-8 encoding on save; the file is written with a BOM so Excel gets the
+Swedish and Dutch titles right, and it reads that back.
+
+Columns are in reading order — `n`, then the three you type (`relevance`,
+`seniority`, `note`), then what you read (`title`, `firm`, `location`,
+`department`, `url`, `description`), then the three keys, which are only there
+so a row can be joined back to the database. Never edit those last three.
+
+**The rows are deliberately shuffled.** The draw is built bucket by bucket, so
+writing it in that order put every `apply_now` in the first few rows and thirty
+`out_of_scope` in one block — which tells you what the tagger decided just as
+plainly as a column would, and invites rubber-stamping thirty rejections in a
+row. The order is stable across redraws, so a half-filled sheet is never
+rearranged under you.
+
+```bash
+python -m quantscraper labels
+```
+
+That scores the lexicon against whatever you have filled in so far, prints
+every disagreement with the evidence that caused it, and exits non-zero until
+the criterion is met. You can run it after ten rows; it just says so.
+
+**The two columns.**
+
+| column | values |
+|---|---|
+| `relevance` | `relevant` · `less_relevant` · `adjacent` · `rejected` |
+| `seniority` | `student_intern` · `new_grad` · `junior_0_2` · `mid_3_5` · `senior_6_10` · `lead` · `head_or_md` · `unknown` |
+
+`relevance` measures **distance from what you want**, not what kind of job it
+is — `role_class` already records that, so you do not need to encode it twice:
+
+- `relevant` — the output is research, modelling or signal work
+- `less_relevant` — real quant work, but the day job is trading, building or
+  risk rather than research
+- `adjacent` — a markets firm and a quantitative title, but the seat is
+  operational or the signal is thin
+- `rejected` — not this line of work at all
+
+`note` is free text and is still the most valuable column: it is where "says
+Trader, but the body is an ops role" goes.
+
+**Three rules that decide whether this is worth the hour.**
+
+1. **Label what the posting *is*, not what the tagger said.** The sheet
+   deliberately does not show the tagger's verdict — that column existed in the
+   first version and it is how a fixture ends up measuring agreement with
+   itself.
+2. **Read the body, not the title.** It is in the `description` column of every
+   row that has one, **154 of the 200 new ones**. All three of your original
+   labels were made from a 44-character truncated title, and two of them
+   recorded a reason the body contradicts — Flow Traders does ask for
+   Maths/Stats and does mention development languages; what makes it less
+   relevant is that the coding bar is *Excel*.
+3. **Do not skip the rows that look like near misses.** 56 of the 200 are
+   postings the lexicon rejected on a *contestable* ground — `Equity Research
+   Analyst`, a credit-risk quant, an engineer at a trading firm. Those are the
+   only rows that can reveal a **false rejection**, the one failure this
+   project treats as disqualifying. If you only have time for some of the
+   sheet, these are the ones worth the hour.
+
+**What changed after your first ten rows.** You hit an AI-training gig, a
+compliance officer, a commercial lawyer, an applied-AI engineer and a
+real-estate manager in the first seven, and you were right that labelling them
+proves nothing: the lexicon cannot mistake a van driver for a quant. The draw
+now runs over a **frame of 2,061 postings** rather than all 69,961, gated on
+four things — still live and openable, not already gated as another profession,
+written in English or Swedish, and carrying an actual markets or quant word.
+Tightening the lexicon this pass did not shrink that frame, which is the check
+worth naming: a rule that rejects more could easily have starved the very
+sample that is meant to catch it, and it did not (2,084 before, 2,061 after).
+
+Your ten labels are all preserved, including the seven junk ones. They cost
+nothing to keep and two of them — `Equity Research Analyst` and the Swedbank
+credit-risk quant — are exactly the near misses the new frame is built to find.
+
+**Exit criterion** (`TAGGING.md`): ≥90% on both dimensions, no false
+`rejected`, and at least 100 rows.
+
+**Effort:** an hour or so, once. Re-running `sample` later tops the sheet up
+and never overwrites a row you have filled in.
+
+---
+
+## 2. Two national job registers want an account, and I don't make accounts
+
+Sweden's JobStream is the single best source in the pipeline: a national feed,
+complete by law, 4,582 postings, delta-polled. Two of the five remaining focus
+hubs publish the same kind of thing, and both stop at a login.
+
+**Switzerland — `job-room.ch`.** SECO's public employment service, and it is
+better than a normal job board: under the *Stellenmeldepflicht*, employers must
+report vacancies in high-unemployment occupations to it, so parts of it are
+mandatory rather than voluntary. The search endpoint
+(`/api/jobadservice/api/jobAdvertisements/_search`) returns **HTTP 401
+Unauthorized** to an anonymous POST — verified, not assumed. There is a
+registered API programme for it.
+
+**Denmark — `jobnet.dk`.** STAR's national job register. `job.jobnet.dk/CV/
+FindWork/Search` redirects to **NemLog-in**, the Danish national identity
+service, which needs a Danish MitID. Verified.
+
+**What I need:** for Switzerland, either register for the job-room API and put
+the credentials in `.env` as `JOBROOM_KEY` (same pattern as `FCA_KEY`), or tell
+me to drop it. For Denmark, MitID is not something you can hand me, so unless
+you have one, say so and I will fall back to Jobindex, which is private but
+open.
+
+**What I build once it is there:** a `jobroom_ch` module in the `jobstream.py`
+shape — cursor in `feed_state`, delta polling, `MIN_EXPECTED` floor. Switzerland
+is one of six focus hubs and currently produces postings from **2 of its 11**
+roster firms.
+
+Singapore's equivalent needs nothing from you — see the note below.
+
+**Singapore is already open, and it is the same kind of source.**
+`api.mycareersfuture.gov.sg/v2/search` answers anonymously; verified, and the
+first result for "quantitative" was a Quantitative Researcher at AlphaGrep.
+Better still, it is *mandatory*: the Fair Consideration Framework requires an
+employer to advertise on MyCareersFuture before applying for an Employment Pass,
+so every firm in Singapore hiring a foreigner must appear. That is a register
+complete by law, which is exactly what this project prefers. No action needed —
+recorded here so the contrast with the two above is on the record.
 
 ---
 

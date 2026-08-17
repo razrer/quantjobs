@@ -55,6 +55,10 @@ python -m quantscraper ats --limit 800        # fingerprint careers hosts to an 
 ```
 
 ```bash
+python -m quantscraper discover --roster      # find boards no careers page named (Layer 2C)
+```
+
+```bash
 python -m quantscraper jobs --limit 100       # pull postings from resolved boards
 ```
 
@@ -68,6 +72,14 @@ python -m quantscraper tag                    # classify postings into tags (Lay
 
 ```bash
 python -m quantscraper list --fit apply_now --hub amsterdam   # filter the tags
+```
+
+```bash
+python -m quantscraper sample --limit 100     # draw postings to hand-label
+```
+
+```bash
+python -m quantscraper labels                 # score the lexicon on them
 ```
 
 ```bash
@@ -87,6 +99,10 @@ python -m quantscraper jobstream              # poll Sweden's delta feed
 ```
 
 ```bash
+python -m quantscraper jobstream --since 2026-08-12   # replay a polled window
+```
+
+```bash
 python -m quantscraper alerts                 # flag sources that broke quietly
 ```
 
@@ -100,6 +116,11 @@ The board is a static page. Dump the data, then serve `web/` — it reads
 ```bash
 python web/build_data.py && python -m http.server 8731 --directory web
 ```
+
+`data.js` is ~33 MB, so `build_data.py` omits every dimension sitting on its
+"nothing known" default rather than writing `unknown` seventy thousand times.
+The board reads a missing key as exactly that — do not "fix" it by writing the
+defaults back in.
 
 `fca` needs `FCA_EMAIL` and `FCA_KEY` in `.env` (gitignored, never committed).
 
@@ -136,10 +157,13 @@ registries/*.py  ->  employers table  ->  resolve.py  ->  firms table
 - `domains.py` — Layer 2: firm name -> domain, guessed then verified
 - `fca.py` — Layer 2 enrichment from the FCA register; needs `.env`
 - `ats.py` — Layer 2: domain -> `(ats, token)` by fingerprint, else tier B/C
+- `discover.py` — Layer 2C: firm name -> board token, guessed then proven
 - `extract.py` — Layer 3: one function per ATS format; postings land in `jobs`
 - `jobstream.py` — Layer 4: Sweden's national delta feed, cursor in `feed_state`
 - `alerts.py` — per-source volume anomaly detection over the `runs` history
 - `registries/` — one module per source
+- `web/build_data.py` — Layer 6: dumps `jobs` + `job_tags` to `data.js`
+- `web/index.html` — the board: filter rail, card grid, deadline-first ordering
 
 `roster.csv` is the *audit set*, never the universe. A firm's absence from it
 says nothing about whether it belongs. When adding entries, keep names specific:
@@ -189,6 +213,15 @@ Priority affects **what to build next**, not what to ingest. Never drop
 collected data for being out of area — the methodology is explicit that
 geography ranks results rather than gating the universe.
 
+**One deliberate exception, at the user's instruction: the *board* gates on
+geography.** The universe rule above is unchanged and still absolute — no row
+is deleted, no registry is filtered, `jobs` keeps everything, and re-running
+the tagger rebuilds the verdict. What changed is what `web/build_data.py`
+renders: a posting in Kiruna, Barcelona or Paris is not one this user will
+take, so ranking it below Amsterdam answers a question they did not ask. See
+`exclusion_reason: off_location`, and `web/build_data.py`'s `GATES` — deleting
+a line there puts those postings back on the next build, with no re-tag.
+
 - **Focus:** Stockholm, Copenhagen, Amsterdam, Switzerland, Hong Kong,
   Singapore
 - **Deprioritized:** Germany, US, London/UK, China, Dubai. Existing US data
@@ -228,6 +261,83 @@ Each of these silently produced wrong results before being caught:
   protections are mutation-tested.
 - **Workday needs `tenant|wdN|site`.** A tenant alone builds a URL that 404s on
   every poll while the board looks resolved.
+- **Workday has a second host and it inverts the URL.** On `myworkdayjobs.com`
+  the tenant is the subdomain; on `myworkdaysite.com` the subdomain is a bare
+  `wdN` and the tenant moves into the path —
+  `wd3.myworkdaysite.com/recruiting/brevanhoward/BH_ExternalCareers`. One
+  pattern cannot match both, and every firm on the second host tiered B with a
+  live feed behind it. The two patterns capture the same three parts in
+  *different orders*, so they capture by name: joining by position built
+  `wd3|brevanhoward|BH_ExternalCareers`, which is well-formed and addresses
+  nothing. The token takes an optional fourth part for the host.
+- **The audit measures the employer universe, not the job pipeline, and the two
+  had drifted completely apart.** All six focus hubs report 100% *present*
+  while **147 of the 163 roster firms produced no postings at all** — Jane
+  Street, Optiver, Citadel, Jump, SIG, DRW, Two Sigma, IMC, Squarepoint and
+  Qube among them. Being in `employers` and being polled are different
+  properties; `audit` only ever checked the first. When a coverage number looks
+  finished, ask which table it counted.
+- **The firms that matter were all tier B, and the careers walk is why.** It
+  settled on Jane Street's `/join-jane-street/overview/`, on a Cloudinary
+  **image** for DRW and on a **PDF** for Man Group — the roles page was never
+  fetched. `discover.py` exists because no regex over the page we did fetch can
+  fix that: guess the token from the name and prove it against the feed.
+- **A guessed board token must be proven by the postings, not by the token.**
+  `greenhouse/cfm` is a live board of 9 postings whose first three are *Account
+  Executive - Air Distribution* — a heating company, not Capital Fund
+  Management — and `recruitee/radix` is a different Radix. Same failure as
+  `heyrowan`. Corroboration is a **spaced** needle so the run-together token
+  cannot match itself, the same guard `marketfrance.com` taught one layer up,
+  and a lone word never counts: *radix* proves nothing about Radix Trading.
+- **Verify a discovered board by running the extractor, not by status code.** A
+  board Layer 3 cannot read is not a board, and an empty one recorded as
+  resolved polls silence forever.
+- **A roster trading name is not the board token, and searching it alone finds
+  nothing.** The roster says `Akuna`, `Qube`, `Da Vinci`, `Old Mission`,
+  `Squarepoint`; the boards are `akunacapital`,
+  `quberesearchandtechnologies`, `davinciderivatives`, `oldmissioncapital`,
+  `squarepointcapital`. The full names were in `employers` the whole time —
+  `discover.Target` carries every name `audit` matched, and corroboration is
+  checked against the *same* name each token came from, so a wider search does
+  not become a looser test.
+- **`domain_lookups.query` is the registry's name for a firm, not the
+  roster's.** Looking a roster entry up by exact name found a domain for 40 of
+  161 and reported the other 121 as having none; going through `audit.run`'s
+  matching found 104 of 120. The same mistake reads as a coverage collapse.
+- **But that match is fuzzy, so a discovered board must never displace a
+  working one.** `Millennium` matches *Millennium New Horizons Management*, a
+  venture firm at `mnh.vc`, and `Two Sigma` resolved to `x.com`. Writing a
+  board against a wrong domain mis-attributes postings, which is cheap;
+  overwriting a live tier-A board with them loses a feed, which is not.
+  `discover.record` upgrades only rows that are tier B/C or tier A with a NULL
+  token.
+- **A three-character board token is fine; a three-character *domain* guess is
+  not.** `domains._labels` refuses labels of three characters or fewer because
+  a wrong domain is a silently empty feed, and reusing that rule for board
+  tokens cost IMC's board — which is `imc`, worth 165 postings. Token length is
+  not the safety check; corroboration is. Only a *distinctive* word earns the
+  short form, or "Capital Fund Management" would offer the token `capital`.
+- **Some employers write titles in letters that only look Latin.** Jane Street
+  publishes `ꓟachine ꓡearning ꓣesearcher` — M, L and R as Lisu MA, LA and ZHA —
+  and `fold` kept `a-z0-9+#`, so it arrived as "achine earning esearcher" and
+  matched nothing. Scan before writing the map: of 75 suspicious codepoints
+  across all 69,961 titles, nearly all are genuine CJK and must be left alone.
+  Only letters impersonating an ASCII one are folded.
+- **A closing date is published as a field by exactly one source, and mining it
+  out of prose is a trap.** JobStream sets `application_deadline` on every ad;
+  no other ATS in the set publishes one at all. The temptation is to read it
+  out of `description` instead — don't. Hundreds of Swedish ads carry *"tjänsten
+  kan tillsättas innan sista ansökningsdag"* with **no date in the sentence**,
+  and Ashby prints *"unless a specific application deadline is stated"* on every
+  posting it hosts, so a phrase sweep is almost all false positives. The board
+  sorts an approaching deadline above everything else, so a wrong one nails the
+  wrong card to the top of the page for weeks. Same asymmetry as the roster's
+  `GRASSHOPPER ESCAPEMENT, LLC`, two layers up.
+- **Half of JobStream's ads have no resolvable employer URL**, so `domain` is
+  NULL and the board showed 1,737 postings from nobody. `jobs.employer` holds
+  the advertiser name verbatim for the sources whose board is not one firm's
+  own; everywhere else the domain *is* the employer and a second name would be
+  a second identity to keep in step.
 - **A withdrawn JobStream ad arrives with `id` set and every other field null.**
   Feeding one through the normal upsert leaves the row and wipes its title,
   employer and description — still counted, no longer readable, nothing
@@ -395,10 +505,282 @@ through to the body, and it does. Scoring relevance *over* the body made
 over, because "strong quantitative skills" is boilerplate and every bank's
 about-us names market and credit risk. Seniority is the same: a body saying
 "you will report to the Head of Trading" made `Graduate Trader` a `head_or_md`
-posting. `student_only` is the one exception, read from the body first,
+posting. The body reaches rank through **two** doors only: an explicit years
+figure, which states the posting's own bar rather than describing somebody
+else's rank, and `student_intern`, read from the body first,
 because no title announces "must be graduating in 2028".
 
-**Tag counts must pin the lexicon version.** `job_tags` keeps every retired
-`tagger` so two can be diffed, which means an unpinned `COUNT(*)` sums them —
+**`job_tags` does not actually keep retired lexicon versions, and the docs say
+it does.** The primary key is `(ats, token, job_id, dimension, value)` with
+**no `tagger` column in it**, so `INSERT OR REPLACE` overwrites the previous
+version's row whenever a posting keeps the same value in the same dimension.
+Only rows whose value *changed* survive, which is the opposite of a diff.
+Measured: lexicon 15 has been erased outright and 16 retains 67,870 of the
+1,065,834 rows it wrote. Adding `tagger` to the key fixes it going forward; the
+history already lost cannot be recovered. Until then, treat "compare two
+taggers" as unavailable rather than merely unused.
+
+**Tag counts must still pin the lexicon version.** An unpinned `COUNT(*)` sums
+whatever survives of every version —
 the hub table read 49,808 postings in `unknown` after `unknown` had already
 been split out, because six earlier taggers still said so.
+
+**Changing the lexicon without bumping `TAGGER` leaves stale tags that look
+current.** `tag` only visits postings with no row at the *current* version, so
+after an unbumped edit it reports `tagged 0 postings` and every summary keeps
+serving the old lexicon's answers. Bump, then re-run; the old version stays for
+diffing, which is what it is there for.
+
+**A title-only rule is not implemented until the fall-through is closed too.**
+"The rank is in the title" was written down, tested, and then quietly undone by
+`_first(_SENIORITY, title) or _first(_SENIORITY, text)` — whenever a title
+carried no grade word, the body decided after all, and in a body every
+authority word is furniture. A `partner` in Schonfeld's diversity paragraph
+made an internship a `head_or_md` posting and moved it out of the shortlist.
+The body now reaches rank through two named doors only: the student gate and an
+explicit years figure.
+
+**Boilerplate is the default failure mode of any body-matched rule.** Two more
+of the same shape, both caught by reading three postings by hand: exclusions
+fired `support_function` on "maintain strong stakeholder communications", and
+asset class read `rates` off the firm's own "we invest across Quant, Tactical,
+Fundamental Equity and Fixed Income" paragraph. Match the title; fall back to
+the body only for words no posting uses in passing, and grade the fallback
+`weak`.
+
+**`Ph.D.` is two tokens.** It folds to `ph d`, so every needle spelled `phd`
+missed the majority of postings that punctuate it. Fold it to one word before
+matching — and check the negation, because " no phd required " contains
+" phd required ".
+
+**A fixture drawn from the top of the shortlist can only find false
+positives.** `list` sorts by fit, so labelling its first hundred rows measures
+the tagger against the rows it already likes — while the exit criterion is *no
+false rejection*. `sample` hides the tagger's verdict, and scatters the rows,
+because writing the draw in bucket order leaks that verdict through position
+just as plainly as a column would.
+
+**But stratifying over the whole corpus is the opposite mistake, and it wasted
+the reader's first seven rows.** 30% `out_of_scope` across 69,961 postings is
+housekeepers, van drivers and dental nurses; the notes came back *"totally
+irrelevant"*, *"nothing to do with finance"*. **A false rejection can only hide
+among postings that could plausibly be in scope.** `labels._candidates` draws
+from a frame of ~2,000 instead — live with a URL, not `off_industry`, English
+or Swedish, and carrying an actual markets or quant word — stratified over
+`lexicon.judge`'s verdicts, with `unrelated_occupation` and `corporate_function`
+never put to a human at all.
+
+**`judge` returning `undecided` is not evidence of anything.** It is the
+default for a title matching no list, which in this corpus is `Regional Sales
+Manager` and `Field Service Delivery` by the thousand. Require a real anchor
+before treating an `undecided` as a near miss.
+
+**`lexicon.judge` is the last word on relevance, and it must stay last.** It
+carries the long occupation lists — wealth advisers, counsel, named trades —
+while `_EXCLUSION` in `tagging.py` carries seven categories, so a `Wealth
+Advisor` fell through both and was reported `unknown`: "nothing looked at
+this", when three rules had. It runs only on the branch that would otherwise
+emit `unknown`, so it can convert a non-answer and can never overturn a
+positive — which is what stops it manufacturing a false rejection in the rows
+that matter. It also costs ~0.1 ms per posting; a full re-tag is ~10 minutes,
+dominated by writing a million rows, not by classifying.
+
+**A department is nothing but the desk's name, so it must never reject the
+role.** `Senior Trading Associate` sits in a department called *Trading
+Operations* and the desk-support rule read title and department together — so
+the desk's name rejected a seat on the desk. That was the first false rejection
+the hand-labelled fixture found, which is exactly what it exists for. Desk
+support is read from the **job title alone**.
+
+**A management title outranks a weak positive, the same way an exclusion
+does.** `Director of Trading`, `Head of Managed Accounts`, `Applied Science
+Leader` and `Product Manager - B2C Credit` all reached `adjacent` on one
+ordinary word — *trading*, *data science*, *model validation* — while what the
+title announces is that somebody else does the work. An unambiguous quant word
+still wins, so `Head of Quantitative Research` stays `relevant` and its
+seniority is what says it is out of reach. `associate director` is guarded:
+a bank stamps it on a five-year hire.
+
+**Investing by judgement is not quant work, and the lexicon had it as a
+positive.** `investment analyst` and `portfolio analyst` were weak positives
+while the hand-labelled sheet rejected nine such rows in a row — `Senior
+Investment Analyst`, `Portfolio Associate`, `Asset Management Analyst`,
+`Partner, Private Equity`. They are an exclusion now, matched on the title and
+read after the core check, so `Quantitative Analyst, Private Equity` keeps its
+quant reading. The qualifier is the whole difference, as with `Credit Risk
+Operations`.
+
+**A weak positive needs a markets word beside it — the test is two-sided.**
+`judge` already reasoned this way about engineering titles and nothing else
+did, so a `Computational Chemist` whose body says "model validation" once, a
+`Thermal - Fluids Analyst` and a `Cloud Engineer` all came back as quant work.
+`Data Scientist` is a quant hire at a systematic fund and a growth-analytics
+hire at a payments company, and this corpus holds both. No markets anchor, no
+positive — the posting falls through to `judge` instead.
+
+**One quant phrase in a body is not a quant role.** `Data Management Analyst —
+Data Governance` says "model validation" once, the way every governance
+document does, and came back as research work. A body-only reading now needs a
+second distinct phrase before it can reach `relevant` — the same corroboration
+rule `domains.py` uses one layer down, for the same reason.
+
+**But counting phrases is the wrong rule, and only a dry-run showed it.**
+`Thermal - Fluids Analyst` carries *model validation* **and** *numerical
+methods*; a payments company's `Data Scientist` carries *time series* **and**
+*statistical modelling*. Two distinct phrases each, neither anywhere near
+markets, both rejected by hand. **The quantitative *method* vocabulary belongs
+to every technical field and the markets vocabulary does not** — `monte carlo`
+is derivatives pricing at a bank and radiation shielding at a reactor,
+`backtests` is alpha research at a fund and demand forecasting at a retailer.
+So `lexicon` splits its body list in two: `QUANT_MARKETS_BODY` names markets
+activity and carries a body alone, `QUANT_METHOD_BODY` needs a markets anchor
+beside it. 103 postings moved, 85 distinct titles, hand-read in full — a
+radiation-shielding engineer kept by *monte carlo*, a robotaxi tech lead by
+*time series*, and a **garage-door salesman by *options pricing***.
+
+Which bucket a phrase goes in is asymmetric, so put the doubtful ones in the
+method bucket: a wrong entry there costs nothing unless the posting mentions
+markets nowhere at all, which no genuine quant advertisement manages. A wrong
+entry in the markets bucket costs a false keep. `quantitative finance` reads
+like the strongest phrase on the list and sits in the method bucket, because
+TF Bank's core-ledger posting carries it.
+
+**A bare adjective is not one of the phrases.** `tagging.py`'s body-only branch
+counted `quantitative` and `quant` toward its two, so `Cloud Engineer` reached
+`adjacent` on "body only 'quantitative', once" — the one word every employer
+writes about every role. `lexicon.GENERIC_IN_BODY` had named that set already
+and the other module was not reading from it; `_QUANT_CORE_BODY` now subtracts
+it. In a *title* the same word is the whole job, which is why there are two
+lists rather than one edit.
+
+**`fold` deleted every non-ASCII letter, so every Swedish rule in `tagging.py`
+was dead.** The strip keeps `a-z0-9+#`, so `ö` became a *space*:
+`Sjuksköterska` folded to `sjuksk terska` while the needle said
+`sjukskoterska`, and `Göteborg` to `g teborg` against `goteborg`. Not one of
+the accented Swedish needles had ever matched — nurses, cleaners, drivers,
+teachers and shop staff were all reaching the board, which is exactly what
+"the filtering is lacking in Swedish ads" looks like from outside. `_terms`
+folds needles the same way and its docstring calls that "folding both sides",
+which is the right discipline and does nothing when the fold is lossy in
+different directions: `francais` folds to `francais`, `français` folded to
+`fran ais`. `fold` transliterates now (`ö`→`o`, `ß`→`ss`, `æ`→`ae`), so both
+spellings converge and a needle may be written either way. **1,013 postings
+were gated by that one change, with no needle edited.**
+
+**A Swedish occupation is one token, so a needle cannot see inside it.**
+`Elsäljare`, `Fältsäljare`, `Tandsköterska` and `Inköpschef` all survive a word
+list, because Swedish compounds. Match the occupational *head* as a suffix —
+`lexicon.SWEDISH_HEADS` had this and `tagging.py` did not. Same asymmetry as
+everywhere else when picking heads: `-arbetare` catches *medarbetare*, which is
+just "employee", and `-assistent` catches *Forskningsassistent*, a research
+assistant worth keeping. Both were dropped after the dry-run.
+
+**A country name in a city's list claims a city it does not know.** `sweden`
+sat in the `stockholm` tuple, so every Swedish ad read Stockholm — Kiruna,
+Lund, Visby, Kalmar. Harmless while geography ranked; under a gate it deletes
+postings for being somewhere they are not. Focus hubs are the city plus a real
+commuting belt now, and the rest of the country is `sweden_other`,
+`denmark_other`, `netherlands_other`.
+
+**A gate makes every gap in a place list a deleted posting**, which is the
+opposite of the pressure a ranking list is under. Two found by measuring rather
+than reading: `2 Locations` is what Workday publishes for 6,281 multi-site
+postings and reading it as `other` claimed we had looked — it is `unknown`, and
+`unknown` is kept. And 5,987 US postings said only `Cincinnati, OH`, so they
+gated as elsewhere while the US is semi-target; the state code is the handle,
+matched against the **location alone** because hub matching reads the title too
+and `IN`, `OR`, `ME` and `DE` are all English words as well as states.
+
+**Language requirements were caught nine times in ten by nothing.** The
+`_SPOKEN_REQUIRED` list was three phrasings per language — "fluent in X", "X is
+required", "native X" — and hit 151 postings out of 69,961. Advertisements also
+say "proficiency in", "good command of", "written and spoken", "C1",
+"verhandlungssicher", "i tal och skrift". Built from frames × language names
+now, 690 postings. Requirement phrasings only: `X a plus` is not a requirement,
+and this is a soft filter, so a generous frame costs a rank notch where a
+missing one costs a surprise at interview.
+
+**Language detection cannot use `fold`.** `fold` strips everything outside
+`a-z0-9+#`, so `är` becomes `r` and `från` becomes `frn` — and function words
+are the whole method. `posting_language` keeps diacritics, and returns
+`unknown` below four stopword hits rather than guessing, because 81% of the
+corpus is a six-word title.
+
+**The board has three gates now, not one, and they are the whole list.** They
+live in `web/build_data.py`'s `GATES`: `off_industry` (another profession),
+`off_location` (outside the target and semi-target geography) and
+`out_of_reach` (director, VP, manager, project leader, product owner — a rank
+nobody reaches from under a year of experience). Each is counted separately on
+every build, because one total would hide which of the three ate a hub.
+
+**The `unknown` bucket is a vocabulary gap, not a broken rule, and only volume
+showed it.** A 1,000-posting machine-labelled sample's largest single
+disagreement was `relevance: unknown` on rows any reader rejects on sight —
+`Event Coordinator (Casual)`, `Universal Banker`, `Usher/Ticket Taker`. **6,604
+of the 6,852 had no body at all**, so it was never going to be fixed by reading
+descriptions better; it needed occupation words. Adding them took the board's
+`unknown` from 6,852 to 5,109 and moved no posting out of a positive verdict.
+
+The residual is mostly the deliberate backfill queue — bare `Analyst`,
+`Associate`, `Data Scientist`, `Financial Analyst` — which `judge` refuses to
+reject on a title alone and should keep refusing.
+
+**Check the form the corpus advertises, not the form the dictionary uses.**
+`environmental inspector` did not match `Environmental Inspectors (Field
+Based)`, because token matching is exact and the postings are plural. Same
+shape as `Elsäljare` needing a compound rule: the needle has to be written
+against real titles, which is what the dry-run is for.
+
+**A needle's head count is not the safety check — whether it touches a positive
+is.** Every occupation word added this way was measured against the postings
+the tagger already rates `relevant`, `less_relevant` or `adjacent`, and any
+needle touching one is read by hand before it goes in. `landscape` was dropped
+on that test: it caught `Managing Technical Consultant, Landscape
+Architecture`, and a *data* landscape is one usage away.
+
+**A gate must fire on evidence, never on the absence of it.** `out_of_reach`
+reads the rank from the title only and skips `unknown`, so a posting that
+simply never stated a grade stays on the board. Same reason `unknown` survives
+the geography gate. The gate can only remove something it actually read — which
+is what stops a widened lexicon from quietly emptying the page.
+
+**The board filters in two stages, and only the first one removes anything.**
+Stage one is a *gate*: a nurse, a welder and a `Medical AI Specialist` are not
+distant quant roles, they are other professions, so `build_data.py` drops them
+and they never reach `data.js`. Everything else in the rail *ranks*. This is
+the one place in the pipeline where a classifier removes rather than reorders,
+so it is deliberately the narrowest rule in `tagging.py`, and it stays
+consistent with principle 4 by never touching the database: `jobs` keeps the
+row, `job_tags` keeps `exclusion_reason: off_industry` with the evidence, and
+re-running the tagger rebuilds the verdict. Every build prints the count, and
+`list --exclude off_industry` shows what it ate. A gate that removes silently
+is how a widened lexicon quietly eats a hub.
+
+**Prefer the source's own taxonomy to any word list you would write.**
+JobStream files every Swedish ad under one of 21 `occupation_field` values —
+that is an enumeration written by the employer, and 15 of them can never hold a
+quant job, which is 2,800 postings gated on evidence rather than on guesswork.
+`jobs.category` exists for this. The keep list is deliberately a *drop* list:
+an unrecognised field passes, because failing towards keeping is the direction
+this project always picks. Only the ATS boards, which publish no taxonomy at
+all, need occupation words.
+
+**Every needle in a hard gate must be dry-run over the whole corpus first.**
+Five words that look like trades name jobs this project might want, and each
+matched something real: `coach` is *Portfolio Manager/Agile Coach*, `pilot` is
+*Paint Pilot Projects*, `librarian` is *ECAD Librarian*, `translator` is DBS's
+*Data Translator*, `interpreter` is *Parts Interpreter*. `chef` is worse — it
+is Swedish for *manager*, so it would have dropped `Ekonomichef`, a CFO. `driver`
+cost one true positive in 70,000 rows and would eventually have caught
+something like *Value Driver Analyst*.
+
+**Most postings with "Trader" in the title are not quant trading**, and one
+word in the title is the whole difference. `trading_style` splits `Agency MBS
+Trader` and `Precious Metals Trader` from `Quantitative`, `Systematic` and
+`Algorithmic Trader` — 108 against 14 in this corpus. Two things it got wrong
+first: it keyed on `role_class: trading`, whose lexicon includes bare
+*trading*, which is the name of a **department** — that made `Backend Engineer
+— Trading & Asset Optimization` a pure trader. It matches the nouns for the
+seat now (`_TRADER_SEAT`). And `_QUANT_CORE` held only the participle forms, so
+`Algorithmic Trader` is not "algorithmic trading" and read as a trader with no
+quant signal at all. When a needle is a phrase, check the noun form of it too.

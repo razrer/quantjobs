@@ -140,16 +140,24 @@ def candidates(normalized: str, country: str | None) -> list[str]:
     return [f"{label}.{tld}" for label in _labels(normalized) for tld in tlds]
 
 
-def _page_text(body: bytes) -> str:
-    """Visible page text, folded exactly the way firm names are.
+def fold_text(text: str) -> str:
+    """Fold arbitrary text the way firm names are normalized.
 
     Both sides have to be folded the same way or nothing matches: the register
     says "J.P. Morgan SE", which normalizes to "jp morgan", and the raw page
     says "J.P. Morgan". Folding only one side compares two different alphabets.
+
+    Public because `discover.py` matches firm names against *board* text rather
+    than page text, and a second fold written to look the same is how the two
+    sides quietly diverge -- `lexicon.fold` cost 1,013 postings that way.
     """
-    text = _TAG.sub(" ", body.decode("utf-8", errors="replace"))
     folded = text.casefold().replace(".", "").replace("/", "")
     return " " + " ".join(re.sub(r"[^a-z0-9]+", " ", folded).split()) + " "
+
+
+def _page_text(body: bytes) -> str:
+    """Visible page text, folded for name matching."""
+    return fold_text(_TAG.sub(" ", body.decode("utf-8", errors="replace")))
 
 
 def _needles(normalized: str) -> list[tuple[str, str]]:

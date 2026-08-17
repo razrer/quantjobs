@@ -76,14 +76,24 @@ _HUBS = (
 
 # The value each dimension takes when nothing was decided. Omitted from the
 # payload; the board reads a missing key as this.
-_NOTHING_KNOWN = {"unknown", "unstated", "other", ""}
+# `none` is `spoken_language`'s default -- nothing beyond English and Swedish
+# is demanded -- and it is true of 69,709 of 69,860 postings. No implemented
+# dimension uses `none` to mean something, so omitting it is safe; `code_depth`
+# reserves the word in `TAGGING.md` but has never emitted it.
+_NOTHING_KNOWN = {"unknown", "unstated", "other", "none", ""}
+
+# Defined in `tagging` so the labelling sheet gates on exactly the same list --
+# a fixture that offers rows the board refuses to show is measuring a
+# classifier nobody reads. Ordered, because a posting can carry more than one
+# reason and the count attributes it to the first that would have caught it.
+GATES = tagging.GATES
 
 # Dimensions a posting can hold several of at once -- a multi-asset desk, two
 # languages -- shipped as lists. The rest are one verdict and ship as a scalar.
 _MULTI = {
-    "role_class": "role",
     "asset_class": "asset",
     "language": "lang",
+    "spoken_language": "speaks",
     "hard_gates": "gates",
     "exclusion_reason": "excl",
     "horizon": "hz",
@@ -91,7 +101,17 @@ _MULTI = {
 _SINGLE = {
     "fit": "fit",
     "relevance": "rel",
+    # One value since lexicon 12. It was multi-valued and shipped seven
+    # families for a single posting, which is a word count rather than a
+    # classification.
+    "role_class": "role",
+    "desk": "desk",
+    "posting_language": "wrote",
     "seniority": "sen",
+    # `pure` vs `quant`, and only for postings whose title names a seat on a
+    # desk. Most postings with "Trader" in the title are the first kind.
+    "trading_style": "tstyle",
+    "experience_floor": "yrs",
     "code_depth": "cd",
     "contract": "ct",
 }
@@ -255,6 +275,7 @@ def main() -> None:
 
     firms: dict[str, dict] = {}
     jobs = []
+    gated: dict[str, int] = {reason: 0 for reason in GATES}
     for row in connection.execute(
         "SELECT ats, token, job_id, domain, employer, title, url, location,"
         # Withdrawn postings keep their row and stop being offered. The board
@@ -263,6 +284,38 @@ def main() -> None:
         " department, posted_at, deadline, description, first_seen"
         " FROM jobs WHERE removed_at IS NULL"
     ):
+        mine = tags.get((row["ats"], row["token"], row["job_id"]), {})
+
+        # **Stage one, and the only filters on this page that remove rather
+        # than rank.** Everything else about the board is a knob the reader can
+        # turn; these three are not.
+        #
+        # It is safe to be this blunt here precisely because it is not blunt
+        # anywhere else: the row stays in `jobs`, the reason stays in
+        # `job_tags` with the evidence that decided it, and re-running the
+        # tagger and this script rebuilds the verdict. `list --exclude
+        # off_industry` is how you audit what a gate ate.
+        #
+        # - `off_industry` -- another profession. A nurse, a welder and a
+        #   `Medical AI Specialist` are not distant quant roles.
+        # - `off_location` -- outside the target and semi-target geography.
+        #   Added at the reader's request: Kiruna, Barcelona and Paris are not
+        #   places they will take a job, so ranking them is answering a
+        #   question they did not ask. This is the one gate that contradicts a
+        #   rule written elsewhere in the repo -- see `tagging.py`, where the
+        #   tag is set, for why the database is still untouched by it.
+        # - `out_of_reach` -- a rank nobody reaches from under a year of
+        #   experience: director, VP, manager, project leader, product owner.
+        #
+        # Each is counted separately because a gate that removes silently is
+        # how a widened lexicon quietly eats a hub, and one total would hide
+        # which of the three did it.
+        reasons = mine.get("exclusion_reason", ())
+        hit = next((reason for reason in GATES if reason in reasons), None)
+        if hit:
+            gated[hit] += 1
+            continue
+
         key = firm_key(row["domain"], row["employer"])
         if key not in firms:
             firms[key] = {
@@ -274,7 +327,6 @@ def main() -> None:
         firms[key]["n"] += 1
 
         when, precision = posted(row["posted_at"], row["first_seen"])
-        mine = tags.get((row["ats"], row["token"], row["job_id"]), {})
         tagged_hub = (mine.get("hub") or [None])[0]
 
         job = {
@@ -337,6 +389,12 @@ def main() -> None:
         f"  ({shortlist:,d} worth reading, {dated:,d} with a closing date,"
         f" {OUT.stat().st_size / 1e6:.1f} MB)"
     )
+    # Said out loud on every run. A gate that removes postings silently is how
+    # a widened lexicon quietly eats a hub, and this is the only number that
+    # would show it.
+    for reason, count in gated.items():
+        print(f"{count:>7,d} gated  {reason:<13} {GATES[reason]}")
+    print(f"{sum(gated.values()):>7,d} gated  total         (kept in the database; `list --exclude <reason>` shows them)")
 
 
 if __name__ == "__main__":

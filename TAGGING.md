@@ -82,37 +82,110 @@ what the two together mean for you.
 
 ### A. From the posting
 
-**1. `relevance`** — `core` · `adjacent` · `rejected` · `unknown`
+**1. `relevance`** — `relevant` · `less_relevant` · `adjacent` · `rejected` ·
+`unknown`
 
-The include list from `CLAUDE.md`, not a keyword: quant research/analysis/
-trading/development, systematic and algorithmic trading, alpha and signal
-research, portfolio construction, execution research, strategist, market and
-credit risk quant, model validation, and DS/ML *at a markets firm*. `adjacent`
-is for the genuine maybes — a data-engineering role on a research platform.
+**Distance from the centre, and nothing else.** The centre is modelling and
+research; the include list from `CLAUDE.md` decides what is on the scale at all.
 
-**2. `role_family`** — `research` · `trading` · `quant_dev` · `risk` ·
-`model_validation` · `data_science` · `portfolio_construction` · `execution` ·
-`strategist` · `other`
+- `relevant` — the output is research, modelling or signal work
+- `less_relevant` — real quant work, but the day job is trading, building or
+  risk rather than research
+- `adjacent` — a markets firm and a quantitative title, but the seat is
+  operational or the signal is thin
+- `rejected` — the exclude list
 
-Separate from relevance because the ranking treats them differently and because
-one posting can be two of them.
+**Why four and not three.** The original scale was `core`/`adjacent`/`rejected`,
+and the first three hand-labelled rows broke it: `adjacent` was written against
+"a quant dev role, so less relevant for me" and against "very close to what I'm
+looking for" in neighbouring rows of the same sheet. One value was carrying two
+opposite meanings because the scale was being asked to encode *direction* as
+well as distance — and direction is what `role_class` is for. Splitting them is
+what made both legible.
 
-**3. `seniority`** — `intern` · `student_only` · `new_grad` · `junior_0_2` ·
-`mid_3_5` · `senior_6_10` · `lead` · `head_or_md` · `unknown`
+**2. `role_class`** — `quant_research` · `quant_dev` · `trading` ·
+`portfolio_management` · `risk` · `data_science` · `operations` ·
+`engineering` · `unknown`
 
-`student_only` is its own bucket, not a flavour of intern: you have graduated,
-so a posting requiring a *future* graduation date is noise, and it is noise that
-titles never announce. The evidence lives in the body — "must be enrolled",
-"graduating in 2027", "final-year students".
+**One value, not a set.** It replaced a multi-valued `role_family`, which said
+almost nothing: a single Schonfeld posting came back as research *and* trading
+*and* quant_dev *and* risk *and* execution *and* portfolio_construction *and*
+strategist, because every one of those words appears somewhere in a long body.
+Seven values is a word count, not a classification.
+
+Order is priority, and it encodes three decisions. `quant_dev` runs first so a
+title naming both halves — `Quantitative Research / Developer`, which folds to
+"research developer" — lands on the building half. `quant_research` runs before
+`operations`, so a quant word outranks the name of the desk it sits on.
+`operations` still runs before `trading`, so `Trading Operations Analyst` is
+operations: the desk's name is not the role's name.
+
+**What the reader is not looking for**, learned from the fixture and now three
+named rules rather than a feeling:
+
+- **Management.** Under a year of experience and no interest in running the
+  work. A management title rejects outright unless an unambiguous quant word
+  appears — `Head of Quantitative Research` survives and its *seniority* is
+  what puts it out of reach, while `Director of Trading` does not.
+- **Investing by judgement.** Private equity, sell-side research, traditional
+  asset management, wealth. `investment analyst` and `portfolio analyst` had
+  been filed as weak *positives*; nine consecutive hand-labelled rows said
+  otherwise.
+- **Trading is fine.** Confirmed rather than assumed: it sits at
+  `less_relevant`, one step out from research, and stays readable.
+
+**2b. `desk`** — `front_office` · `middle_office` · `back_office` · `unstated`
+
+The dimension a title almost never carries and a body almost always does, and
+the only thing that separates two postings the title cannot. `Quantitative
+Trading Associate` reads like a seat on the desk; its body is market-hours
+oversight, runbooks, incident response and position reconciliation. A body
+placing the role in the middle or back office demotes relevance one step.
+
+Only a **body** may demote. `front_office` is checked first for the same
+reason: a trading-floor posting names middle-office machinery all the time —
+"a grasp of trade-lifecycle workflows" — while the reverse is rare, so the
+specific claim has to beat the incidental mention.
+
+**3. `seniority`** — `student_intern` · `new_grad` · `junior_0_2` · `mid_3_5` ·
+`senior_6_10` · `lead` · `head_or_md` · `unknown`
+
+**`intern` is not on this ladder, and one posting is the whole argument.**
+Schonfeld's `Quantitative Research / Developer - Intern` demands "2–3 years
+buy- or sell-side experience" and converts to full time. It is an internship
+*contract* wrapped around a mid-level *bar*, and a ladder with `intern` on it
+swallowed the posting whole — reporting the rank as "intern" while the body
+asked for three years. The two facts are stored separately now: whether it is
+an internship is `contract: internship`, and `seniority` always carries a level.
+
+`student_intern` stays, because it is genuinely a rank: a posting requiring a
+*future* graduation date is unreachable for someone who has graduated, whatever
+else it says. Its evidence lives in the body — "must be enrolled", "graduating
+in 2027", "final-year students" — and titles never announce it.
 
 **4. `experience_floor`** — the smallest number of years the text demands, as an
 integer, plus `unstated`
 
 Parsed separately from `seniority` because the two disagree constantly: titles
 say "Senior" over a body asking for three years, and Jane Street says "Trader"
-over a body asking for none. Where they disagree, the body wins and both tags
-are kept — the disagreement is itself a signal that the title is unreliable at
-that firm.
+over a body asking for none. Where they disagree, **the number wins**, and both
+tags are kept — the disagreement is itself a signal that the title is
+unreliable at that firm.
+
+This is the one carve-out from "the rank is in the title", and it needs to be
+narrow. That rule was written against *stray words*: a body saying "you report
+to the Head of Trading" made `Graduate Trader` a `head_or_md` posting, because
+those words describe somebody else's rank. A years figure is not that — it is
+the posting stating its own bar. Both hand-labelled seniority disagreements
+were exactly this shape: `Quantitative Trading Associate` reads junior on
+"associate" and asks for "3+ years"; the Schonfeld internship above reads
+intern and asks for "2–3".
+
+*Smallest*, because a posting saying "3+ years, 5+ preferred" has a floor of
+three. A floor never produces `head_or_md`, `lead`, `new_grad` or
+`student_intern` — those are structural facts about a role rather than a length
+of service, and overriding a graduate scheme to `senior_6_10` on a stray number
+would drop it out of the shortlist entirely.
 
 **5. `code_depth`** — the ladder your question was really about
 
@@ -153,12 +226,35 @@ it.
 **9. `hard_gates`** — multi-valued, each one a reason you cannot apply
 
 `phd_required` · `visa_sponsorship_none` · `security_clearance` ·
-`specific_degree` · `local_language_required` · `onsite_only` ·
-`years_above_floor`
+`onsite_only`
 
 Kept as tags rather than a filter so you can see how much of the market each
 gate costs you. If half of Amsterdam says `visa_sponsorship_none`, that is
 worth knowing as a number, not as an empty result list.
+
+**Education is read only when a doctorate is compulsory.** `specific_degree` is
+gone from this list deliberately: every quantitative posting on earth prefers a
+higher degree, so tagging the preference produces a dimension that fires on the
+whole corpus and separates nothing. "PhD preferred", "MSc or PhD", "advanced
+degree a plus" are all untagged; only a demand is a gate.
+
+Two things that made this harder than it reads. `Ph.D.` folds to the two tokens
+"ph d", so every needle spelled `phd` silently missed the postings that
+punctuate it — which is most of them; it is folded to one word now. And
+matching is on token runs, so " no phd required " *contains* " phd required "
+and a posting saying the opposite of the gate would otherwise trip it.
+
+**9b. `spoken_language`** — multi-valued, `none` when nothing is demanded
+
+A **soft filter, never a gate**: it ranks a posting down one notch and never
+drops it. English and Swedish are deliberately not on the list — you have both,
+so a posting demanding either is not filtered by language at all. The old
+`local_language_required` gate got this backwards and flagged "flytande
+svenska" on Stockholm postings, the one hub the project cares most about, as
+though it were an obstacle.
+
+Requirement phrasing only, in twelve languages. A posting that merely *offers*
+language classes is not asking for one.
 
 **10. `contract`** — `permanent` · `fixed_term` · `internship` · `contractor` ·
 `part_time` · `unknown`
@@ -291,10 +387,61 @@ will be re-weighted often — after every week of applying, probably.
 Tagging needs the same thing coverage needed in Stage 2: a fixture, or the
 accuracy claim is a feeling.
 
-- **A labelled sample of 100 postings**, hand-read once, spanning all ten ATS
-  formats and at least three languages — the `roster.csv` of this layer.
+- **A labelled sample of 100 postings**, hand-read once, spanning the ATS
+  formats and several languages — the `roster.csv` of this layer.
 - **Exit criterion:** every posting carries a value in every dimension,
   `unknown` included; the classifier reproduces the labelled sample at ≥90% on
   `relevance` and `seniority`; and **no false `rejected`** in the sample, which
   is the asymmetry this whole project is built on — a missed posting is the
   expensive failure, a false positive costs a few seconds of reading.
+
+Built as `sample` and `labels` in `labels.py`. Two things about the draw are
+load-bearing and were wrong in the first attempt:
+
+**The sample must not come from the top of the shortlist.** `list --limit 100`
+sorts by fit, so it offers the hundred postings the tagger is most confident
+about — a sample that can only ever find false *positives*, against a criterion
+whose disqualifying condition is a false *rejection*.
+
+**And stratifying over the whole corpus instead is the opposite mistake.** The
+first sheet drew 30% of its rows from `out_of_scope`, which in a corpus of
+69,961 means housekeepers, van drivers, dental nurses and lifecycle-marketing
+directors. The reader's first seven rows were an AI-training gig, a compliance
+officer, a commercial lawyer, an applied-AI engineer and a real-estate
+acquisition manager, and the notes said so: *"totally wrong"*, *"totally
+irrelevant"*, *"nothing to do with finance"*. **A false rejection can only hide
+among postings that could plausibly be in scope** — rejecting a van driver is
+not a mistake this lexicon can make, so confirming it measures nothing.
+
+The draw therefore runs over a **frame**, not the corpus. Four gates:
+
+| gate | why |
+|---|---|
+| live, with a URL | the advertisement has to be openable; half the first complaint was that it was gone |
+| not `off_industry` | the board already refuses these, and a sheet that disagrees with the board grades the wrong classifier |
+| written in English or Swedish | `posting_language`, and only a *positive* identification excludes — `unknown` stays |
+| carries a markets or quant word | `judge` calls an unrecognised title `undecided`, which is most of a corpus of `Regional Sales Manager`; a verdict is not a signal |
+
+That is 2,084 postings of 69,961, and the stratification is over `judge`'s own
+verdicts: 35% `keep`, 35% `undecided` — the genuine ambiguity, where a human
+hour buys most — and 30% **contested rejections**, the reasons a person could
+reasonably overturn (`non_quant_finance`, `pure_engineering`, `too_senior`,
+`student_only`). `unrelated_occupation` and `corporate_function` are never
+asked about. One board may contribute two rows, so no single Workday tenant
+fills the sheet.
+
+**The sheet must not show the tagger's verdict** — and leaving the column out
+is only half of that. The draw is built bucket by bucket, so writing it in draw
+order put every `apply_now` in the first few rows and thirty `out_of_scope` in
+one block: position leaked exactly what the hidden column would have. Rows are
+scattered by a digest of the posting key, which is stable across redraws, so a
+half-filled sheet is never rearranged under the reader. (`hash()` is salted per
+process and would reshuffle on every run.)
+
+Columns are in reading order: what you type first, the body next, the keys
+last. The file is written with a BOM, because Excel on Windows reads a BOM-less
+UTF-8 CSV as cp1252 and turns every Swedish and Dutch posting into mojibake.
+
+`sample` is also non-destructive: a row already carrying a verdict keeps it, and
+keeps it even when a later draw would not have picked that posting again.
+Hand-labelling is the one input here that cannot be regenerated.

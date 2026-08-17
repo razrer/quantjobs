@@ -36,6 +36,7 @@ def _ad(job_id: str, **overrides) -> dict:
         "employer": {"name": "Lynx Asset Management", "url": "https://lynxhedge.se"},
         "workplace_address": {"municipality": "Stockholm", "region": "Stockholms län"},
         "occupation": {"label": "Analytiker"},
+        "application_deadline": "2026-09-30T23:59:59",
         "description": "Vi söker en kvantitativ analytiker.",
     }
     ad.update(overrides)
@@ -77,6 +78,8 @@ class WithdrawnAdTest(unittest.TestCase):
             "the withdrawal blanked the title",
         )
         self.assertIsNotNone(row["description"], "the withdrawal blanked the body")
+        self.assertEqual(row["employer"], "Lynx Asset Management")
+        self.assertEqual(row["deadline"], "2026-09-30T23:59:59")
 
     def test_withdrawal_of_an_unseen_ad_is_harmless(self):
         """Cold starts see withdrawals for ads published before the window."""
@@ -126,6 +129,55 @@ class MappingTest(unittest.TestCase):
         self.assertEqual(row["location"], "Stockholm, Stockholms län")
         self.assertEqual(row["domain"], "lynxhedge.se", "employer URL is the bridge to firms")
         self.assertEqual(row["ats"], "jobtech")
+
+    def test_closing_date_is_carried(self):
+        """The one source that publishes a deadline as a field.
+
+        The board sorts an approaching closing date above everything else, so a
+        dropped `application_deadline` does not read as a missing column -- it
+        reads as a posting that never closes.
+        """
+        connection = _memory(self)
+        jobstream.apply(connection, [_ad("78")])
+        self.assertEqual(
+            connection.execute("SELECT deadline FROM jobs").fetchone()[0],
+            "2026-09-30T23:59:59",
+        )
+
+    def test_employer_name_survives_a_missing_url(self):
+        """Only half of the feed's ads carry a resolvable employer URL.
+
+        Without the name the other half are postings from nobody, which is what
+        the board showed before this column existed.
+        """
+        connection = _memory(self)
+        jobstream.apply(connection, [_ad("79", employer={"name": "REGION UPPSALA"})])
+        row = connection.execute("SELECT domain, employer FROM jobs").fetchone()
+        self.assertIsNone(row["domain"])
+        self.assertEqual(row["employer"], "REGION UPPSALA")
+
+
+class ClosingDateUpdateTest(unittest.TestCase):
+    """`deadline` takes the newer value, but never takes NULL for an answer."""
+
+    def test_an_employer_may_move_its_closing_date(self):
+        connection = _memory(self)
+        jobstream.apply(connection, [_ad("80")])
+        jobstream.apply(connection, [_ad("80", application_deadline="2026-10-15T23:59:59")])
+        self.assertEqual(
+            connection.execute("SELECT deadline FROM jobs").fetchone()[0],
+            "2026-10-15T23:59:59",
+        )
+
+    def test_a_feed_that_stops_publishing_one_does_not_erase_it(self):
+        connection = _memory(self)
+        jobstream.apply(connection, [_ad("81")])
+        jobstream.apply(connection, [_ad("81", application_deadline=None)])
+        self.assertEqual(
+            connection.execute("SELECT deadline FROM jobs").fetchone()[0],
+            "2026-09-30T23:59:59",
+            "a silent gap in the feed must not un-date a posting we already showed",
+        )
 
 
 if __name__ == "__main__":

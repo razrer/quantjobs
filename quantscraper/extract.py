@@ -321,19 +321,32 @@ def teamtailor(token: str) -> list[Job]:
 
 
 def workday(token: str) -> list[Job]:
-    """Workday CXS. `token` is `tenant|wdN|site` -- see `ats.py`."""
+    """Workday CXS. `token` is `tenant|wdN|site[|host]` -- see `ats.py`.
+
+    Two hosts serve the same CXS endpoint and address it differently. On
+    `myworkdayjobs.com` the tenant is the subdomain; on `myworkdaysite.com` the
+    subdomain is a bare `wdN` and the tenant appears only in the path. The
+    optional fourth part names the second case, so every token written before
+    it existed still means what it meant.
+    """
     parts = token.split("|")
-    if len(parts) != 3:
+    if len(parts) not in (3, 4):
         raise ValueError(
-            f"workday token {token!r} is not tenant|wdN|site -- re-run `ats`"
+            f"workday token {token!r} is not tenant|wdN|site[|host] -- re-run `ats`"
         )
-    tenant, wd, site = parts
+    tenant, wd, site = parts[:3]
+    host = parts[3] if len(parts) == 4 else "myworkdayjobs.com"
 
     # Asserted, not merely used. Raising the cap silently truncates every board
     # on some tenants and 400s on others; the regression test pins it here.
     assert _WORKDAY_MAX <= 20, "Workday rejects limit > 20"
 
-    url = f"https://{tenant}.{wd}.myworkdayjobs.com/wday/cxs/{tenant}/{site}/jobs"
+    origin = (
+        f"https://{wd}.{host}"
+        if host == "myworkdaysite.com"
+        else f"https://{tenant}.{wd}.{host}"
+    )
+    url = f"{origin}/wday/cxs/{tenant}/{site}/jobs"
     jobs: list[Job] = []
     seen_page: str | None = None
     for page in range(_WORKDAY_PAGES):
@@ -360,7 +373,7 @@ def workday(token: str) -> list[Job]:
                     token=token,
                     job_id=path or job.get("title", ""),
                     title=job.get("title") or "",
-                    url=f"https://{tenant}.{wd}.myworkdayjobs.com/en-US/{site}{path}",
+                    url=f"{origin}/en-US/{site}{path}",
                     location=job.get("locationsText"),
                     posted_at=job.get("postedOn"),
                 )

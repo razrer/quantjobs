@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 from datetime import datetime, timezone
 
 from . import (
-    alerts, ats, audit, coverage, db, domains, extract, fca, jobstream, pages,
-    resolve, tagging,
+    alerts, ats, audit, coverage, db, discover, domains, extract, fca,
+    jobstream, labels, pages, resolve, tagging,
 )
 from .registries import REGISTRIES
 
@@ -131,6 +132,37 @@ def _ats(database: str, limit: int, workers: int) -> int:
         print("\nby ATS")
         for row in rows:
             print(f"  {row['ats']:16s} {row['n']:,d}")
+    return 0
+
+
+def _discover(database: str, limit: int, roster: bool, workers: int) -> int:
+    connection = db.connect(database)
+    if roster:
+        wanted = discover.roster_targets(connection, audit.load_roster())
+        frame = f"{len(wanted)} active roster firms"
+    else:
+        wanted = [
+            discover.Target(row["name"], (row["name"],), row["domain"])
+            for row in discover.targets(connection, limit)
+        ]
+        frame = f"{len(wanted)} firms with a domain and no pollable board"
+
+    attempted, found, hits = discover.run(connection, wanted, workers)
+    if not attempted:
+        print("nothing left to discover")
+        return 0
+
+    print(f"probed {attempted:,d} of {frame}, verified {found:,d} boards")
+    for hit in sorted(hits, key=lambda h: h.query):
+        print(f"  {hit.ats:16s} {hit.token:30s} {hit.query[:30]:30s} {hit.evidence}")
+
+    # A board found for a firm with no domain cannot be written to
+    # `ats_resolution`, which is keyed on one -- so it is found and then not
+    # polled. Naming those is the difference between a queue and a silent loss.
+    stranded = [h.query for h in hits if not h.domain]
+    if stranded:
+        print(f"\n{len(stranded)} board(s) found for a firm holding no domain,")
+        print("so nothing polls them yet: " + ", ".join(sorted(stranded)))
     return 0
 
 
@@ -268,12 +300,17 @@ def _list(database: str, args) -> int:
         "relevance": split(args.relevance),
         "seniority": split(args.seniority),
         "role_class": split(args.role),
+        "desk": split(args.desk),
+        "contract": split(args.contract),
         "language": split(args.language),
     }
     exclude = {
         "exclusion_reason": split(args.exclude),
         "hard_gates": split(args.without),
         "seniority": split(args.not_seniority),
+        # A language requirement ranks a posting down rather than gating it, so
+        # dropping one is an explicit ask rather than the default.
+        "spoken_language": split(args.speaks),
     }
 
     rows = tagging.search(
@@ -288,6 +325,77 @@ def _list(database: str, args) -> int:
             f" {(row['location'] or '')[:22]:24s} {row['url'] or ''}"
         )
     return 0
+
+
+def _sample(database: str, limit: int, out: str) -> int:
+    connection = db.connect(database)
+    path = Path(out)
+    written, kept = labels.draw(connection, limit, path)
+    print(f"wrote {written:,d} postings to {path}")
+    if kept:
+        print(f"  {kept} existing label(s) preserved")
+    print("\nfill in `relevance` and `seniority` on each row, then run `labels`.")
+    print(f"  relevance   {' | '.join(labels.RELEVANCE)}")
+    print(f"  seniority   {' | '.join(labels.SENIORITY)}")
+    print("\nthe sheet deliberately does not show what the tagger decided --")
+    print("agreeing with a tag that is already there measures nothing.")
+    return 0
+
+
+def _labels(database: str, file: str) -> int:
+    connection = db.connect(database)
+    path = Path(file)
+    found = labels.load(path)
+    if not found:
+        print(f"no labelled rows in {path} -- run `sample` first", file=sys.stderr)
+        return 1
+
+    # A row typed wrongly is reported and skipped, not treated as a reason to
+    # score nothing. Refusing the whole file over one shifted cell hides the
+    # fifty rows that are fine, and those are the ones with something to say.
+    problems = labels.validate(found)
+    for problem in problems:
+        print(f"SKIP {problem}", file=sys.stderr)
+    usable = [
+        label for label in found
+        if (not label.relevance or label.relevance in labels.RELEVANCE)
+        and (not label.seniority or label.seniority in labels.SENIORITY)
+    ]
+    if not usable:
+        print("nothing usable in the file", file=sys.stderr)
+        return 1
+
+    rates, disagreements = labels.score(connection, usable)
+    print(f"scored {len(usable)} labelled posting(s) against tagger {tagging.TAGGER}")
+    for dimension, (hits, total, share) in rates.items():
+        print(f"  {dimension:12s} {hits:3d}/{total:<3d} {share:6.1%}")
+
+    # The asymmetry the whole project runs on: a posting wrongly thrown away is
+    # the expensive failure, a false positive costs a few seconds of reading.
+    missed = [d for d in disagreements if d.false_rejection]
+    if missed:
+        print(f"\nFALSE REJECTIONS ({len(missed)}) -- postings the lexicon threw away")
+        for d in missed:
+            print(f"  {d.title[:56]:58s} you: {d.labelled}")
+            print(f"    {d.evidence[:100]}")
+
+    other = [d for d in disagreements if not d.false_rejection]
+    if other:
+        print(f"\ndisagreements ({len(other)})")
+        for d in other:
+            print(f"  {d.dimension:10s} you: {d.labelled:14s} tagger: {d.tagged:14s}"
+                  f" {d.title[:40]}")
+            if d.evidence:
+                print(f"    on {d.evidence[:96]}")
+
+    # `TAGGING.md`: at least 90% on both dimensions, and no false rejection.
+    passed = (
+        not missed
+        and all(share >= 0.90 for _, _, share in rates.values())
+        and rates["relevance"][1] >= 100
+    )
+    print("\n" + ("exit criterion met" if passed else "exit criterion not met"))
+    return 0 if passed else 1
 
 
 def _alerts(database: str) -> int:
@@ -395,6 +503,17 @@ def main(argv: list[str] | None = None) -> int:
     ats_command.add_argument("--limit", type=int, default=500)
     ats_command.add_argument("--workers", type=int, default=12)
 
+    discover_command = commands.add_parser(
+        "discover", help="find the board a careers page never named (Layer 2C)"
+    )
+    discover_command.add_argument("--limit", type=int, default=200)
+    discover_command.add_argument(
+        "--roster",
+        action="store_true",
+        help="sweep the audit roster instead of the general queue",
+    )
+    discover_command.add_argument("--workers", type=int, default=6)
+
     jobs_command = commands.add_parser(
         "jobs", help="pull postings from resolved ATS boards (Layer 3)"
     )
@@ -428,17 +547,38 @@ def main(argv: list[str] | None = None) -> int:
     )
     list_command.add_argument("--fit", help="apply_now,strong,plausible,stretch")
     list_command.add_argument("--hub", help="stockholm,amsterdam,...")
-    list_command.add_argument("--relevance", help="core,adjacent")
-    list_command.add_argument("--seniority", help="junior_0_2,new_grad,intern,...")
+    list_command.add_argument(
+        "--relevance", help="relevant,less_relevant,adjacent,rejected")
+    list_command.add_argument("--seniority", help="junior_0_2,new_grad,mid_3_5,...")
     list_command.add_argument("--not-seniority", help="drop these seniorities")
-    list_command.add_argument("--role", help="research,trading,quant_dev,...")
+    list_command.add_argument(
+        "--role", help="quant_research,quant_dev,trading,operations,...")
+    list_command.add_argument("--desk", help="front_office,middle_office,back_office")
+    list_command.add_argument("--contract", help="internship,permanent,fixed_term,...")
     list_command.add_argument("--language", help="python,cplusplus,...")
+    list_command.add_argument(
+        "--speaks", help="drop postings requiring these: dutch,german,mandarin,...")
     list_command.add_argument("--exclude", help="crypto_web3,actuarial,...")
     list_command.add_argument("--without", help="hard gates to drop: phd_required,...")
     list_command.add_argument("--since", help="first seen on or after, ISO date")
     list_command.add_argument("--limit", type=int, default=50)
     list_command.add_argument(
         "--dimensions", action="store_true", help="show every filterable value"
+    )
+
+    sample_command = commands.add_parser(
+        "sample", help="draw postings to hand-label (writes labels.csv)"
+    )
+    sample_command.add_argument("--limit", type=int, default=100)
+    sample_command.add_argument(
+        "--out", default=str(labels.PATH), help="where to write the sheet"
+    )
+
+    labels_command = commands.add_parser(
+        "labels", help="score the lexicon against the hand-labelled sample"
+    )
+    labels_command.add_argument(
+        "--file", default=str(labels.PATH), help="the labelled sheet to read"
     )
 
     commands.add_parser(
@@ -452,6 +592,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "list":
         return _list(args.db, args)
+    if args.command == "sample":
+        return _sample(args.db, args.limit, args.out)
+    if args.command == "labels":
+        return _labels(args.db, args.file)
     if args.command == "coverage":
         return _coverage(args.db)
     if args.command == "tag":
@@ -462,6 +606,8 @@ def main(argv: list[str] | None = None) -> int:
         return _alerts(args.db)
     if args.command == "jobstream":
         return _jobstream(args.db, args.since)
+    if args.command == "discover":
+        return _discover(args.db, args.limit, args.roster, args.workers)
     if args.command == "jobs":
         return _jobs(args.db, args.limit)
     if args.command == "ats":

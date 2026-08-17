@@ -41,6 +41,11 @@ class Job:
     # else the domain the board was reached from *is* the employer, and a
     # second name for it would be a second identity to keep in step.
     employer: str | None = None
+    # The source's own classification, verbatim -- same contract as
+    # `Employer.category`. JobStream files every ad under one of ~20
+    # occupation fields, which is an enumeration of what the job *is* rather
+    # than a guess read off its title, and most of them can never be finance.
+    category: str | None = None
     url: str | None = None
     location: str | None = None
     department: str | None = None

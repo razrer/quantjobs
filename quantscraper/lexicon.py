@@ -65,6 +65,14 @@ the *role*. A quant fund's description says "we are a systematic trading firm"
 on its office-manager posting too, so anchors found in the title and department
 decide the role, while anchors found in the body only ever support or rescue.
 
+**And a body may only support next to a markets anchor.** The engineering rule
+above is the general one: `monte carlo` is derivatives pricing at a bank and
+radiation shielding at a reactor, `time series` is signal research at a fund
+and telemetry on a robotaxi. The quantitative *methodology* vocabulary belongs
+to every technical field; only the markets vocabulary is ours. So a phrase
+found in a body counts for nothing unless the posting places itself in markets
+somewhere -- see `judge`, where `quant_body` is computed.
+
 ## Matching is on token boundaries, never substrings
 
 `admini`*strat*`or` contains "strat", and State Street's custody platform is
@@ -86,7 +94,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-VERSION = 1
+VERSION = 3
 
 # Everything that is not a letter, digit, `+` or `#` is a separator. Those two
 # are kept because `c++` and `c#` name things a posting is graded on, and
@@ -188,6 +196,42 @@ GENERIC_IN_BODY = frozenset(_terms(
     "quantitativ", "quantitatif", "kwantitatief", "kwantitatieve",
 ))
 QUANT_BODY = tuple(term for term in QUANT if term not in GENERIC_IN_BODY)
+
+# And the specific phrases split again, because they are two different kinds of
+# evidence and only one of them stands alone.
+#
+# **Some phrases name markets activity: the anchor is inside the phrase.** No
+# document says "statistical arbitrage" or "smart order routing" about anything
+# else, so finding one in a body settles the question by itself.
+#
+# **The rest name a method, and every technical field owns them.** `monte
+# carlo` is derivatives pricing at a bank and radiation shielding at a reactor;
+# `time series` is signal research at a fund and telemetry on a robotaxi;
+# `backtests` is alpha research at Squarepoint and demand forecasting at a
+# retailer. All three were measured, not guessed -- see `judge`.
+#
+# Which bucket a phrase goes in is asymmetric, so the doubtful ones go below.
+# A phrase in `SELF_ANCHORING` that turns out to be ordinary costs a false
+# keep; a phrase in the method bucket costs nothing at all unless the posting
+# *also* mentions markets nowhere, and a genuine quant advertisement never
+# manages that. `quantitative finance` sits below for exactly that reason: it
+# reads like the strongest phrase here and a consumer bank's core-ledger
+# posting carries it.
+SELF_ANCHORING = frozenset(_terms(
+    "systematic trading", "algorithmic trading", "algo trading",
+    "statistical arbitrage", "stat arb", "pairs trading",
+    "market making", "market maker", "market makers",
+    "electronic trading", "high frequency trading", "low latency trading",
+    "execution algorithms", "smart order routing", "transaction cost analysis",
+    "derivatives pricing", "exotic derivatives",
+    "volatility surface", "implied volatility",
+    "counterparty credit risk", "market risk models", "value at risk",
+    "risk premia", "systematic investing", "quantitative trading",
+    "trading strategies", "trading strategy", "xva", "cva", "risk quant",
+    "algoritmisk handel", "systematisk handel",
+))
+QUANT_MARKETS_BODY = tuple(term for term in QUANT_BODY if term in SELF_ANCHORING)
+QUANT_METHOD_BODY = tuple(term for term in QUANT_BODY if term not in SELF_ANCHORING)
 
 # The mirror image, and the reason `CLAUDE.md` names Jane Street: `Trader` in a
 # title *is* the job, and in a body it is furniture -- every bank's boilerplate
@@ -370,6 +414,17 @@ NON_QUANT_FINANCE = _terms(
     "customer experience", "personal banking", "banking associate",
     "mobile mortgage", "financial services representative", "financial consultant",
     "personal financial", "wealth executive", "consumer banking", "retail banking",
+    # Retail branch staff, added after a 1,000-posting machine-labelled sample
+    # showed the largest single disagreement was `relevance: unknown` on
+    # postings that are plainly nothing to do with markets. Bare `banker`
+    # subsumes *Universal*, *Premier*, *Associate*, *Retail* and *Personal
+    # Banker* on a token match; 1,435 postings carry it and not one of them was
+    # rated positively by the tagger, which is the check that mattered.
+    "banker", "banking advisor", "banking adviser",
+    "client relationship consultant", "relationship consultant",
+    "small business specialist", "client associate",
+    # An audit or tax *programme* seat, which the analyst words above miss.
+    "audit staff", "audit intern", "tax staff", "tax intern",
     "sales agent", "sales development", "account handler", "financial planner",
     "claim representative", "client manager", "deposit specialist",
     "commercial banking", "business banking", "premier banking",
@@ -494,6 +549,24 @@ INTERN_TITLE = _terms(
     "summer intern", "sommarjobb", "co op", "student",
 )
 
+# Titles naming a formal programme that **requires** matriculation, so the
+# title alone settles it. This is the module's asymmetry used exactly as
+# intended: a title cannot prove a posting is relevant, and it can prove the
+# posting is a job this reader cannot hold. A German *Duales Studium* or
+# *Werkstudent* contract is void without current enrolment, and the reader has
+# graduated.
+#
+# **Bare `intern` is deliberately not here**, and that is the whole care in
+# this list. Aquatic Capital's `Quantitative Researcher, Early Career` and
+# `Quantitative Researcher, PhD` are the most on-target postings in the corpus
+# and an over-eager student rule threw them away once already. An internship
+# is often open to a recent graduate; an enrolment-bound programme is not.
+STUDENT_PROGRAMME = _terms(
+    "duales studium", "dual course of studies", "duale ausbildung",
+    "ausbildung zum", "ausbildung zur", "werkstudent", "werkstudentin",
+    "werkstudium",
+)
+
 # `are enrolled` is deliberately absent: "employees who are enrolled in our
 # benefits plan" is ordinary handbook language, and this list rejects outright.
 STUDENT_ONLY = _terms(
@@ -551,12 +624,40 @@ def judge(
     has_body = len(body) > MIN_BODY
 
     quant_role = first(role, QUANT)
-    quant_body = first(body, QUANT_BODY)
     # Split deliberately. A markets word in the title is about the job; the same
     # word in the body may only be about the employer's customers, which is how
     # a market-data vendor's every backend engineer came out as a markets hire.
     markets_role = first(role, MARKETS)
     markets_body = first(body, MARKETS)
+
+    # **A methodology phrase is evidence only next to a markets anchor**, which
+    # is the two-sided test step 7 has always applied to engineering titles and
+    # nothing else did. Step 7 asks "is this engineer at a markets firm?"; the
+    # same question decides whether "monte carlo" is derivatives pricing or
+    # radiation shielding, and until now steps 6, 8 and 9 never asked it.
+    #
+    # Counting phrases was the obvious alternative and it does not work. It was
+    # measured: `Thermal - Fluids Analyst` carries *model validation* and
+    # *numerical methods*, and a payments company's `Data Scientist` carries
+    # *time series* and *statistical modelling*. Two phrases, no markets, both
+    # rejected by hand.
+    #
+    # Dry-run over all 69,961 postings before committing, per `CLAUDE.md`: 103
+    # move, 79 distinct titles, hand-read in full. `Senior Radiation Shielding
+    # Engineer` was kept by *monte carlo*, `Tech Lead, Autonomy Performance -
+    # Robotaxi` by *time series*, and `Commercial Garage Door Sales
+    # Representative` by *options pricing*. The three that sounded like markets
+    # were read individually and are not: `Senior Market Strategist` is a CPA
+    # firm's wealth desk, `Staff Software Engineer` is a payments app, and
+    # `Interest & Product Logic Specialist` is a consumer bank's core ledger.
+    #
+    # A phrase that names markets activity outright is exempt, because there is
+    # nothing left for an anchor to add: a body saying "backtesting
+    # infrastructure for statistical arbitrage" has already answered the
+    # question, and two tests pin that the narrowing does not cost it.
+    quant_body = first(body, QUANT_MARKETS_BODY)
+    if quant_body is None and (markets_role or markets_body):
+        quant_body = first(body, QUANT_METHOD_BODY)
 
     # 1. A named occupation. The strongest evidence in the module -- but a
     #    quantitative word in the title *itself* means the title is doing
@@ -600,6 +701,14 @@ def judge(
     #    in the whole corpus, and this rule threw them away silently. So a
     #    quantitative title downgrades the gate to a read, exactly as it does
     #    for a named occupation in step 1.
+    # 3b. A programme that cannot be held without being enrolled. Read from the
+    #     title, and unlike the body gate below it needs no corroboration --
+    #     the title *is* the contract. 199 postings, none of them rated
+    #     positively before this existed.
+    hit = first(role, STUDENT_PROGRAMME)
+    if hit:
+        return Verdict("reject", "student_only", hit, "strong")
+
     hit = first(body, STUDENT_ONLY)
     if hit:
         student_title = first(role, INTERN_TITLE)

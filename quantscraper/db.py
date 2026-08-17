@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     domain       TEXT,            -- firm domain this board was reached from
     employer     TEXT,            -- advertiser as the source named it, where
                                   -- the board is not the firm's own (JobStream)
+    category     TEXT,            -- the source's own occupation classification
     title        TEXT NOT NULL,
     url          TEXT,
     location     TEXT,
@@ -95,6 +96,7 @@ _ADDED_COLUMNS = (
     ("jobs", "removed_at", "TEXT"),
     ("jobs", "deadline", "TEXT"),
     ("jobs", "employer", "TEXT"),
+    ("jobs", "category", "TEXT"),
 )
 
 
@@ -169,6 +171,7 @@ def upsert_jobs(
             job.job_id,
             domain,
             job.employer,
+            job.category,
             job.title,
             job.url,
             job.location,
@@ -184,12 +187,13 @@ def upsert_jobs(
     with connection:
         connection.executemany(
             """
-            INSERT INTO jobs (ats, token, job_id, domain, employer, title, url,
-                              location, department, posted_at, deadline,
-                              description, first_seen, last_seen)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO jobs (ats, token, job_id, domain, employer, category,
+                              title, url, location, department, posted_at,
+                              deadline, description, first_seen, last_seen)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (ats, token, job_id) DO UPDATE SET
                 employer    = COALESCE(excluded.employer, jobs.employer),
+                category    = COALESCE(excluded.category, jobs.category),
                 title       = excluded.title,
                 url         = excluded.url,
                 location    = excluded.location,

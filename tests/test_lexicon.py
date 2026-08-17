@@ -291,6 +291,81 @@ class QuantitativeRolesSurvive(unittest.TestCase):
         self.assertEqual(call.reason, "non_quant_finance")
 
 
+class MethodologyIsNotMarkets(unittest.TestCase):
+    """`monte carlo` is derivatives pricing at a bank and radiation shielding
+    at a reactor. The quantitative *method* vocabulary belongs to every
+    technical field, so it only counts next to a markets anchor; the phrases
+    that name markets activity carry a body on their own.
+
+    All eight titles below are real postings that reached `keep` or `undecided`
+    on the phrase quoted, and every one of them was hand-read.
+    """
+
+    OFF_TARGET = (
+        ("Senior Radiation Shielding Engineer",
+         "Monte carlo transport simulation of the reactor core. "),
+        ("Tech Lead, Autonomy Performance - Robotaxi",
+         "Time series analysis of fleet telemetry at scale. "),
+        ("Computational Chemist (Electronic & Functional Materials)",
+         "Model validation against experimental spectra. "),
+        ("Thermal - Fluids Analyst I / II",
+         "Numerical methods and model validation for heat exchangers. "),
+        ("Staff Data Scientist, Planning and Forecasting",
+         "You will run backtests of our demand forecasts weekly. "),
+        ("Commercial Garage Door Sales Representative",
+         "Familiarity with our options pricing sheet is a plus. "),
+        ("Senior NetSuite Engineer",
+         "Maintain the pricing models inside our ERP configuration. "),
+        ("Interest & Product Logic Specialist",
+         "A background in quantitative finance is welcome on our ledger team. "),
+    )
+
+    def test_a_method_phrase_alone_does_not_rescue(self):
+        for title, body in self.OFF_TARGET:
+            with self.subTest(title=title):
+                call = lexicon.judge(title, description=body * 20)
+                self.assertEqual(call.verdict, "reject")
+
+    def test_the_same_body_next_to_a_markets_anchor_still_counts(self):
+        """The narrowing must cost nothing at a markets employer. One added
+        sentence naming the desk is the whole difference."""
+        for title, body in self.OFF_TARGET:
+            with self.subTest(title=title):
+                call = lexicon.judge(
+                    title,
+                    description=(body + "You will sit with the trading desk. ") * 20,
+                )
+                self.assertNotEqual(call.verdict, "reject")
+
+    def test_a_phrase_that_names_markets_needs_no_anchor(self):
+        """`statistical arbitrage` and `smart order routing` are not written
+        about anything else, so requiring a second word would be theatre."""
+        for phrase in ("statistical arbitrage", "smart order routing",
+                       "high frequency trading", "implied volatility"):
+            with self.subTest(phrase=phrase):
+                call = lexicon.judge(
+                    "Senior Associate, Operations",
+                    description=f"You will maintain our {phrase} pipeline. " * 20,
+                )
+                self.assertEqual(call.verdict, "keep")
+
+    def test_the_two_buckets_partition_the_body_list(self):
+        """A phrase in neither bucket is a phrase that silently stopped being
+        read at all -- the failure mode this project calls expensive."""
+        self.assertEqual(
+            set(lexicon.QUANT_MARKETS_BODY) | set(lexicon.QUANT_METHOD_BODY),
+            set(lexicon.QUANT_BODY),
+        )
+        self.assertFalse(
+            set(lexicon.QUANT_MARKETS_BODY) & set(lexicon.QUANT_METHOD_BODY))
+
+    def test_the_generic_adjectives_are_in_neither(self):
+        """"Strong quantitative skills" must not reach a body rule by either
+        route. `GENERIC_IN_BODY` is dropped before the split happens."""
+        for bucket in (lexicon.QUANT_MARKETS_BODY, lexicon.QUANT_METHOD_BODY):
+            self.assertFalse(set(bucket) & lexicon.GENERIC_IN_BODY)
+
+
 class BoardProfile(unittest.TestCase):
     """A board's own postings are the only honest evidence of whose board it
     is. LaSalle really is a Singapore Capital Markets Services Licensee and its

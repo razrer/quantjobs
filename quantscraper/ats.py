@@ -81,11 +81,32 @@ ATS_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     # Workday needs three things to be pollable -- tenant, data-centre number
     # and site -- so the token is compound. Capturing the tenant alone reads
     # like success and leaves the board unreachable.
+    # Both Workday hosts, and they order the same three parts differently -- so
+    # these capture by *name*. Joining by position silently built
+    # `wd3|brevanhoward|BH_ExternalCareers` for the second one, which is a
+    # well-formed token addressing nothing.
     (
         "workday",
         re.compile(
-            _HOST_LABEL + r"\.(wd\d+)\.myworkdayjobs\.com"
-            r"(?:/wday/cxs/[^/\"']+)?(?:/[a-z]{2}-[A-Z]{2})?/([A-Za-z0-9_-]+)",
+            r"(?<![a-z0-9-])(?P<tenant>[a-z0-9-]{1,63})"
+            r"\.(?P<wd>wd\d+)\.myworkdayjobs\.com"
+            r"(?:/wday/cxs/[^/\"']+)?(?:/[a-z]{2}-[A-Z]{2})?/(?P<site>[A-Za-z0-9_-]+)",
+            re.I,
+        ),
+    ),
+    # Workday's *other* host, which inverts the URL. On `myworkdayjobs.com` the
+    # tenant is the subdomain; on `myworkdaysite.com` the subdomain is a bare
+    # `wdN` and the tenant moves into the path:
+    # `wd3.myworkdaysite.com/recruiting/brevanhoward/BH_ExternalCareers`.
+    # The pattern above cannot match that shape at all, so every firm on this
+    # host tiered B with a live feed behind it -- Brevan Howard among them, 15
+    # postings including an execution trader seat.
+    (
+        "workday",
+        re.compile(
+            r"(?P<wd>wd\d+)\.(?P<host>myworkdaysite\.com)/(?:wday/cxs|recruiting)"
+            r"/(?P<tenant>[A-Za-z0-9_-]+)(?:/[a-z]{2}-[A-Z]{2})?"
+            r"/(?P<site>[A-Za-z0-9_-]+)",
             re.I,
         ),
     ),
@@ -216,6 +237,21 @@ def _serves_feed(host: str, path: str, marker: str) -> bool:
     return marker.encode() in body[:100_000]
 
 
+def _workday_token(match: re.Match[str]) -> str | None:
+    """`tenant|wdN|site`, plus the host when it is not the usual one.
+
+    A three-part token means `myworkdayjobs.com`, which is what every existing
+    row in `ats_resolution` already means, so nothing has to be re-resolved.
+    The fourth part names the other host, and only `extract.workday` reads it.
+    """
+    parts = match.groupdict()
+    tenant, wd, site = parts.get("tenant"), parts.get("wd"), parts.get("site")
+    if not (tenant and wd and site):
+        return None
+    token = f"{tenant}|{wd}|{site}"
+    return f"{token}|{parts['host']}" if parts.get("host") else token
+
+
 def fingerprint(markup: str, url: str | None = None) -> tuple[str, str | None, str] | None:
     """(ats, token, evidence) for the first ATS the markup points at.
 
@@ -228,18 +264,21 @@ def fingerprint(markup: str, url: str | None = None) -> tuple[str, str | None, s
     for name, pattern in ATS_PATTERNS:
         for match in pattern.finditer(markup):
             groups = [g for g in match.groups() if g]
-            # Workday's three captures are all needed; everything else takes
+            # Workday's parts are all needed and the two hosts order them
+            # differently, so they are assembled by name. Everything else takes
             # the first non-empty group as its board token.
-            token = "|".join(groups) if name == "workday" else (groups[0] if groups else None)
-            if token and _is_infrastructure(token):
+            token = _workday_token(match) if name == "workday" else (
+                groups[0] if groups else None
+            )
+            if token is None:
+                continue  # tenant without a site is not pollable
+            if _is_infrastructure(token):
                 continue  # infrastructure host; keep looking for a real board
             # A purely numeric token is not a board name. `jobs.lever.co/500`
             # on an error page produced board "500", which then 404s on every
             # poll -- a firm that looks resolved and yields nothing forever.
-            if token and name != "workday" and token.isdigit():
+            if name != "workday" and token.isdigit():
                 continue
-            if name == "workday" and len(groups) != 3:
-                continue  # tenant without a site is not pollable
             return name, token, match.group(0)[:120]
     # Second pass: a vendor's assets on a page served from the firm's own
     # host. Checked before the infrastructure fallback, because it yields a

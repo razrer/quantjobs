@@ -6,60 +6,110 @@
 <title>Board — quant-scraper</title>
 <style>
 /* ---------------------------------------------------------------------------
-   A reading surface, not a dashboard. Postings are a sorted list with a strong
-   chronological spine, so the layout is one column and the ornament budget is
-   spent on hierarchy: hairlines, one accent, and a freshness rule down the
-   left edge. No shadows, no cards floating over nothing.
+   Seventy thousand postings, read by one person looking for one job. The
+   layout follows from that: a permanent filter rail on the left because
+   narrowing is the main verb, a dense card grid on the right because scanning
+   many at once beats scrolling one column, and an ornament budget spent almost
+   entirely on two signals -- how well a posting fits, and how soon it closes.
+
+   Everything a card can say is on its face. The hover panel holds what would
+   not fit rather than what was too unimportant to show.
 --------------------------------------------------------------------------- */
+
 :root {
-  --paper:      #faf8f5;
+  --paper:      #f7f5f2;
   --surface:    #ffffff;
-  --surface-2:  #f4f1ec;
-  --ink:        #1a1917;
-  --ink-soft:   #57534e;
-  --ink-faint:  #8f887e;
-  --rule:       #e6e0d6;
-  --rule-firm:  #d4ccbe;
+  --surface-2:  #f1eee9;
+  --surface-3:  #e9e5de;
+  --ink:        #191817;
+  --ink-soft:   #55514b;
+  /* Every "faint" use on this page is 10–11px, so it is held above 4.5:1
+     rather than at the 3:1 large-text floor. Quiet has to stay legible. */
+  --ink-faint:  #7a7367;
+  --rule:       #e2ddd3;
+  --rule-firm:  #cec7b9;
   --accent:     #0f5f5c;
-  --accent-bg:  #e3efed;
-  --hot:        #b4531a;
-  --hot-bg:     #f6e8dc;
+  --accent-bg:  #e0efec;
+  --shadow:     0 1px 2px rgba(28,25,20,.05), 0 8px 24px -12px rgba(28,25,20,.22);
+  --shadow-lg:  0 2px 6px rgba(28,25,20,.08), 0 20px 48px -16px rgba(28,25,20,.32);
+
+  /* Closing dates. One hue ramp, so the eye reads position on it as time. */
+  --due-0:      #b3261e;  --due-0-bg: #fbe6e3;   /* today or tomorrow  */
+  --due-1:      #9d4713;  --due-1-bg: #fbeadd;   /* this week          */
+  --due-2:      #75590c;  --due-2-bg: #f7efd9;   /* a fortnight        */
+  --due-3:      #43613f;  --due-3-bg: #e8efe6;   /* a month            */
+  --due-4:      #5b626d;  --due-4-bg: #eceef1;   /* later than that    */
+
+  /* Fit. Deliberately the same green as the accent at the top end, so the
+     board has one "good" colour rather than a second vocabulary. */
+  --fit-4:      #0d5c46;  --fit-4-bg: #dcefe6;   /* apply now   */
+  --fit-3:      #17694f;  --fit-3-bg: #e3f0ea;   /* strong      */
+  --fit-2:      #3f6383;  --fit-2-bg: #e5ecf3;   /* plausible   */
+  --fit-1:      #67625a;  --fit-1-bg: #eeebe5;   /* stretch     */
+  --fit-0:      #706a60;  --fit-0-bg: #f0ede8;   /* out of scope, unknown */
 
   --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Menlo, Consolas, monospace;
 
-  --w: 62rem;
+  --rail: 16.5rem;
+  --radius: 6px;
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --paper:     #131210;
-    --surface:   #1a1916;
-    --surface-2: #201e1a;
+    --paper:     #121110;
+    --surface:   #1a1917;
+    --surface-2: #211f1c;
+    --surface-3: #2a2723;
     --ink:       #ece7de;
-    --ink-soft:  #a8a196;
-    --ink-faint: #6f6860;
-    --rule:      #2b2924;
-    --rule-firm: #3a372f;
+    --ink-soft:  #a9a297;
+    --ink-faint: #756e65;
+    --rule:      #2c2925;
+    --rule-firm: #423e37;
     --accent:    #6cbfb4;
-    --accent-bg: #16302e;
-    --hot:       #dd9057;
-    --hot-bg:    #33241a;
+    --accent-bg: #163330;
+    --shadow:    0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.7);
+    --shadow-lg: 0 2px 6px rgba(0,0,0,.5), 0 20px 48px -16px rgba(0,0,0,.85);
+
+    --due-0: #f08a80;  --due-0-bg: #3a1a17;
+    --due-1: #e6a068;  --due-1-bg: #352314;
+    --due-2: #d4bd6a;  --due-2-bg: #322b16;
+    --due-3: #93b48d;  --due-3-bg: #1e2a1d;
+    --due-4: #96a0ac;  --due-4-bg: #232629;
+
+    --fit-4: #63c9a5;  --fit-4-bg: #10322a;
+    --fit-3: #5cb896;  --fit-3-bg: #142e27;
+    --fit-2: #8fb2d6;  --fit-2-bg: #18252f;
+    --fit-1: #a49d92;  --fit-1-bg: #26241f;
+    --fit-0: #7d766c;  --fit-0-bg: #221f1b;
   }
 }
 :root[data-theme="dark"] {
-  --paper:     #131210;
-  --surface:   #1a1916;
-  --surface-2: #201e1a;
+  --paper:     #121110;
+  --surface:   #1a1917;
+  --surface-2: #211f1c;
+  --surface-3: #2a2723;
   --ink:       #ece7de;
-  --ink-soft:  #a8a196;
-  --ink-faint: #6f6860;
-  --rule:      #2b2924;
-  --rule-firm: #3a372f;
+  --ink-soft:  #b7afa3;
+  --ink-faint: #8d8579;
+  --rule:      #2c2925;
+  --rule-firm: #423e37;
   --accent:    #6cbfb4;
-  --accent-bg: #16302e;
-  --hot:       #dd9057;
-  --hot-bg:    #33241a;
+  --accent-bg: #163330;
+  --shadow:    0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.7);
+  --shadow-lg: 0 2px 6px rgba(0,0,0,.5), 0 20px 48px -16px rgba(0,0,0,.85);
+
+  --due-0: #f08a80;  --due-0-bg: #3a1a17;
+  --due-1: #e6a068;  --due-1-bg: #352314;
+  --due-2: #d4bd6a;  --due-2-bg: #322b16;
+  --due-3: #93b48d;  --due-3-bg: #1e2a1d;
+  --due-4: #96a0ac;  --due-4-bg: #232629;
+
+  --fit-4: #63c9a5;  --fit-4-bg: #10322a;
+  --fit-3: #5cb896;  --fit-3-bg: #142e27;
+  --fit-2: #8fb2d6;  --fit-2-bg: #18252f;
+  --fit-1: #b0a89c;  --fit-1-bg: #26241f;
+  --fit-0: #948c81;  --fit-0-bg: #221f1b;
 }
 
 * { box-sizing: border-box; }
@@ -69,652 +119,1525 @@ body {
   background: var(--paper);
   color: var(--ink);
   font-family: var(--font-sans);
-  font-size: 15px;
-  line-height: 1.5;
+  font-size: 14px;
+  line-height: 1.45;
   -webkit-font-smoothing: antialiased;
   font-variant-numeric: tabular-nums;
 }
-
 a { color: inherit; }
+button { font: inherit; color: inherit; }
 
-/* --- masthead ----------------------------------------------------------- */
+/* --- top bar ------------------------------------------------------------- */
 
-.masthead {
-  border-bottom: 1px solid var(--rule);
-  background: var(--paper);
-}
-.masthead-inner {
-  max-width: var(--w);
-  margin: 0 auto;
-  padding: 1.75rem 1.5rem 1.25rem;
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 1.5rem;
-  flex-wrap: wrap;
-}
-h1 {
-  font-size: 1.0625rem;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  margin: 0;
-}
-h1 span { color: var(--ink-faint); font-weight: 400; }
-.built {
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  color: var(--ink-faint);
-}
-
-/* --- controls ----------------------------------------------------------- */
-
-.controls {
+.top {
   position: sticky;
   top: 0;
-  z-index: 20;
-  background: var(--paper);
-  background: color-mix(in srgb, var(--paper) 92%, transparent);
-  backdrop-filter: blur(8px);
-  border-bottom: 1px solid var(--rule);
-}
-.controls-inner {
-  max-width: var(--w);
-  margin: 0 auto;
-  padding: 0.75rem 1.5rem;
+  z-index: 60;
   display: flex;
   align-items: center;
-  gap: 0.75rem;
   flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  padding: 0.625rem 1rem;
+  background: color-mix(in srgb, var(--paper) 90%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--rule);
+}
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex: none;
+  min-width: 0;
+}
+.brand b { font-size: 0.9375rem; font-weight: 650; letter-spacing: -0.015em; }
+.brand span {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  color: var(--ink-faint);
+  white-space: nowrap;
 }
 
 .search {
-  flex: 1 1 16rem;
+  flex: 1 1 12rem;
+  min-width: 0;
+  max-width: 34rem;
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  border: 1px solid var(--rule);
-  border-radius: 2px;
-  background: var(--surface);
+  height: 2.125rem;
   padding: 0 0.625rem;
-  height: 2rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface);
 }
-.search:focus-within { border-color: var(--accent); }
+.search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-bg); }
 .search svg { flex: none; opacity: 0.45; }
 .search input {
-  flex: 1;
-  border: 0;
-  background: none;
-  color: inherit;
-  font: inherit;
-  font-size: 0.875rem;
-  outline: none;
-  min-width: 0;
+  flex: 1; min-width: 0;
+  border: 0; background: none; color: inherit; font: inherit;
+  font-size: 0.8125rem; outline: none;
 }
-
-.chips { display: flex; gap: 0.25rem; flex-wrap: wrap; }
-.chip {
-  font-family: var(--font-mono);
-  font-size: 0.6875rem;
-  letter-spacing: 0.02em;
-  color: var(--ink-soft);
-  background: none;
-  border: 1px solid var(--rule);
-  border-radius: 2px;
-  padding: 0.3125rem 0.5rem;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.chip:hover { border-color: var(--rule-firm); color: var(--ink); }
-.chip[aria-pressed="true"] {
-  color: var(--accent);
-  border-color: var(--accent);
-  background: var(--accent-bg);
-}
-.chip .n { color: var(--ink-faint); margin-left: 0.375rem; }
-.chip[aria-pressed="true"] .n { color: inherit; opacity: 0.7; }
-
-.spacer { flex: 1 1 0; }
-
-.readout {
-  font-family: var(--font-mono);
-  font-size: 0.6875rem;
-  color: var(--ink-faint);
-  white-space: nowrap;
-}
-
-/* --- bands -------------------------------------------------------------- */
-
-main { max-width: var(--w); margin: 0 auto; padding: 0 1.5rem 6rem; }
-
-.band { margin-top: 2.5rem; }
-.band-head {
-  display: flex;
-  align-items: baseline;
-  gap: 0.75rem;
-  padding-bottom: 0.5rem;
-  border-bottom: 1px solid var(--ink);
-}
-.band-head h2 {
-  font-size: 0.75rem;
-  font-family: var(--font-mono);
-  font-weight: 500;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  margin: 0;
-}
-.band-head .count {
-  font-family: var(--font-mono);
-  font-size: 0.6875rem;
-  color: var(--ink-faint);
-}
-
-/* --- rows --------------------------------------------------------------- */
-
-.row {
-  position: relative;
-  border-bottom: 1px solid var(--rule);
-  padding: 0.875rem 0 0.875rem 1rem;
-}
-.row::before {
-  content: "";
-  position: absolute;
-  left: 0; top: 0.875rem; bottom: 0.875rem;
-  width: 2px;
-  background: var(--rule-firm);
-}
-.row[data-age="0"]::before { background: var(--hot); }
-.row[data-age="1"]::before { background: var(--accent); }
-.row[data-age="2"]::before { background: var(--rule-firm); }
-.row[data-age="3"]::before { background: var(--rule); }
-.row:hover { background: var(--surface-2); }
-
-.line {
-  display: flex;
-  align-items: baseline;
-  gap: 0.625rem;
-  justify-content: space-between;
-}
-.title {
-  font-size: 0.9375rem;
-  font-weight: 500;
-  letter-spacing: -0.005em;
-  text-decoration: none;
-  color: var(--ink);
-}
-.title:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
-.title::after { content: ""; position: absolute; inset: 0; }
-
-.when {
-  flex: none;
-  font-family: var(--font-mono);
-  font-size: 0.6875rem;
-  color: var(--ink-faint);
-  white-space: nowrap;
-}
-.when[data-loose="1"] { border-bottom: 1px dotted var(--ink-faint); cursor: help; }
-
-.meta {
-  margin-top: 0.1875rem;
-  font-size: 0.8125rem;
-  color: var(--ink-soft);
-  display: flex;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-  align-items: baseline;
-}
-.meta .firm { color: var(--ink); }
-.meta .dot { color: var(--ink-faint); }
-.meta .dom { font-family: var(--font-mono); font-size: 0.6875rem; color: var(--ink-faint); }
-.hub {
+.search kbd {
   font-family: var(--font-mono);
   font-size: 0.625rem;
+  color: var(--ink-faint);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 0.0625rem 0.25rem;
+}
+
+.picker {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  flex: none;
+}
+.picker label {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+select {
+  font: inherit;
+  font-size: 0.75rem;
+  color: inherit;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: 0.3125rem 0.375rem;
+  cursor: pointer;
+}
+select:hover { border-color: var(--rule-firm); }
+
+.icon-btn {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 2.125rem; height: 2.125rem;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.icon-btn:hover { border-color: var(--rule-firm); background: var(--surface-2); }
+.icon-btn[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: var(--accent-bg); }
+
+/* --- shell --------------------------------------------------------------- */
+
+.shell { display: grid; grid-template-columns: var(--rail) minmax(0, 1fr); align-items: start; }
+
+.rail {
+  position: sticky;
+  top: 3.25rem;
+  height: calc(100vh - 3.25rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0.875rem 0.75rem 4rem 1rem;
+  border-right: 1px solid var(--rule);
+}
+.rail::-webkit-scrollbar { width: 9px; }
+.rail::-webkit-scrollbar-thumb { background: var(--rule-firm); border-radius: 9px; border: 3px solid var(--paper); }
+
+.presets { display: grid; gap: 0.25rem; margin-bottom: 0.875rem; }
+.preset {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.4375rem 0.5rem;
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  font-size: 0.78125rem;
+  cursor: pointer;
+}
+.preset:hover { border-color: var(--rule-firm); background: var(--surface-2); }
+.preset[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: var(--accent-bg); }
+.preset .n { font-family: var(--font-mono); font-size: 0.6875rem; color: var(--ink-faint); }
+.preset[aria-pressed="true"] .n { color: inherit; opacity: 0.75; }
+
+.rail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 0 0.5rem;
+  padding-bottom: 0.375rem;
+  border-bottom: 1px solid var(--rule);
+}
+.rail-head h2 {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.linky {
+  background: none; border: 0; padding: 0; cursor: pointer;
+  font-size: 0.6875rem; color: var(--ink-faint); text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.linky:hover { color: var(--ink); }
+.linky[hidden] { display: none; }
+
+.facet { border-bottom: 1px solid var(--rule); }
+.facet > summary {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.5rem 0.125rem;
+  cursor: pointer;
+  list-style: none;
+  font-size: 0.78125rem;
+  font-weight: 550;
+  user-select: none;
+}
+.facet > summary::-webkit-details-marker { display: none; }
+.facet > summary::before {
+  content: "";
+  width: 0; height: 0;
+  border-left: 4px solid currentColor;
+  border-top: 3.5px solid transparent;
+  border-bottom: 3.5px solid transparent;
+  opacity: 0.4;
+  transition: transform 0.12s;
+}
+.facet[open] > summary::before { transform: rotate(90deg); }
+.facet > summary .live {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  color: var(--accent);
+}
+.facet-body { padding: 0 0 0.5rem; display: grid; gap: 1px; }
+
+.opt {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.25rem 0.375rem;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  text-align: left;
+  font-size: 0.78125rem;
+  cursor: pointer;
+}
+.opt:hover { background: var(--surface-2); }
+.opt .box {
+  flex: none;
+  width: 0.875rem; height: 0.875rem;
+  border: 1px solid var(--rule-firm);
+  border-radius: 3px;
+  background: var(--surface);
+  display: grid; place-items: center;
+}
+.opt[aria-pressed="true"] .box { background: var(--accent); border-color: var(--accent); }
+.opt[aria-pressed="true"] .box::after {
+  content: "";
+  width: 0.3125rem; height: 0.5rem;
+  border: solid var(--surface);
+  border-width: 0 1.75px 1.75px 0;
+  transform: translateY(-1px) rotate(45deg);
+}
+.opt .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.opt[aria-pressed="true"] .name { font-weight: 550; }
+.opt .n { font-family: var(--font-mono); font-size: 0.6875rem; color: var(--ink-faint); }
+.opt[data-empty="1"] { opacity: 0.4; }
+.opt .swatch { flex: none; width: 3px; height: 0.875rem; border-radius: 2px; }
+
+/* --- main ---------------------------------------------------------------- */
+
+main { padding: 0.875rem 1rem 6rem; min-width: 0; }
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+  flex-wrap: wrap;
+  padding-bottom: 0.625rem;
+  margin-bottom: 0.625rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.crumbs {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+  min-height: 1.5rem;
+}
+.crumbs .readout {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  color: var(--ink-faint);
+  margin-right: 0.25rem;
+}
+.crumbs .readout b { color: var(--ink); font-weight: 600; }
+.crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3125rem;
+  padding: 0.1875rem 0.375rem 0.1875rem 0.4375rem;
+  font-size: 0.6875rem;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  background: var(--accent-bg);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.crumb i { font-style: normal; opacity: 0.55; font-family: var(--font-mono); }
+.crumb:hover i { opacity: 1; }
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(19.5rem, 1fr));
+  gap: 0.625rem;
+  align-items: start;
+}
+
+/* --- card ---------------------------------------------------------------- */
+
+.card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3125rem;
+  padding: 0.625rem 0.6875rem 0.5625rem 0.8125rem;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  min-height: 8.5rem;
+}
+.card::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  border-radius: var(--radius) 0 0 var(--radius);
+  background: var(--rule-firm);
+}
+.card[data-due="0"]::before { background: var(--due-0); }
+.card[data-due="1"]::before { background: var(--due-1); }
+.card[data-due="2"]::before { background: var(--due-2); }
+.card[data-due="3"]::before { background: var(--due-3); }
+.card[data-fit="apply_now"]::before,
+.card[data-fit="strong"]::before { background: var(--fit-4); }
+.card[data-due="0"][data-fit]::before { background: linear-gradient(var(--due-0) 50%, var(--fit-4) 50%); }
+.card:hover { border-color: var(--rule-firm); box-shadow: var(--shadow-lg); z-index: 40; }
+.card:focus-within { z-index: 40; }
+.card[data-saved="1"] { border-color: var(--accent); }
+.card[data-hidden="1"] { opacity: 0.42; }
+
+.card-top {
+  display: flex;
+  align-items: center;
+  gap: 0.3125rem;
+  flex-wrap: wrap;
+  min-height: 1.125rem;
+}
+.card-top .when {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+.card-top .when[data-loose="1"] { border-bottom: 1px dotted currentColor; cursor: help; }
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.0625rem 0.3125rem;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.pill.fit-4 { color: var(--fit-4); background: var(--fit-4-bg); font-weight: 600; }
+.pill.fit-3 { color: var(--fit-3); background: var(--fit-3-bg); font-weight: 600; }
+.pill.fit-2 { color: var(--fit-2); background: var(--fit-2-bg); }
+.pill.fit-1 { color: var(--fit-1); background: var(--fit-1-bg); }
+.pill.fit-0 { color: var(--fit-0); background: var(--fit-0-bg); }
+
+.due {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.0625rem 0.3125rem;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.due[data-lvl="0"] { color: var(--due-0); background: var(--due-0-bg); }
+.due[data-lvl="1"] { color: var(--due-1); background: var(--due-1-bg); }
+.due[data-lvl="2"] { color: var(--due-2); background: var(--due-2-bg); }
+.due[data-lvl="3"] { color: var(--due-3); background: var(--due-3-bg); }
+.due[data-lvl="4"] { color: var(--due-4); background: var(--due-4-bg); font-weight: 500; }
+.due[data-lvl="x"] { color: var(--ink-faint); background: var(--surface-3); text-decoration: line-through; }
+.due::before {
+  content: "";
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.due[data-lvl="0"]::before { animation: throb 1.6s ease-in-out infinite; }
+@keyframes throb { 50% { opacity: 0.25; } }
+
+.card h3 {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 550;
+  line-height: 1.3;
+  letter-spacing: -0.008em;
+}
+.card h3 a { text-decoration: none; }
+.card h3 a::after { content: ""; position: absolute; inset: 0; }
+.card:hover h3 a { color: var(--accent); }
+.clamp2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+.card .who {
+  display: flex;
+  align-items: baseline;
+  gap: 0.375rem;
+  font-size: 0.75rem;
+  min-width: 0;
+}
+.card .who .firm {
+  font-weight: 550;
+  color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  position: relative; z-index: 1;
+  cursor: pointer;
+  border-bottom: 1px solid transparent;
+}
+.card .who .firm:hover { color: var(--accent); border-bottom-color: currentColor; }
+.card .where {
+  font-size: 0.71875rem;
+  color: var(--ink-soft);
+  display: flex; align-items: center; gap: 0.3125rem; flex-wrap: wrap;
+}
+.card .where .hub {
+  font-family: var(--font-mono);
+  font-size: 0.5625rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--accent);
   background: var(--accent-bg);
-  padding: 0.0625rem 0.3125rem;
+  padding: 0.0625rem 0.25rem;
   border-radius: 2px;
 }
+.card .where .loc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 
-/* --- stacks ------------------------------------------------------------- */
-
-/* A firm with several openings in one band collapses into a stack. The
-   layered bottom edge is the whole affordance: it says "there is more paper
-   underneath" without a chevron or an animation. */
-.stack { position: relative; margin-bottom: 0.5rem; }
-.stack-card {
-  position: relative;
+.tags { display: flex; flex-wrap: wrap; gap: 0.1875rem; margin-top: auto; padding-top: 0.1875rem; }
+.tag {
+  font-family: var(--font-mono);
+  font-size: 0.59375rem;
+  letter-spacing: 0.01em;
+  color: var(--ink-soft);
+  background: var(--surface-2);
   border: 1px solid var(--rule);
-  border-left: 2px solid var(--rule-firm);
-  background: var(--surface);
-  padding: 0.875rem 1rem;
-  cursor: pointer;
+  border-radius: 3px;
+  padding: 0.03125rem 0.25rem;
+  white-space: nowrap;
 }
-.stack-card:hover { background: var(--surface-2); border-color: var(--rule-firm); }
-.stack[data-age="0"] .stack-card { border-left-color: var(--hot); }
-.stack[data-age="1"] .stack-card { border-left-color: var(--accent); }
-.stack::after,
-.stack::before {
+.tag.k-role { color: var(--ink); border-color: var(--rule-firm); font-weight: 550; }
+.tag.k-sen  { background: none; }
+.tag.k-warn { color: var(--due-1); background: var(--due-1-bg); border-color: transparent; }
+.tag.k-flat { color: var(--due-4); background: var(--due-4-bg); border-color: transparent; }
+.tag.more   { border-style: dashed; color: var(--ink-faint); }
+
+/* The hover panel. It overlays the neighbours rather than expanding the card,
+   because a grid that reflows under the cursor is unusable at this density. */
+.deep {
+  position: absolute;
+  left: -1px; right: -1px;
+  top: calc(100% - 4px);
+  z-index: 50;
+  display: none;
+  padding: 0.5625rem 0.6875rem 0.625rem;
+  background: var(--surface);
+  border: 1px solid var(--rule-firm);
+  border-top: 1px solid var(--rule);
+  border-radius: 0 0 var(--radius) var(--radius);
+  box-shadow: var(--shadow-lg);
+}
+.card:hover > .deep, .card:focus-within > .deep { display: block; }
+.card[data-flip="1"]:hover > .deep, .card[data-flip="1"]:focus-within > .deep {
+  top: auto; bottom: calc(100% - 4px);
+  border-radius: var(--radius) var(--radius) 0 0;
+  border-top: 1px solid var(--rule-firm);
+  border-bottom: 1px solid var(--rule);
+}
+.deep p { margin: 0 0 0.4375rem; font-size: 0.71875rem; line-height: 1.45; color: var(--ink-soft); }
+.deep dl {
+  margin: 0 0 0.5rem;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.125rem 0.5rem;
+  font-size: 0.6875rem;
+}
+.deep dt {
+  font-family: var(--font-mono);
+  font-size: 0.59375rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  padding-top: 0.0625rem;
+}
+.deep dd { margin: 0; color: var(--ink-soft); overflow-wrap: anywhere; }
+.deep .acts { display: flex; gap: 0.25rem; position: relative; z-index: 2; }
+.act {
+  flex: 1;
+  padding: 0.25rem 0.375rem;
+  font-size: 0.6875rem;
+  background: var(--surface-2);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.act:hover { background: var(--surface-3); border-color: var(--rule-firm); }
+.act.on { color: var(--accent); border-color: var(--accent); background: var(--accent-bg); }
+.act.go { color: var(--accent); font-weight: 550; }
+
+/* --- stacks -------------------------------------------------------------- */
+
+/* A group of three or more takes one cell instead of three, and keeps the rank
+   of its most urgent member. The layered bottom edge is the whole affordance:
+   it says there is more paper underneath without a chevron or an animation. */
+.stack { position: relative; }
+.stack .card { cursor: pointer; }
+.stack::before, .stack::after {
   content: "";
   position: absolute;
-  left: 0.375rem; right: 0.375rem;
+  left: 0.3125rem; right: 0.3125rem;
   height: 3px;
+  background: var(--surface);
   border: 1px solid var(--rule);
   border-top: 0;
-  background: var(--surface);
+  border-radius: 0 0 4px 4px;
   pointer-events: none;
 }
 .stack::before { bottom: -4px; }
-.stack::after  { left: 0.75rem; right: 0.75rem; bottom: -8px; opacity: 0.6; }
-.stack[data-open="1"]::before,
-.stack[data-open="1"]::after { display: none; }
+.stack::after { left: 0.6875rem; right: 0.6875rem; bottom: -8px; opacity: 0.55; }
+.stack[data-open="1"] { grid-column: 1 / -1; }
+.stack[data-open="1"]::before, .stack[data-open="1"]::after { display: none; }
+.stack[data-open="1"] .card { min-height: 0; }
 
-.stack-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 0.75rem;
-}
-.stack-firm { font-size: 0.9375rem; font-weight: 600; letter-spacing: -0.005em; }
-.stack-n {
-  font-family: var(--font-mono);
-  font-size: 0.6875rem;
-  color: var(--ink-faint);
-  white-space: nowrap;
-}
-.stack-sub {
-  margin-top: 0.125rem;
-  font-family: var(--font-mono);
-  font-size: 0.6875rem;
-  color: var(--ink-faint);
-}
-.peek {
-  margin: 0.625rem 0 0;
-  padding: 0;
-  list-style: none;
-  display: grid;
-  gap: 0.125rem;
-}
-.peek li {
-  font-size: 0.8125rem;
+.stack .peek { margin: 0; padding: 0; list-style: none; display: grid; gap: 0.0625rem; }
+.stack .peek li {
+  font-size: 0.71875rem;
   color: var(--ink-soft);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.peek li::before { content: "— "; color: var(--ink-faint); }
-.peek .rest { color: var(--ink-faint); font-family: var(--font-mono); font-size: 0.6875rem; }
-.peek .rest::before { content: "+ "; }
+.stack .peek li::before { content: "— "; color: var(--ink-faint); }
 .stack[data-open="1"] .peek { display: none; }
 
-.stack-body { display: none; padding-left: 1rem; border-left: 1px solid var(--rule); margin-left: 1px; }
-.stack[data-open="1"] .stack-body { display: block; }
-.stack[data-open="1"] .stack-card { border-bottom-color: transparent; background: var(--surface-2); }
-.stack-body .row:last-child { border-bottom: 0; }
+.members {
+  display: none;
+  grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
+  gap: 0.25rem 0.75rem;
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--rule);
+}
+.stack[data-open="1"] .members { display: grid; }
+.member {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4375rem;
+  padding: 0.25rem 0.3125rem;
+  border-radius: 4px;
+  text-decoration: none;
+  font-size: 0.75rem;
+  border-left: 2px solid transparent;
+}
+.member:hover { background: var(--surface-2); }
+.member[data-due="0"] { border-left-color: var(--due-0); }
+.member[data-due="1"] { border-left-color: var(--due-1); }
+.member[data-due="2"] { border-left-color: var(--due-2); }
+.member .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.member .m {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+.member .m.hot { color: var(--due-1); font-weight: 600; }
+.member.rest { color: var(--ink-faint); font-style: italic; cursor: default; }
+.member.rest:hover { background: none; }
 
-/* --- misc --------------------------------------------------------------- */
+/* --- misc ---------------------------------------------------------------- */
 
-.more {
+.sentinel { height: 1px; }
+.tail {
+  margin: 1.5rem auto 0;
   display: block;
-  width: 100%;
-  margin: 2rem 0 0;
-  padding: 0.75rem;
-  font: inherit;
+  padding: 0.5rem 1rem;
   font-family: var(--font-mono);
   font-size: 0.75rem;
   color: var(--ink-soft);
   background: none;
   border: 1px dashed var(--rule-firm);
-  border-radius: 2px;
+  border-radius: var(--radius);
   cursor: pointer;
 }
-.more:hover { color: var(--ink); border-color: var(--ink-faint); }
+.tail:hover { color: var(--ink); border-color: var(--ink-faint); }
 
 .empty {
-  margin-top: 4rem;
-  padding: 2.5rem;
-  border: 1px dashed var(--rule-firm);
+  margin: 3rem auto;
+  max-width: 26rem;
+  padding: 2rem;
   text-align: center;
+  border: 1px dashed var(--rule-firm);
+  border-radius: var(--radius);
   color: var(--ink-soft);
-  font-size: 0.875rem;
+  font-size: 0.8125rem;
 }
-.empty strong { display: block; color: var(--ink); font-weight: 500; margin-bottom: 0.25rem; }
+.empty strong { display: block; color: var(--ink); margin-bottom: 0.375rem; }
 
-.colophon {
-  max-width: var(--w);
-  margin: 0 auto;
-  padding: 2rem 1.5rem 4rem;
+.notes {
+  margin: 3rem 0 0;
+  padding-top: 1rem;
   border-top: 1px solid var(--rule);
-  font-size: 0.75rem;
-  line-height: 1.7;
+  font-size: 0.71875rem;
+  line-height: 1.6;
   color: var(--ink-faint);
+  columns: 2;
+  column-gap: 2.5rem;
 }
-.colophon code { font-family: var(--font-mono); }
-.colophon p { margin: 0 0 0.5rem; max-width: 46rem; }
+.notes p { margin: 0 0 0.625rem; break-inside: avoid; }
+.notes b { color: var(--ink-soft); font-weight: 600; }
+.notes code { font-family: var(--font-mono); font-size: 0.9em; }
 
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+@media (prefers-reduced-motion: reduce) { *, *::before { animation: none !important; transition: none !important; } }
 
-@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
-
-@media (max-width: 40rem) {
-  .masthead-inner, .controls-inner, main, .colophon { padding-left: 1rem; padding-right: 1rem; }
-  .readout { display: none; }
+@media (max-width: 62rem) {
+  .shell { grid-template-columns: 1fr; }
+  .rail {
+    position: static; height: auto; border-right: 0;
+    border-bottom: 1px solid var(--rule); padding-bottom: 1rem;
+  }
+  .rail[hidden] { display: none; }
+  .notes { columns: 1; }
+  .brand span { display: none; }
 }
 </style>
 </head>
 <body>
 
-<header class="masthead">
-  <div class="masthead-inner">
-    <h1>Board <span id="scope">—</span></h1>
-    <div class="built" id="built"></div>
-  </div>
-</header>
+<div class="top">
+  <div class="brand"><b>Board</b><span id="scope">—</span></div>
 
-<div class="controls">
-  <div class="controls-inner">
-    <label class="search">
-      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
-        <circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/>
-      </svg>
-      <input id="q" type="search" placeholder="Filter by role, firm or location" autocomplete="off" spellcheck="false">
-    </label>
-    <div class="chips" id="hubs"></div>
-    <div class="chips" id="fits"></div>
-    <div class="spacer"></div>
-    <button class="chip" id="stacking" aria-pressed="true">stack by firm</button>
-    <div class="readout" id="readout"></div>
-  </div>
+  <label class="search">
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
+      <circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/>
+    </svg>
+    <input id="q" type="search" placeholder="Title, firm, location, team…" autocomplete="off" spellcheck="false">
+    <kbd>/</kbd>
+  </label>
+
+  <button class="icon-btn" id="railtoggle" title="Filters" aria-pressed="true">
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+      <path d="M1.5 3.5h13M3.5 8h9M6 12.5h4"/>
+    </svg>
+  </button>
+  <button class="icon-btn" id="theme" title="Light / dark">
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+      <path d="M13.5 9.6A5.8 5.8 0 0 1 6.4 2.5a5.8 5.8 0 1 0 7.1 7.1Z"/>
+    </svg>
+  </button>
 </div>
 
-<main id="board"></main>
+<div class="shell">
+  <aside class="rail" id="rail">
+    <div class="presets" id="presets"></div>
+    <div class="rail-head">
+      <h2>Filters</h2>
+      <button class="linky" id="clear" hidden>clear all</button>
+    </div>
+    <div id="facets"></div>
+  </aside>
 
-<footer class="colophon">
-  <p><strong>Ordering.</strong> Newest first. Applications would sort by closing
-  date where one is published, but none of the ten applicant tracking systems in
-  this set publishes one, so the spine is the posting date.</p>
-  <p><strong>Dates are not all equally known,</strong> and the board does not
-  pretend otherwise. Greenhouse, Ashby, Workable and Lever publish a timestamp.
-  Workday publishes a sentence — <code>Posted 21 Days Ago</code>, or
-  <code>Posted 30+ Days Ago</code>, which is a floor rather than a date. BambooHR
-  and Personio publish nothing, so those fall back to the day we first saw the
-  posting, an upper bound. Anything approximate is marked with a dotted
-  underline and says what it really knows on hover.</p>
-  <p><strong>Stacking.</strong> One firm can hold a thousand openings — U.S.
-  Bank alone accounts for 1,455 — so within each time band a firm with three or
-  more postings collapses to a single stack. Sorting stays global; stacking only
-  changes how much vertical space a firm may occupy before you have asked to see
-  it.</p>
-  <p><strong>Ties break on fewest openings first.</strong> Hundreds of postings
-  share a date, so the tie-break is doing most of the ordering work. A firm with
-  one opening wrote it for one role; a firm with fourteen hundred is staffing
-  branches. Firm name breaks the remaining ties, so the order is stable between
-  renders rather than incidental.</p>
-</footer>
+  <main>
+    <div class="toolbar">
+      <div class="picker">
+        <label for="sort">sort</label>
+        <select id="sort">
+          <option value="smart">Closing soon, then newest</option>
+          <option value="due">Closing date</option>
+          <option value="new">Newest posted</option>
+          <option value="old">Oldest posted</option>
+          <option value="fit">Best fit</option>
+          <option value="firm">Firm A–Z</option>
+        </select>
+      </div>
+      <div class="picker">
+        <label for="pin">pin</label>
+        <select id="pin" title="How near a closing date has to be before it is pinned above everything else">
+          <option value="7">closing ≤ 7 days</option>
+          <option value="14">closing ≤ 14 days</option>
+          <option value="30">closing ≤ 30 days</option>
+          <option value="9999">any closing date</option>
+          <option value="0">nothing</option>
+        </select>
+      </div>
+      <div class="picker">
+        <label for="group">stack</label>
+        <select id="group">
+          <option value="firm">by firm</option>
+          <option value="firm+hub">by firm + place</option>
+          <option value="role+hub">by role + place</option>
+          <option value="role">by role</option>
+          <option value="hub">by place</option>
+          <option value="">off</option>
+        </select>
+      </div>
+    </div>
+    <div class="crumbs" id="crumbs"></div>
+    <div class="grid" id="grid"></div>
+    <div class="sentinel" id="sentinel"></div>
+    <button class="tail" id="tail" hidden></button>
+
+    <div class="notes">
+      <p><b>Ordering.</b> A posting whose closing date is inside the pin window
+      sits above everything else, soonest first, whatever the sort says. The pin
+      window is the <code>pin</code> control — set it to <em>nothing</em> to sort
+      purely by the spine you picked.</p>
+      <p><b>Closing dates are read, never guessed.</b> Only JobStream publishes
+      one as a field, and it publishes one on every ad, so every Swedish posting
+      here has a real deadline and the rest have none. They are deliberately not
+      mined out of descriptions: hundreds of Swedish ads carry the sentence
+      <em>“tjänsten kan tillsättas innan sista ansökningsdag”</em> with no date
+      in it, and Ashby prints <em>“unless a specific application deadline is
+      stated”</em> on everything it hosts. A guessed date would pin the wrong
+      card to the top of this page for weeks.</p>
+      <p><b>Posted dates are not all equally known.</b> Greenhouse, Ashby,
+      Workable, Lever and JobStream publish a timestamp. Workday publishes a
+      sentence — <code>Posted 30+ Days Ago</code> is a floor, not a date.
+      BambooHR and Personio publish nothing, so those fall back to the day we
+      first saw the posting, an upper bound. Anything approximate is dotted and
+      says what it really knows on hover.</p>
+      <p><b>Stacking</b> collapses a group of three or more into one cell that
+      keeps the rank of its most urgent member, so a stack can never bury a
+      posting that is closing. Group by firm to see who is hiring, by role and
+      place to see one kind of job in one city.</p>
+      <p><b>Two stages, and only the first one removes anything.</b> Stage one
+      is a gate: a nurse, a welder, a <em>Medical AI Specialist</em> are not
+      distant quant roles but other professions, so they never reach this page.
+      It runs off JobStream's own occupation taxonomy where there is one — 15 of
+      its 21 fields can never hold a quant job — and off a short list of
+      unambiguous occupation words where there is not. Stage two is everything
+      in the rail, and it only ranks: <code>unknown</code> is a real value with
+      its own checkbox, because a posting nothing has decided about must stay
+      reachable.</p>
+      <p><b>Most postings with “Trader” in the title are not quant trading.</b>
+      <em>Agency MBS Trader</em>, <em>Precious Metals Trader</em>, <em>Associate
+      Trader, Fixed Income</em> — real seats, and not this job. <b>Trading
+      style</b> splits them from <em>Quantitative</em>, <em>Systematic</em> and
+      <em>Algorithmic Trader</em>, read from the title alone because a body
+      belonging to a trading firm says “systematic” about the firm.</p>
+      <p><b>Nothing is deleted anywhere.</b> The gate is a tag with the evidence
+      that set it; the rows stay in the database, and
+      <code>list --exclude off_industry</code> shows exactly what it ate. Every
+      build prints the count.</p>
+      <p><b>Saved and hidden</b> live in this browser only, keyed on the posting
+      id. Hidden postings stay in the counts and come back with the
+      <em>hidden</em> preset.</p>
+    </div>
+  </main>
+</div>
 
 <script src="data.js"></script>
 <script>
 (() => {
   "use strict";
 
-  const board = window.BOARD;
   const $ = (id) => document.getElementById(id);
+  const board = window.BOARD;
 
   if (!board) {
-    $("board").innerHTML =
+    $("grid").innerHTML =
       '<div class="empty"><strong>No data file.</strong>' +
       'Run <code>python web/build_data.py</code> to generate <code>data.js</code>.</div>';
     return;
   }
 
+  // --- vocabulary ----------------------------------------------------------
+
+  // Labels only where the raw value reads badly. Everything else is the tag
+  // with its underscores taken out, so a new lexicon value shows up as itself
+  // rather than disappearing from the rail.
+  const LABEL = {
+    apply_now: "apply now", out_of_scope: "out of scope",
+    junior_0_2: "junior · 0–2y", mid_3_5: "mid · 3–5y", senior_6_10: "senior · 6–10y",
+    new_grad: "new grad", head_or_md: "head / MD", student_intern: "student / intern",
+    quant_research: "quant research", quant_dev: "quant dev",
+    portfolio_management: "portfolio mgmt", data_science: "data science",
+    cplusplus: "C++", csharp: "C#", fsharp: "F#", dotnet: ".NET", sql: "SQL",
+    kdb: "kdb+", javascript: "JavaScript", typescript: "TypeScript", matlab: "MATLAB",
+    python_analytical: "python · analytical", python_production: "python · production",
+    spreadsheet_sql: "spreadsheet / SQL", systems: "systems (C++/Rust)",
+    hft: "HFT", mid_frequency: "mid frequency", long_horizon: "long horizon",
+    fx: "FX", options_vol: "options / vol", multi_asset: "multi-asset",
+    security_clearance: "clearance required", local_language_required: "local language",
+    visa_sponsorship_none: "no visa sponsorship", onsite_only: "onsite only",
+    phd_required: "PhD required",
+    support_function: "support function", non_markets_fintech: "fintech, not markets",
+    insurance_pricing: "insurance pricing", crypto_web3: "crypto / web3",
+    heavy_systems: "heavy systems", insurance_ops: "insurance ops",
+    "hong kong": "Hong Kong", deprioritized: "deprioritized hub",
+  };
+  const label = (v) => LABEL[v] || String(v).replace(/_/g, " ");
+
+  const FIT_RANK = { apply_now: 4, strong: 3, plausible: 2, stretch: 1, out_of_scope: 0, unknown: 0 };
+
+  // --- dates ---------------------------------------------------------------
+
   const DAY = 86400000;
   const today = new Date().setHours(0, 0, 0, 0);
-  const ageDays = (iso) => Math.floor((today - new Date(iso + "T00:00:00").getTime()) / DAY);
-
-  // Bands are the chronological spine. Everything else -- stacking, filtering --
-  // rearranges within a band and never across one.
-  const BANDS = [
-    { key: "today",  label: "Today",           max: 0 },
-    { key: "week",   label: "This week",       max: 7 },
-    { key: "month",  label: "Past 30 days",    max: 30 },
-    { key: "quarter",label: "Past three months", max: 92 },
-    { key: "older",  label: "Older",           max: Infinity },
-  ];
-  const bandOf = (d) => BANDS.find((b) => d <= b.max);
-  const ageClass = (d) => (d <= 0 ? 0 : d <= 7 ? 1 : d <= 30 ? 2 : 3);
-
+  const days = (iso) => Math.round((new Date(iso + "T00:00:00").getTime() - today) / DAY);
   const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-  function whenLabel(job, d) {
-    const date = new Date(job.posted + "T00:00:00");
-    const stamp = `${date.getDate()} ${MONTHS[date.getMonth()]}`;
-    switch (job.precision) {
-      case "exact":   return { text: d === 0 ? "today" : d === 1 ? "yesterday" : stamp, loose: 0, why: "" };
-      case "approx":  return { text: `~${d}d ago`, loose: 1, why: `The board reported "${d} days ago" rather than a date.` };
-      case "atleast": return { text: `${d}d+ ago`, loose: 1, why: `The board reported "30+ days ago". This is a floor: the posting is at least this old, possibly much older.` };
-      default:        return { text: `seen ${stamp}`, loose: 1, why: "No posting date was published. This is the day we first saw it, so the posting is this old or older." };
+  const stamp = (iso) => {
+    const d = new Date(iso + "T00:00:00");
+    return `${d.getDate()} ${MONTHS[d.getMonth()]}${d.getFullYear() !== new Date().getFullYear() ? " " + String(d.getFullYear()).slice(2) : ""}`;
+  };
+
+  // How loud a closing date is allowed to be. Five steps, because a fortnight
+  // and a quarter are not the same kind of soon.
+  const level = (left) => (left < 0 ? "x" : left <= 1 ? 0 : left <= 7 ? 1 : left <= 14 ? 2 : left <= 30 ? 3 : 4);
+  const dueText = (left) =>
+    left < 0 ? `closed ${-left}d ago` : left === 0 ? "closes today" : left === 1 ? "closes tomorrow" : `${left}d left`;
+
+  function postedLabel(job) {
+    const d = -days(job.posted);
+    const s = stamp(job.posted);
+    switch (job.prec) {
+      case "approx":  return [`~${d}d`, 1, `The board reported "${d} days ago" rather than a date.`];
+      case "atleast": return [`${d}d+`, 1, `The board reported a "30+ days" bucket. This is a floor: the posting is at least this old, possibly much older.`];
+      case "seen":    return [`seen ${s}`, 1, `No posting date was published. This is the day we first saw it, so the posting is this old or older.`];
+      default:        return [d === 0 ? "today" : d === 1 ? "yesterday" : s, 0, ""];
     }
   }
 
+  // --- the corpus ----------------------------------------------------------
+
   const jobs = board.jobs.map((j) => {
-    const d = ageDays(j.posted);
-    return { ...j, d, band: bandOf(d).key, age: ageClass(d), firmName: board.firms[j.firm].name };
+    const firm = board.firms[j.firm];
+    const left = j.due === undefined ? null : days(j.due);
+    return { ...j, firmName: firm.name, firmDomain: firm.domain, left, age: -days(j.posted) };
   });
 
-  const HUBS = ["stockholm", "copenhagen", "amsterdam", "switzerland", "hong kong", "singapore"];
+  const saved = new Set(JSON.parse(localStorage.getItem("board.saved") || "[]"));
+  const buried = new Set(JSON.parse(localStorage.getItem("board.hidden") || "[]"));
+  const persist = () => {
+    localStorage.setItem("board.saved", JSON.stringify([...saved]));
+    localStorage.setItem("board.hidden", JSON.stringify([...buried]));
+  };
 
-  // Each band renders its own first slice rather than drawing from one global
-  // budget. A single budget spent itself entirely on Today -- 915 postings land
-  // there -- and the chronological spine, which is the whole point of the
-  // ordering, was invisible until you clicked.
-  const PER_BAND = 25;
-  const STEP = 200;
-  const state = { q: "", hubs: new Set(), fits: new Set(), stacking: true, limits: new Map() };
+  // --- facets --------------------------------------------------------------
 
-  // Layer 5's verdict, best first. `unknown` is a real value and gets a chip:
-  // a posting nothing decided about must stay reachable, or the filter
-  // becomes the write-time classifier the pipeline refuses to have.
-  const FITS = ["apply_now", "strong", "plausible", "stretch", "out_of_scope", "unknown"];
-  const limitFor = (key) => state.limits.get(key) || PER_BAND;
+  // One shape for every filter: what values a posting holds in this dimension.
+  // Counting, filtering and the rail all read `get`, so a new facet is one
+  // entry here and nothing else.
+  const single = (key, fallback) => (j) => [j[key] === undefined ? fallback : j[key]];
+  const many = (key) => (j) => j[key] || [];
 
-  // --- filters -------------------------------------------------------------
+  const FACETS = [
+    { key: "fit", label: "Fit", open: true, swatch: true,
+      order: ["apply_now", "strong", "plausible", "stretch", "out_of_scope", "unknown"],
+      get: single("fit", "unknown") },
 
-  function matches(job) {
-    if (state.hubs.size && !state.hubs.has(job.hub)) return false;
-    if (state.fits.size && !state.fits.has(job.fit || "unknown")) return false;
-    if (!state.q) return true;
-    const hay = `${job.title} ${job.firmName} ${job.firm} ${job.location || ""} ${job.team || ""}`.toLowerCase();
-    return state.q.split(/\s+/).every((term) => hay.includes(term));
+    { key: "closing", label: "Closing date", open: true,
+      order: ["d7", "d14", "d30", "later", "expired", "none"],
+      labels: { d7: "within a week", d14: "within a fortnight", d30: "within a month",
+                later: "further out", expired: "already closed", none: "no closing date" },
+      get: (j) => {
+        if (j.left === null) return ["none"];
+        if (j.left < 0) return ["expired"];
+        if (j.left <= 7) return ["d7", "d14", "d30"];
+        if (j.left <= 14) return ["d14", "d30"];
+        if (j.left <= 30) return ["d30"];
+        return ["later"];
+      } },
+
+    // The fallback used to read "elsewhere" and that stopped being true when
+    // geography became a gate: everything genuinely elsewhere is now dropped
+    // before it reaches this file, so what is left with no hub is a posting
+    // that never stated one -- Workday's `2 Locations`, a bare `Remote`. They
+    // are kept precisely because they might be in Amsterdam, and calling them
+    // "elsewhere" invites filtering away the one bucket nothing is known about.
+    { key: "hub", label: "Place", open: true,
+      order: ["stockholm", "copenhagen", "amsterdam", "switzerland", "hong kong",
+              "singapore", "deprioritized", "unstated"],
+      get: single("hub", "unstated") },
+
+    // One value since lexicon 12, so a scalar. Reading it as `j.role || [...]`
+    // now yields a *string*, which the facet then iterates one character at a
+    // time -- "t", "r", "a", "d" as four separate roles.
+    { key: "role", label: "Role", open: true,
+      order: ["quant_research", "trading", "quant_dev", "portfolio_management", "risk",
+              "data_science", "engineering", "operations", "unknown"],
+      get: single("role", "unknown") },
+
+    { key: "sen", label: "Seniority", open: true,
+      order: ["new_grad", "junior_0_2", "mid_3_5", "senior_6_10", "lead", "head_or_md",
+              "student_intern", "unknown"],
+      get: single("sen", "unknown") },
+
+    { key: "posted", label: "Posted", open: false,
+      order: ["p1", "p7", "p30", "p90", "older"],
+      labels: { p1: "today", p7: "this week", p30: "past 30 days", p90: "past 3 months", older: "older" },
+      get: (j) => (j.age <= 0 ? ["p1", "p7", "p30", "p90"]
+                 : j.age <= 7 ? ["p7", "p30", "p90"]
+                 : j.age <= 30 ? ["p30", "p90"]
+                 : j.age <= 92 ? ["p90"] : ["older"]) },
+
+    // The two the reader turns most, so they open with the rail. Stage one
+    // has already dropped the postings that are another profession outright;
+    // everything reachable from here is finance, and these two say how close
+    // to the desk and how quantitative it is.
+    { key: "tstyle", label: "Trading style", open: true,
+      order: ["quant", "pure", "unstated"],
+      labels: { quant: "quant / systematic trader", pure: "trader, no quant word",
+                unstated: "not a trading seat" },
+      get: single("tstyle", "unstated") },
+
+    { key: "rel", label: "Relevance", open: true,
+      order: ["relevant", "less_relevant", "adjacent", "rejected", "unknown"],
+      labels: { relevant: "research/modelling", less_relevant: "quant, not research",
+                adjacent: "next to the desk" },
+      get: single("rel", "unknown") },
+
+    { key: "desk", label: "Desk", open: false,
+      order: ["front_office", "middle_office", "back_office", "unstated"],
+      get: single("desk", "unstated") },
+    { key: "speaks", label: "Language required", open: false, get: many("speaks") },
+    { key: "wrote", label: "Written in", open: false,
+      order: ["en", "sv", "da", "no", "fi", "nl", "de", "fr", "es", "it", "pt", "cjk", "unknown"],
+      labels: { en: "English", sv: "Swedish", da: "Danish", no: "Norwegian",
+                fi: "Finnish", nl: "Dutch", de: "German", fr: "French",
+                es: "Spanish", it: "Italian", pt: "Portuguese",
+                cjk: "Chinese / Japanese / Korean", unknown: "too short to tell" },
+      get: single("wrote", "unknown") },
+
+    { key: "asset", label: "Asset class", open: false, get: (j) => j.asset || [] },
+    { key: "cd", label: "Code depth", open: false,
+      order: ["python_analytical", "python_production", "spreadsheet_sql", "systems", "hardware", "unknown"],
+      get: single("cd", "unknown") },
+    { key: "lang", label: "Language", open: false, get: many("lang") },
+    { key: "hz", label: "Horizon", open: false, order: ["hft", "mid_frequency", "long_horizon"], get: many("hz") },
+    { key: "ct", label: "Contract", open: false,
+      order: ["permanent", "fixed_term", "contractor", "internship", "part_time", "unknown"],
+      get: single("ct", "unknown") },
+    { key: "gates", label: "Hard gates", open: false, get: many("gates") },
+    { key: "excl", label: "Why excluded", open: false, get: many("excl") },
+    { key: "ats", label: "Source", open: false, get: single("ats", "unknown") },
+    { key: "firm", label: "Firm", open: false, limit: 40, get: (j) => [j.firm],
+      name: (v) => (board.firms[v] || { name: v }).name },
+  ];
+  const BY_KEY = Object.fromEntries(FACETS.map((f) => [f.key, f]));
+
+  // Every value each posting holds, computed once. Filtering runs on every
+  // keystroke over seventy thousand rows; recomputing `get` there would make
+  // the rail counts the slowest thing on the page.
+  for (const job of jobs) {
+    job.v = FACETS.map((f) => f.get(job));
+  }
+
+  // --- state ---------------------------------------------------------------
+
+  const FRESH = () => ({
+    q: "", sort: "smart", pin: 14, group: "firm",
+    sel: Object.fromEntries(FACETS.map((f) => [f.key, []])),
+    only: null,            // "saved" | "hidden" | null
+  });
+
+  let state = FRESH();
+  try {
+    const stored = JSON.parse(localStorage.getItem("board.state") || "null");
+    if (stored && stored.sel) state = { ...FRESH(), ...stored, sel: { ...FRESH().sel, ...stored.sel } };
+  } catch { /* a corrupt blob is not worth a broken board */ }
+
+  const save = () => localStorage.setItem("board.state", JSON.stringify(state));
+
+  const PRESETS = [
+    { key: "worth", label: "Worth reading",
+      apply: (s) => { s.sel.fit = ["apply_now", "strong", "plausible"]; },
+      test: (j) => ["apply_now", "strong", "plausible"].includes(j.fit) },
+    { key: "focus", label: "Focus hubs",
+      apply: (s) => { s.sel.hub = ["stockholm", "copenhagen", "amsterdam", "switzerland", "hong kong", "singapore"]; },
+      test: (j) => j.hub && j.hub !== "deprioritized" },
+    { key: "junior", label: "Junior-friendly",
+      apply: (s) => { s.sel.sen = ["new_grad", "junior_0_2", "mid_3_5"]; },
+      test: (j) => ["new_grad", "junior_0_2", "mid_3_5"].includes(j.sen) },
+    // The cheapest high-precision filter on the board. A posting that names
+    // Python or C++ has said what the work actually is, where a title may not
+    // -- Goldman's "Strat" and Jane Street's "Trader" both list one. It is a
+    // *positive* filter and never a gate: plenty of real quant advertisements
+    // name no language at all, and 81% of this corpus is a title with no body
+    // to name one in.
+    { key: "pycpp", label: "Python / C++",
+      apply: (s) => { s.sel.lang = ["python", "cplusplus"]; },
+      test: (j) => (j.lang || []).some((l) => l === "python" || l === "cplusplus") },
+    { key: "soon", label: "Closing this week",
+      apply: (s) => { s.sel.closing = ["d7"]; },
+      test: (j) => j.left !== null && j.left >= 0 && j.left <= 7 },
+    // Worth its own button because it is the shape of most of what has "Trader"
+    // in the title: `Precious Metals Trader`, `Agency MBS Trader`, `Associate
+    // Trader, Fixed Income`. Interesting to look through, and not the job.
+    { key: "trader", label: "Pure trader roles",
+      apply: (s) => { s.sel.tstyle = ["pure"]; },
+      test: (j) => j.tstyle === "pure" },
+    { key: "saved", label: "Saved", only: "saved", test: (j) => saved.has(j.id) },
+    { key: "hidden", label: "Hidden", only: "hidden", test: (j) => buried.has(j.id) },
+  ];
+
+  // --- filtering -----------------------------------------------------------
+
+  // Rail counts are cross-filtered: a value shows how many postings you would
+  // get by ticking it, given everything else already ticked. That needs, for
+  // each posting, the set of facets it fails -- if it fails none it is visible,
+  // and if it fails exactly one it still counts towards that one.
+  let hay = null;
+  const haystack = (job) =>
+    `${job.title} ${job.firmName} ${job.firm} ${job.loc || ""} ${job.team || ""} ${job.hub || ""}`.toLowerCase();
+
+  const CLOSING = FACETS.findIndex((f) => f.key === "closing");
+
+  function sift() {
+    const terms = state.q ? state.q.split(/\s+/).filter(Boolean) : [];
+    if (terms.length && !hay) hay = jobs.map(haystack);
+
+    const active = [];
+    FACETS.forEach((f, i) => { if (state.sel[f.key].length) active.push([i, new Set(state.sel[f.key])]); });
+
+    // A posting whose date has passed cannot be applied to, so it is out of the
+    // way by default. That is a *closing-date* rule and not a separate flag:
+    // written this way, "already closed" shows its real count in the rail
+    // instead of the zero a pre-filter would leave it with.
+    const showExpired = state.sel.closing.includes("expired");
+
+    const visible = [];
+    const counts = FACETS.map(() => new Map());
+
+    for (let n = 0; n < jobs.length; n++) {
+      const job = jobs[n];
+
+      if (state.only === "saved" && !saved.has(job.id)) continue;
+      if (state.only === "hidden" && !buried.has(job.id)) continue;
+      if (state.only === null && buried.has(job.id)) continue;
+      if (terms.length && !terms.every((t) => hay[n].includes(t))) continue;
+
+      let failed = -1, fails = 0;
+      if (!showExpired && job.left !== null && job.left < 0) { failed = CLOSING; fails = 1; }
+      for (const [i, want] of active) {
+        if (job.v[i].some((v) => want.has(v))) continue;
+        if (i === failed) continue;               // this facet is already failing
+        if (fails === 0) failed = i;
+        if (++fails > 1) break;
+      }
+
+      if (fails === 0) visible.push(job);
+      if (fails > 1) continue;
+
+      for (let i = 0; i < FACETS.length; i++) {
+        if (fails === 1 && i !== failed) continue;
+        const tally = counts[i];
+        for (const v of job.v[i]) tally.set(v, (tally.get(v) || 0) + 1);
+      }
+    }
+    return { visible, counts };
+  }
+
+  // --- ordering ------------------------------------------------------------
+
+  const SPINES = {
+    smart: (a, b) => b.posted.localeCompare(a.posted) || a.title.localeCompare(b.title),
+    new:   (a, b) => b.posted.localeCompare(a.posted) || a.title.localeCompare(b.title),
+    old:   (a, b) => a.posted.localeCompare(b.posted) || a.title.localeCompare(b.title),
+    due:   (a, b) => (a.left === null) - (b.left === null) || (a.left - b.left) || b.posted.localeCompare(a.posted),
+    fit:   (a, b) => (FIT_RANK[b.fit || "unknown"] - FIT_RANK[a.fit || "unknown"]) || b.posted.localeCompare(a.posted),
+    firm:  (a, b) => a.firmName.localeCompare(b.firmName) || b.posted.localeCompare(a.posted),
+  };
+
+  // Pinned first, soonest first, and only then the chosen spine. This is the
+  // one ordering rule the board will not let a sort override, because a closing
+  // date is the only thing on a card that expires.
+  function order(list) {
+    const spine = SPINES[state.sort] || SPINES.smart;
+    // `pin: 0` means nothing is pinned, not "pin the ones closing today" --
+    // which is what `left <= 0` alone quietly did.
+    const pinned = (j) => state.pin > 0 && j.left !== null && j.left >= 0 && j.left <= state.pin;
+    return list.slice().sort((a, b) => {
+      const pa = pinned(a), pb = pinned(b);
+      if (pa !== pb) return pa ? -1 : 1;
+      if (pa && pb) return a.left - b.left || spine(a, b);
+      return spine(a, b);
+    });
+  }
+
+  // --- grouping ------------------------------------------------------------
+
+  const GROUP_KEY = {
+    firm: (j) => j.firm,
+    "firm+hub": (j) => j.firm + "|" + (j.hub || j.loc || "—"),
+    role: (j) => j.role || "unknown",
+    "role+hub": (j) => (j.role || "unknown") + "|" + (j.hub || "—"),
+    hub: (j) => j.hub || "unstated",
+  };
+  const GROUP_NAME = {
+    firm: (j) => j.firmName,
+    "firm+hub": (j) => `${j.firmName} · ${label(j.hub || j.loc || "—")}`,
+    role: (j) => label(j.role || "unknown"),
+    "role+hub": (j) => `${label(j.role || "unknown")} · ${label(j.hub || "anywhere")}`,
+    hub: (j) => label(j.hub || "unstated"),
+  };
+  const STACK_AT = 3;
+
+  // Units keep the position of their best member, so stacking rearranges how
+  // much space a group may occupy and never where it sits.
+  function units(sorted) {
+    const key = GROUP_KEY[state.group];
+    if (!key) return sorted.map((job) => ({ job }));
+
+    const seen = new Map();
+    const out = [];
+    for (const job of sorted) {
+      const k = key(job);
+      const at = seen.get(k);
+      if (at === undefined) {
+        seen.set(k, out.length);
+        out.push({ job, key: k, list: [job] });
+      } else {
+        out[at].list.push(job);
+      }
+    }
+    return out.map((u) => (u.list.length >= STACK_AT ? u : u.list.map((job) => ({ job })))).flat();
   }
 
   // --- rendering -----------------------------------------------------------
 
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const attr = (s) => esc(s);
 
-  // `nested` rows live inside a stack, which already names the firm -- repeating
-  // it on every line is the noise the stack exists to remove.
-  function rowHTML(job, nested) {
-    const w = whenLabel(job, job.d);
-    const bits = [];
-    if (!nested) bits.push(`<span class="firm">${esc(job.firmName)}</span><span class="dom">${esc(job.firm)}</span>`);
-    if (job.location) bits.push(`<span>${esc(job.location)}</span>`);
-    if (job.team) bits.push(`<span>${esc(job.team)}</span>`);
-    return `<article class="row" data-age="${job.age}">
-      <div class="line">
-        <a class="title" href="${esc(job.url || "#")}" target="_blank" rel="noopener">${esc(job.title)}</a>
-        <span class="when" data-loose="${w.loose}"${w.why ? ` title="${esc(w.why)}"` : ""}>${esc(w.text)}</span>
+  function chips(job) {
+    const out = [];
+    if (job.role) out.push(`<span class="tag k-role">${esc(label(job.role))}</span>`);
+    // On the face of the card, because "is this a quant seat or just a
+    // trading seat" is the question the reader is asking of every one of
+    // these, and opening the filter to find out is one step too many.
+    if (job.tstyle === "pure") out.push(`<span class="tag k-flat" title="The title names a trading seat with no quant, systematic or algorithmic qualifier">pure trader</span>`);
+    if (job.tstyle === "quant") out.push(`<span class="tag k-role">quant trader</span>`);
+    if (job.sen) out.push(`<span class="tag k-sen">${esc(label(job.sen))}</span>`);
+    if (job.cd) out.push(`<span class="tag">${esc(label(job.cd))}</span>`);
+    for (const a of (job.asset || []).slice(0, 2)) out.push(`<span class="tag">${esc(label(a))}</span>`);
+    for (const l of (job.lang || []).slice(0, 3)) out.push(`<span class="tag">${esc(label(l))}</span>`);
+    for (const g of job.gates || []) out.push(`<span class="tag k-warn">${esc(label(g))}</span>`);
+    const extra = Math.max(0, (job.asset || []).length - 2) + Math.max(0, (job.lang || []).length - 3);
+    if (extra) out.push(`<span class="tag more">+${extra}</span>`);
+    return out.join("");
+  }
+
+  function dueTag(job) {
+    if (job.left === null) return "";
+    const lvl = level(job.left);
+    return `<span class="due" data-lvl="${lvl}" title="Closes ${esc(stamp(job.due))}">${esc(dueText(job.left))}</span>`;
+  }
+
+  function deep(job) {
+    const rows = [];
+    if (job.loc) rows.push(["where", esc(job.loc)]);
+    if (job.team) rows.push(["team", esc(job.team)]);
+    if (job.due) rows.push(["closes", `${esc(stamp(job.due))} · ${esc(dueText(job.left))}`]);
+    if (job.rel) rows.push(["relevance", esc(label(job.rel))]);
+    if (job.ct) rows.push(["contract", esc(label(job.ct))]);
+    if (job.hz && job.hz.length) rows.push(["horizon", job.hz.map((v) => esc(label(v))).join(", ")]);
+    if (job.asset && job.asset.length) rows.push(["assets", job.asset.map((v) => esc(label(v))).join(", ")]);
+    if (job.lang && job.lang.length) rows.push(["stack", job.lang.map((v) => esc(label(v))).join(", ")]);
+    if (job.excl && job.excl.length) rows.push(["excluded as", job.excl.map((v) => esc(label(v))).join(", ")]);
+    rows.push(["source", `${esc(job.ats)}${job.firmDomain ? " · " + esc(job.firmDomain) : ""}`]);
+
+    return `<div class="deep">
+      ${job.about ? `<p>${esc(job.about)}</p>` : ""}
+      <dl>${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>
+      <div class="acts">
+        ${job.url ? `<button class="act go" data-act="open">open ↗</button>` : ""}
+        <button class="act${saved.has(job.id) ? " on" : ""}" data-act="save">${saved.has(job.id) ? "saved" : "save"}</button>
+        <button class="act" data-act="firm">only this firm</button>
+        <button class="act" data-act="hide">${buried.has(job.id) ? "unhide" : "hide"}</button>
       </div>
-      <div class="meta">${bits.join('<span class="dot">·</span>')}${
-        job.hub ? `<span class="hub">${esc(job.hub)}</span>` : ""
-      }</div>
+    </div>`;
+  }
+
+  function cardHTML(job) {
+    const [when, loose, why] = postedLabel(job);
+    const fit = job.fit || "unknown";
+    return `<article class="card" data-id="${attr(job.id)}" data-fit="${attr(fit)}"
+        ${job.left !== null && job.left >= 0 ? `data-due="${level(job.left)}"` : ""}
+        ${saved.has(job.id) ? 'data-saved="1"' : ""}${buried.has(job.id) ? ' data-hidden="1"' : ""}>
+      <div class="card-top">
+        <span class="pill fit-${FIT_RANK[fit]}">${esc(label(fit))}</span>
+        ${dueTag(job)}
+        <span class="when" data-loose="${loose}"${why ? ` title="${attr(why)}"` : ""}>${esc(when)}</span>
+      </div>
+      <h3 class="clamp2">${job.url
+        ? `<a href="${attr(job.url)}" target="_blank" rel="noopener">${esc(job.title)}</a>`
+        : esc(job.title)}</h3>
+      <div class="who"><span class="firm" data-firm="${attr(job.firm)}" title="Show only this firm">${esc(job.firmName)}</span></div>
+      <div class="where">
+        ${job.hub ? `<span class="hub">${esc(label(job.hub))}</span>` : ""}
+        ${job.loc ? `<span class="loc">${esc(job.loc)}</span>` : ""}
+        ${job.team ? `<span class="loc">· ${esc(job.team)}</span>` : ""}
+      </div>
+      <div class="tags">${chips(job)}</div>
+      ${deep(job)}
     </article>`;
   }
 
-  function stackHTML(firm, list) {
-    const name = list[0].firmName;
+  function stackHTML(unit) {
+    const { list } = unit;
+    const soonest = list.reduce((best, j) => (j.left !== null && j.left >= 0 && (best === null || j.left < best) ? j.left : best), null);
+    const name = GROUP_NAME[state.group](list[0]);
     const hubs = [...new Set(list.map((j) => j.hub).filter(Boolean))];
-    const newest = Math.min(...list.map((j) => j.d));
-    // Always leave something under the lid. A peek that shows every posting
-    // makes the stack a decoration -- there would be nothing to open it for.
-    const shown = Math.min(3, list.length - 1);
-    const peek = list.slice(0, shown).map((j) => `<li>${esc(j.title)}</li>`).join("");
-    const rest = list.length - shown;
-    return `<section class="stack" data-open="0" data-age="${ageClass(newest)}">
-      <div class="stack-card" role="button" tabindex="0" aria-expanded="false">
-        <div class="stack-head">
-          <span class="stack-firm">${esc(name)}</span>
-          <span class="stack-n">${list.length} openings</span>
+    const best = list.reduce((r, j) => Math.max(r, FIT_RANK[j.fit || "unknown"]), 0);
+    const peek = list.slice(0, 3).map((j) => `<li>${esc(j.title)}</li>`).join("");
+
+    return `<section class="stack" data-open="0" data-key="${attr(unit.key)}">
+      <article class="card" tabindex="0" role="button" aria-expanded="false"
+          ${soonest !== null ? `data-due="${level(soonest)}"` : ""}>
+        <div class="card-top">
+          <span class="pill fit-${best}">${list.length} openings</span>
+          ${soonest !== null ? `<span class="due" data-lvl="${level(soonest)}">${esc(dueText(soonest))}</span>` : ""}
+          <span class="when">${esc(stamp(list[0].posted))}</span>
         </div>
-        <div class="stack-sub">${esc(firm)}${hubs.length ? " · " + esc(hubs.join(", ")) : ""}</div>
-        <ul class="peek">${peek}<li class="rest">and ${rest} more</li></ul>
-      </div>
-      <div class="stack-body">${list.map((j) => rowHTML(j, true)).join("")}</div>
+        <h3 class="clamp2">${esc(name)}</h3>
+        <div class="where">
+          ${hubs.slice(0, 3).map((h) => `<span class="hub">${esc(label(h))}</span>`).join("")}
+          ${state.group.startsWith("firm") && list[0].firmDomain ? `<span class="loc">${esc(list[0].firmDomain)}</span>` : ""}
+        </div>
+        <ul class="peek">${peek}</ul>
+        <div class="tags">
+          <span class="tag more">click to open</span>
+          ${[...new Set(list.map((j) => j.role).filter(Boolean))].slice(0, 3)
+            .map((r) => `<span class="tag k-role">${esc(label(r))}</span>`).join("")}
+        </div>
+      </article>
+      <div class="members"></div>
     </section>`;
   }
 
+  function memberHTML(job) {
+    const [when] = postedLabel(job);
+    const hot = job.left !== null && job.left >= 0 && job.left <= 14;
+    return `<a class="member" href="${attr(job.url || "#")}" target="_blank" rel="noopener"
+        ${job.left !== null && job.left >= 0 ? `data-due="${level(job.left)}"` : ""}>
+      <span class="t">${esc(job.title)}</span>
+      <span class="m${hot ? " hot" : ""}">${job.left !== null && job.left >= 0 ? esc(dueText(job.left)) : esc(when)}</span>
+    </a>`;
+  }
+
+  // --- the page ------------------------------------------------------------
+
+  const PAGE = 60;
+  const MEMBERS = 80;
+  let queue = [], drawn = 0, opened = new Set();
+
   function render() {
-    const visible = jobs.filter(matches);
-    const root = $("board");
+    const { visible, counts } = sift();
+    drawFacets(counts);
+    drawCrumbs(visible.length);
 
-    $("readout").textContent =
-      `${visible.length.toLocaleString()} of ${jobs.length.toLocaleString()} postings`;
+    queue = units(order(visible));
+    drawn = 0;
+    $("grid").innerHTML = "";
 
-    if (!visible.length) {
-      root.innerHTML = `<div class="empty"><strong>Nothing matches.</strong>
-        ${state.hubs.size ? "The hub filters are narrow — the registries publish a city for a minority of firms." : "Try a shorter query."}</div>`;
+    if (!queue.length) {
+      $("tail").hidden = true;
+      $("grid").innerHTML = `<div class="empty" style="grid-column:1/-1"><strong>Nothing matches.</strong>
+        ${state.q ? "Try a shorter query, " : ""}loosen a filter or <button class="linky" data-act="clear">clear all</button>.</div>`;
+      return;
+    }
+    more();
+  }
+
+  function more() {
+    const slice = queue.slice(drawn, drawn + PAGE);
+    if (slice.length) {
+      drawn += slice.length;
+      $("grid").insertAdjacentHTML("beforeend",
+        slice.map((u) => (u.list ? stackHTML(u) : cardHTML(u.job))).join(""));
+      // Re-open a stack the reader had already opened before this render.
+      for (const node of $("grid").querySelectorAll('.stack[data-open="0"]')) {
+        if (opened.has(node.dataset.key)) openStack(node);
+      }
+    }
+    // The observer below does this on scroll, but it is the wrong thing to
+    // depend on alone: it is silent when it fails, and a page that will not
+    // show its second screen looks exactly like a page with one screen of
+    // results. The button is the visible floor.
+    const rest = queue.length - drawn;
+    $("tail").hidden = rest <= 0;
+    if (rest > 0) $("tail").textContent = `show ${Math.min(PAGE, rest)} more · ${rest.toLocaleString()} left`;
+  }
+
+  function openStack(node) {
+    const unit = queue.find((u) => u.list && u.key === node.dataset.key);
+    if (!unit) return;
+    if (!node.querySelector(".member")) {
+      // Stacking by place alone puts fifty thousand postings in one group.
+      // Opening that is not a slow render, it is a dead tab -- so a stack shows
+      // its most urgent members and says how many it is holding back.
+      const shown = unit.list.slice(0, MEMBERS);
+      const rest = unit.list.length - shown.length;
+      node.querySelector(".members").innerHTML = shown.map(memberHTML).join("")
+        + (rest ? `<span class="member rest"><span class="t">+${rest.toLocaleString()} more —`
+            + ` narrow the filters, or stack by something finer</span></span>` : "");
+    }
+    node.dataset.open = "1";
+    node.querySelector(".card").setAttribute("aria-expanded", "true");
+    opened.add(node.dataset.key);
+  }
+
+  function closeStack(node) {
+    node.dataset.open = "0";
+    node.querySelector(".card").setAttribute("aria-expanded", "false");
+    opened.delete(node.dataset.key);
+  }
+
+  // --- rail ----------------------------------------------------------------
+
+  function drawFacets(counts) {
+    const html = FACETS.map((facet, i) => {
+      const tally = counts[i];
+      const picked = state.sel[facet.key];
+      const order = facet.order || [];
+      const values = [...new Set([...order.filter((v) => tally.has(v) || picked.includes(v)),
+                                  ...[...tally.keys()].filter((v) => !order.includes(v))
+                                    .sort((a, b) => tally.get(b) - tally.get(a) || String(a).localeCompare(b))])];
+      const shown = facet.limit ? values.slice(0, facet.limit) : values;
+      const naming = facet.name || ((v) => (facet.labels && facet.labels[v]) || label(v));
+
+      const body = shown.map((v) => {
+        const n = tally.get(v) || 0;
+        const on = picked.includes(v);
+        return `<button class="opt" data-facet="${attr(facet.key)}" data-value="${attr(v)}"
+            aria-pressed="${on}" data-empty="${n ? 0 : 1}">
+          <span class="box"></span>
+          ${facet.swatch ? `<span class="swatch" style="background:var(--fit-${FIT_RANK[v] ?? 0})"></span>` : ""}
+          <span class="name" title="${attr(naming(v))}">${esc(naming(v))}</span>
+          <span class="n">${n.toLocaleString()}</span>
+        </button>`;
+      }).join("");
+
+      return `<details class="facet"${facet.open || picked.length ? " open" : ""}>
+        <summary>${esc(facet.label)}${picked.length ? `<span class="live">${picked.length}</span>` : ""}</summary>
+        <div class="facet-body">${body || '<span class="opt" data-empty="1">nothing here</span>'}
+          ${facet.limit && values.length > facet.limit
+            ? `<span class="opt" data-empty="1"><span class="name">+${(values.length - facet.limit).toLocaleString()} more — use search</span></span>` : ""}
+        </div>
+      </details>`;
+    }).join("");
+    $("facets").innerHTML = html;
+
+    $("presets").innerHTML = PRESETS.map((p) => {
+      const on = p.only ? state.only === p.only : p.key === activePreset();
+      return `<button class="preset" data-preset="${p.key}" aria-pressed="${on}">
+        <span>${esc(p.label)}</span><span class="n">${presetCount(p).toLocaleString()}</span></button>`;
+    }).join("");
+
+    $("clear").hidden = !dirty();
+  }
+
+  const presetCache = new Map();
+  function presetCount(p) {
+    if (p.only) return jobs.reduce((n, j) => n + (p.test(j) ? 1 : 0), 0);
+    if (!presetCache.has(p.key)) presetCache.set(p.key, jobs.reduce((n, j) => n + (p.test(j) ? 1 : 0), 0));
+    return presetCache.get(p.key);
+  }
+
+  // A preset is just a named set of ticks, so "is it on" is "are its ticks the
+  // ones showing". That keeps a preset and the checkboxes it stands for from
+  // ever disagreeing, which is what a separate `state.preset` flag would do the
+  // moment you unticked one box by hand.
+  function probeOf(preset) {
+    const probe = { sel: Object.fromEntries(FACETS.map((f) => [f.key, []])) };
+    preset.apply(probe);
+    return probe.sel;
+  }
+
+  function activePreset() {
+    for (const p of PRESETS) {
+      if (p.only || !p.apply) continue;
+      const want = probeOf(p);
+      const keys = Object.keys(want).filter((k) => want[k].length);
+      if (keys.every((k) => String(state.sel[k]) === String(want[k]))) return p.key;
+    }
+    return null;
+  }
+
+  const dirty = () => state.q || state.only || FACETS.some((f) => state.sel[f.key].length);
+
+  function drawCrumbs(n) {
+    const bits = FACETS.flatMap((f) =>
+      state.sel[f.key].map((v) => {
+        const naming = f.name || ((x) => (f.labels && f.labels[x]) || label(x));
+        return `<button class="crumb" data-facet="${attr(f.key)}" data-value="${attr(v)}">
+          ${esc(f.label.toLowerCase())}: ${esc(naming(v))} <i>×</i></button>`;
+      }));
+    if (state.only) bits.unshift(`<button class="crumb" data-only="1">${esc(state.only)} only <i>×</i></button>`);
+
+    $("crumbs").innerHTML =
+      `<span class="readout"><b>${n.toLocaleString()}</b> of ${jobs.length.toLocaleString()}</span>` + bits.join("");
+  }
+
+  // --- events --------------------------------------------------------------
+
+  function toggle(key, value) {
+    const list = state.sel[key];
+    const at = list.indexOf(value);
+    if (at === -1) list.push(value); else list.splice(at, 1);
+    commit();
+  }
+
+  function commit() { save(); render(); }
+
+  $("facets").addEventListener("click", (e) => {
+    const opt = e.target.closest(".opt[data-facet]");
+    if (opt) toggle(opt.dataset.facet, opt.dataset.value);
+  });
+
+  $("presets").addEventListener("click", (e) => {
+    const button = e.target.closest("[data-preset]");
+    if (!button) return;
+    const preset = PRESETS.find((p) => p.key === button.dataset.preset);
+    if (preset.only) {
+      state.only = state.only === preset.only ? null : preset.only;
+    } else {
+      const want = probeOf(preset);
+      const off = activePreset() === preset.key;
+      for (const k of Object.keys(want)) {
+        if (want[k].length) state.sel[k] = off ? [] : want[k];
+      }
+    }
+    commit();
+  });
+
+  $("crumbs").addEventListener("click", (e) => {
+    const crumb = e.target.closest(".crumb");
+    if (!crumb) return;
+    if (crumb.dataset.only) { state.only = null; commit(); }
+    else toggle(crumb.dataset.facet, crumb.dataset.value);
+  });
+
+  $("clear").addEventListener("click", reset);
+  function reset() {
+    const { sort, pin, group } = state;
+    state = { ...FRESH(), sort, pin, group };
+    $("q").value = "";
+    commit();
+  }
+
+  $("grid").addEventListener("click", (e) => {
+    if (e.target.closest("[data-act='clear']")) { reset(); return; }
+
+    const act = e.target.closest("[data-act]");
+    if (act) {
+      e.preventDefault();
+      const card = act.closest(".card");
+      const job = jobs.find((j) => j.id === card.dataset.id);
+      if (act.dataset.act === "open" && job.url) window.open(job.url, "_blank", "noopener");
+      if (act.dataset.act === "save") { saved.has(job.id) ? saved.delete(job.id) : saved.add(job.id); persist(); commit(); }
+      if (act.dataset.act === "hide") { buried.has(job.id) ? buried.delete(job.id) : buried.add(job.id); persist(); commit(); }
+      if (act.dataset.act === "firm") { state.sel.firm = [job.firm]; commit(); }
       return;
     }
 
-    const html = [];
+    const firm = e.target.closest(".firm[data-firm]");
+    if (firm) { e.preventDefault(); state.sel.firm = [firm.dataset.firm]; commit(); return; }
 
-    for (const band of BANDS) {
-      const inBand = visible.filter((j) => j.band === band.key);
-      if (!inBand.length) continue;
-
-      // Group by firm, then decide per firm whether it earns a stack. Three is
-      // the threshold: two rows from one firm read as coincidence, three read
-      // as a firm hiring, and that is the point at which the list stops being
-      // about the roles and starts being about the employer.
-      const byFirm = new Map();
-      for (const job of inBand) {
-        if (!byFirm.has(job.firm)) byFirm.set(job.firm, []);
-        byFirm.get(job.firm).push(job);
-      }
-
-      const units = [];
-      for (const [firm, list] of byFirm) {
-        if (state.stacking && list.length >= 3) {
-          units.push({ kind: "stack", firm, list, size: list.length, name: list[0].firmName,
-                       d: Math.min(...list.map((j) => j.d)) });
-        } else {
-          list.forEach((job) => units.push({ kind: "row", job, size: 1, name: job.firmName, d: job.d }));
-        }
-      }
-      // Within a band the dates are largely tied -- Workday stamps hundreds of
-      // postings "Posted Today" -- so the tie-break carries the real ordering.
-      // Fewest openings first: a firm with one posting wrote it for one role,
-      // and a firm with fourteen hundred is a bank staffing branches. Firm name
-      // last, so the order is stable between renders rather than incidental.
-      units.sort((a, b) => a.d - b.d || a.size - b.size || a.name.localeCompare(b.name));
-
-      const limit = limitFor(band.key);
-      const slice = units.slice(0, limit);
-      const hidden = units.length - slice.length;
-
-      html.push(`<section class="band">
-        <div class="band-head">
-          <h2>${band.label}</h2>
-          <span class="count">${inBand.length.toLocaleString()} ${inBand.length === 1 ? "posting" : "postings"}${
-            units.length !== inBand.length ? ` · ${units.length} entries` : ""
-          }</span>
-        </div>
-        ${slice.map((u) => (u.kind === "stack" ? stackHTML(u.firm, u.list) : rowHTML(u.job))).join("")}
-        ${hidden > 0 ? `<button class="more" data-band="${band.key}">${hidden.toLocaleString()} more in ${band.label.toLowerCase()}</button>` : ""}
-      </section>`);
+    const stack = e.target.closest(".stack");
+    if (stack && !e.target.closest(".member")) {
+      e.preventDefault();
+      stack.dataset.open === "1" ? closeStack(stack) : openStack(stack);
     }
-
-    root.innerHTML = html.join("");
-
-    root.querySelectorAll(".more").forEach((button) => {
-      button.addEventListener("click", () => {
-        const key = button.dataset.band;
-        state.limits.set(key, limitFor(key) + STEP);
-        render();
-      });
-    });
-
-    const toggle = (card) => {
-      const stack = card.closest(".stack");
-      const open = stack.dataset.open === "1";
-      stack.dataset.open = open ? "0" : "1";
-      card.setAttribute("aria-expanded", String(!open));
-    };
-    root.querySelectorAll(".stack-card").forEach((card) => {
-      card.addEventListener("click", () => toggle(card));
-      card.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") { event.preventDefault(); toggle(card); }
-      });
-    });
-  }
-
-  // --- controls ------------------------------------------------------------
-
-  const counts = new Map();
-  for (const job of jobs) if (job.hub) counts.set(job.hub, (counts.get(job.hub) || 0) + 1);
-
-  $("hubs").innerHTML = HUBS.filter((h) => counts.has(h))
-    .map((h) => `<button class="chip" data-hub="${h}" aria-pressed="false">${h}<span class="n">${counts.get(h)}</span></button>`)
-    .join("");
-
-  const fitCounts = new Map();
-  for (const job of jobs) {
-    const f = job.fit || "unknown";
-    fitCounts.set(f, (fitCounts.get(f) || 0) + 1);
-  }
-
-  $("fits").innerHTML = FITS.filter((f) => fitCounts.has(f))
-    .map((f) => `<button class="chip" data-fit="${f}" aria-pressed="false">${f.replace(/_/g, " ")}<span class="n">${fitCounts.get(f)}</span></button>`)
-    .join("");
-
-  $("fits").addEventListener("click", (event) => {
-    const chip = event.target.closest(".chip");
-    if (!chip) return;
-    const fit = chip.dataset.fit;
-    if (state.fits.has(fit)) state.fits.delete(fit); else state.fits.add(fit);
-    chip.setAttribute("aria-pressed", String(state.fits.has(fit)));
-    state.limits.clear();
-    render();
   });
 
-  $("hubs").addEventListener("click", (event) => {
-    const chip = event.target.closest(".chip");
-    if (!chip) return;
-    const hub = chip.dataset.hub;
-    if (state.hubs.has(hub)) state.hubs.delete(hub); else state.hubs.add(hub);
-    chip.setAttribute("aria-pressed", String(state.hubs.has(hub)));
-    state.limits.clear();
-    render();
+  $("grid").addEventListener("keydown", (e) => {
+    const card = e.target.closest('.stack > .card');
+    if (card && (e.key === "Enter" || e.key === " ")) {
+      e.preventDefault();
+      const stack = card.parentElement;
+      stack.dataset.open === "1" ? closeStack(stack) : openStack(stack);
+    }
   });
 
-  $("stacking").addEventListener("click", () => {
-    state.stacking = !state.stacking;
-    $("stacking").setAttribute("aria-pressed", String(state.stacking));
-    state.limits.clear();
-    render();
+  // The hover panel drops out of the bottom of the card. Near the foot of the
+  // window there is nowhere to drop, so it goes up instead -- which nothing in
+  // CSS can decide, because it depends on where the card happens to be.
+  $("grid").addEventListener("mouseover", (e) => {
+    const card = e.target.closest(".card");
+    if (!card || card.parentElement.dataset.open === "1") return;
+    card.dataset.flip = card.getBoundingClientRect().bottom > window.innerHeight - 240 ? "1" : "0";
   });
 
   let timer;
-  $("q").addEventListener("input", (event) => {
+  $("q").addEventListener("input", (e) => {
     clearTimeout(timer);
-    timer = setTimeout(() => {
-      state.q = event.target.value.trim().toLowerCase();
-      state.limits.clear();
-      render();
-    }, 120);
+    timer = setTimeout(() => { state.q = e.target.value.trim().toLowerCase(); commit(); }, 130);
   });
 
+  for (const [id, key, cast] of [["sort", "sort", String], ["pin", "pin", Number], ["group", "group", String]]) {
+    $(id).value = state[key];
+    $(id).addEventListener("change", (e) => { state[key] = cast(e.target.value); opened.clear(); commit(); });
+  }
+
+  $("railtoggle").addEventListener("click", () => {
+    const shown = $("rail").hidden;
+    $("rail").hidden = !shown;
+    $("railtoggle").setAttribute("aria-pressed", String(shown));
+    document.querySelector(".shell").style.gridTemplateColumns = shown ? "" : "0 minmax(0,1fr)";
+  });
+
+  const themed = localStorage.getItem("board.theme");
+  if (themed) document.documentElement.dataset.theme = themed;
+  $("theme").addEventListener("click", () => {
+    const dark = getComputedStyle(document.body).backgroundColor.match(/\d+/g)[0] < 100;
+    document.documentElement.dataset.theme = dark ? "light" : "dark";
+    localStorage.setItem("board.theme", dark ? "light" : "dark");
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "/" && document.activeElement !== $("q")) { e.preventDefault(); $("q").focus(); }
+    if (e.key === "Escape" && document.activeElement === $("q")) { $("q").blur(); }
+  });
+
+  $("tail").addEventListener("click", more);
+
+  new IntersectionObserver((entries) => {
+    if (entries.some((entry) => entry.isIntersecting)) more();
+  }, { rootMargin: "800px" }).observe($("sentinel"));
+
+  // --- boot ----------------------------------------------------------------
+
+  $("q").value = state.q;
+  const withDates = jobs.reduce((n, j) => n + (j.left !== null ? 1 : 0), 0);
   $("scope").textContent =
-    `${jobs.length.toLocaleString()} postings · ${Object.keys(board.firms).length} firms`;
-  $("built").textContent = `built ${board.built.replace("T", " ").replace("+00:00", "Z")}`;
+    `${jobs.length.toLocaleString()} postings · ${Object.keys(board.firms).length.toLocaleString()} firms · `
+    + `${withDates.toLocaleString()} dated · built ${board.built.slice(0, 10)}`;
 
   render();
 })();
