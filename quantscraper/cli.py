@@ -267,6 +267,17 @@ def _tag(database: str, limit: int, dimension: str) -> int:
     connection = db.connect(database)
     tagged, written = tagging.run(connection, limit)
     print(f"tagged {tagged:,d} postings, wrote {written:,d} tags")
+    # A run that stops exactly on its own limit has almost certainly been cut
+    # short, and every summary printed below it then describes a partial
+    # re-tag while looking like a whole one. The corpus was 157,520 against a
+    # default of 100,000 and nothing said so.
+    if tagged >= limit:
+        print(
+            f"  WARNING stopped on the --limit of {limit:,d}: this is a partial"
+            " re-tag, and the counts below cover only what has been reached."
+            " Re-run with a larger --limit.",
+            file=sys.stderr,
+        )
 
     print(f"\n{dimension}")
     for row in tagging.summary(connection, dimension):
@@ -599,7 +610,10 @@ def main(argv: list[str] | None = None) -> int:
     tag_command = commands.add_parser(
         "tag", help="classify postings into rankable tags (Layer 5)"
     )
-    tag_command.add_argument("--limit", type=int, default=100_000)
+    # High enough to cover the whole corpus in one pass. This is a guard
+    # against a runaway, not a batch size: a default that silently stops
+    # part-way through a re-tag leaves the summaries describing a mixture.
+    tag_command.add_argument("--limit", type=int, default=1_000_000)
     tag_command.add_argument(
         "--dimension", default="fit", help="dimension to summarise afterwards"
     )
