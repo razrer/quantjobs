@@ -1061,7 +1061,12 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
   // --- state ---------------------------------------------------------------
 
   const FRESH = () => ({
-    q: "", sort: "smart", pin: 14, group: "firm",
+    // Opens on fit, not on recency. 89% of what reaches the board is
+    // `fit: unknown`, so a recency spine put a Swedish purchasing manager on
+    // the first screen and the 60 postings worth reading below the fold.
+    // Nothing is hidden by this -- `order()` still pins an approaching
+    // deadline above every spine, which is the rule that actually matters.
+    q: "", sort: "fit", pin: 14, group: "firm",
     sel: Object.fromEntries(FACETS.map((f) => [f.key, []])),
     only: null,            // "saved" | "hidden" | null
   });
