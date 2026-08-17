@@ -443,6 +443,87 @@ def jobvite(token: str) -> list[Job]:
     return jobs
 
 
+# Varbi puts the posting id in the link and nowhere else. Bounded, like every
+# pattern here that runs over fetched bytes.
+_VARBI_ID = re.compile(r"jobID:(\d{1,12})", re.I)
+
+
+def varbi(token: str) -> list[Job]:
+    """Varbi's RSS. Swedish public-sector and mid-market hiring runs on this.
+
+    The board's own pages are `/{lang}/what:list/`, which 404s as
+    "Unallowed call" for every language tried -- the listing is reachable only
+    from the site root, and even there a firm with no openings shows nothing
+    but a spontaneous-application link. `/what:rssfeed/` is the stable surface
+    and it carries the description, which the root page does not.
+
+    An empty channel is a real answer, the same as Teamtailor: three of the
+    five boards here have no openings today.
+    """
+    body = http.get(f"https://{token}.varbi.com/what:rssfeed/", timeout=25, retries=2)
+    channel = ElementTree.fromstring(body).find("channel")
+    if channel is None:
+        raise ValueError(f"varbi board {token!r} served no channel")
+
+    jobs: list[Job] = []
+    for item in channel.iterfind("item"):
+        link = (item.findtext("link") or "").strip()
+        found = _VARBI_ID.search(link)
+        if not found and not link:
+            continue
+        jobs.append(
+            Job(
+                ats="varbi",
+                token=token,
+                job_id=found.group(1) if found else link,
+                title=(item.findtext("title") or "").strip(),
+                url=link or None,
+                posted_at=(item.findtext("pubDate") or "").strip() or None,
+                description=_text(item.findtext("description")),
+            )
+        )
+    return jobs
+
+
+_ATOM = "{http://www.w3.org/2005/Atom}"
+
+
+def homerun(token: str) -> list[Job]:
+    """Homerun's Atom feed. Dutch mid-market, so it reaches the Amsterdam hub.
+
+    The board itself is a script-rendered page that links out to the firm's own
+    careers host -- Tiqets serves its postings from `jobs.tiqets.work` -- so
+    the feed is the only reliable surface, and `feed.homerun.co/{token}` is it.
+    The `<link rel="alternate">` href follows the firm to whatever host it uses,
+    which is what makes these postings openable.
+    """
+    body = http.get(f"https://feed.homerun.co/{token}", timeout=25, retries=2)
+    feed = ElementTree.fromstring(body)
+
+    jobs: list[Job] = []
+    for entry in feed.iterfind(f"{_ATOM}entry"):
+        link = entry.find(f"{_ATOM}link")
+        url = link.get("href") if link is not None else None
+        job_id = (entry.findtext(f"{_ATOM}id") or url or "").strip()
+        if not job_id:
+            continue
+        jobs.append(
+            Job(
+                ats="homerun",
+                token=token,
+                job_id=job_id,
+                title=(entry.findtext(f"{_ATOM}title") or "").strip(),
+                url=url,
+                posted_at=(entry.findtext(f"{_ATOM}updated") or "").strip() or None,
+                description=_text(
+                    entry.findtext(f"{_ATOM}content")
+                    or entry.findtext(f"{_ATOM}summary")
+                ),
+            )
+        )
+    return jobs
+
+
 def pinpoint(token: str) -> list[Job]:
     """Pinpoint. Systematica is on this, and it was tier A polling nothing.
 
@@ -615,6 +696,8 @@ EXTRACTORS: dict[str, Callable[[str], list[Job]]] = {
     "breezy": breezy,
     "icims": icims,
     "jobvite": jobvite,
+    "varbi": varbi,
+    "homerun": homerun,
     "personio": personio,
     "pinpoint": pinpoint,
     "teamtailor": teamtailor,

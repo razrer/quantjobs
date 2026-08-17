@@ -272,3 +272,60 @@ class RegistrationTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VarbiTest(unittest.TestCase):
+    """Varbi's RSS is the only stable surface: `/what:list/` 404s."""
+
+    FEED = b"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>Nya lediga jobb</title>
+<item><title>Kundansvarig till Landshypotek</title>
+<link>https://acme.varbi.com/en/what:job/jobID:958884/</link>
+<description>Beskrivning av tjansten</description>
+<pubDate>Mon, 17 Aug 2026 10:00:00 +0200</pubDate></item>
+</channel></rss>"""
+
+    def test_the_posting_id_comes_out_of_the_link(self):
+        with mock.patch.object(extract.http, "get", return_value=self.FEED):
+            job = extract.varbi("acme")[0]
+        self.assertEqual(job.job_id, "958884")
+        self.assertEqual(job.title, "Kundansvarig till Landshypotek")
+        self.assertEqual(job.description, "Beskrivning av tjansten")
+
+    def test_an_empty_channel_is_a_firm_with_no_openings(self):
+        empty = b'<?xml version="1.0"?><rss version="2.0"><channel/></rss>'
+        with mock.patch.object(extract.http, "get", return_value=empty):
+            self.assertEqual(extract.varbi("acme"), [])
+
+    def test_a_feed_with_no_channel_is_loud(self):
+        with mock.patch.object(extract.http, "get", return_value=b"<rss/>"):
+            with self.assertRaises(ValueError):
+                extract.varbi("acme")
+
+
+class HomerunTest(unittest.TestCase):
+    """The board links out to the firm's own host, so the feed is the surface."""
+
+    FEED = b"""<?xml version="1.0" encoding="UTF-8" ?>
+<feed xmlns="http://www.w3.org/2005/Atom"><title type="text">Tiqets</title>
+<entry><title type="text">Data Analyst</title>
+<link rel="alternate" type="text/html" href="https://jobs.tiqets.work/data-analyst-4"></link>
+<id>job_5V68pcL66o1yqHsDttfp</id>
+<updated>2026-08-01T10:00:00Z</updated>
+<summary type="html">Join us!</summary>
+<content type="html">The full description.</content></entry></feed>"""
+
+    def test_it_follows_the_firm_to_its_own_host(self):
+        with mock.patch.object(extract.http, "get", return_value=self.FEED):
+            job = extract.homerun("tiqets")[0]
+        self.assertEqual(job.url, "https://jobs.tiqets.work/data-analyst-4")
+        self.assertEqual(job.job_id, "job_5V68pcL66o1yqHsDttfp")
+
+    def test_content_is_preferred_over_the_summary(self):
+        with mock.patch.object(extract.http, "get", return_value=self.FEED):
+            self.assertEqual(extract.homerun("t")[0].description, "The full description.")
+
+    def test_an_empty_feed_is_not_an_error(self):
+        empty = b'<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"/>'
+        with mock.patch.object(extract.http, "get", return_value=empty):
+            self.assertEqual(extract.homerun("acme"), [])
