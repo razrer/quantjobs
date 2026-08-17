@@ -825,6 +825,56 @@ _OFF_INDUSTRY_FIELDS = frozenset({
 # read-time filters handle it. An unrecognised field passes too: a drop list
 # fails towards keeping, which is the direction this project always picks.
 
+# MyCareersFuture's own taxonomy, the same argument the Swedish fields make one
+# comment up: an enumeration the employer picked from beats any word list we
+# would write. It needs its own set because the portal files a posting under
+# *several* categories at once, so this is a subset test rather than equality.
+#
+# **Dry-run over the 37,000 postings already swept, and the first attempt was
+# wrong.** A loose probe put `Building and Construction` at the top of the
+# "carries quant titles" list with 619 hits -- which is what happens when the
+# probe matches `risk` and `model`, because construction has risk managers and
+# BIM modellers. Tightened to unambiguous markets and quant words, the
+# categories that genuinely carry them are the ones kept below, and the pick of
+# the evidence is `Junior Quantitative Analyst (Multi-Strategy)` filed under
+# *Banking and Finance*.
+#
+# Kept deliberately, each because the dry-run found real quant work in it:
+# Banking and Finance, Information Technology, Engineering, Risk Management,
+# Sciences / Laboratory / R&D, Insurance, Consulting, Professional Services,
+# Accounting / Auditing / Taxation, Manufacturing, Wholesale Trade,
+# Healthcare / Pharmaceutical (data scientists), Public / Civil Service (GIC
+# and Temasek are roster firms), General Management, Others, Telecommunications.
+_MCF_OFF_INDUSTRY = frozenset({
+    "Admin / Secretarial", "Advertising / Media",
+    "Architecture / Interior Design", "Building and Construction",
+    "Customer Service", "Design", "Education and Training", "Entertainment",
+    "Environment / Health", "Events / Promotions", "F&B", "General Work",
+    "Hospitality", "Human Resources", "Legal", "Logistics / Supply Chain",
+    "Marketing / Public Relations", "Medical / Therapy Services",
+    "Personal Care / Beauty", "Precision Engineering",
+    "Purchasing / Merchandising", "Real Estate / Property Management",
+    "Repair and Maintenance", "Sales / Retail", "Security and Investigation",
+    "Social Services", "Travel / Tourism",
+})
+
+
+def _mcf_off_industry(category: str | None) -> str | None:
+    """Whether every category this posting carries is off-industry.
+
+    A subset test, never equality: the portal files most postings under more
+    than one category, and one kept category is enough to keep the posting.
+    That direction is the same one the Swedish drop list picks -- an
+    unrecognised field passes, and a mixed posting passes.
+    """
+    if not category:
+        return None
+    carried = {part.strip() for part in category.split(",") if part.strip()}
+    if carried and carried <= _MCF_OFF_INDUSTRY:
+        return f"field {', '.join(sorted(carried))!r}"
+    return None
+
+
 # Title-only, and never read from a body. `chef` is absent on purpose -- it is
 # Swedish for *manager*, so it would drop `Ekonomichef`, a CFO. So is `driver`,
 # which cost one true positive in the whole corpus and would eventually catch
@@ -1306,6 +1356,8 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
     trade = _hit(title, _OFF_INDUSTRY)
     if category in _OFF_INDUSTRY_FIELDS:
         off_industry = f"field {category!r}"
+    elif mcf := _mcf_off_industry(category):
+        off_industry = mcf
     elif trade:
         off_industry = f"title {trade!r}"
     elif compounded_trade := _compound(just_title, _TRADE_HEADS):

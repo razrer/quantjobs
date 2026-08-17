@@ -387,3 +387,45 @@ class IdempotenceTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CategoryGateTest(unittest.TestCase):
+    """The portal's own taxonomy is the gate, and it is a subset test.
+
+    A posting carries several categories at once, so equality would gate
+    almost nothing. One kept category keeps the posting -- the same direction
+    the Swedish drop list picks, and the direction this project always picks.
+    """
+
+    def test_a_posting_entirely_off_industry_is_gated(self):
+        from quantscraper.tagging import _mcf_off_industry
+
+        self.assertIsNotNone(_mcf_off_industry("F&B, Hospitality"))
+        self.assertIsNotNone(_mcf_off_industry("Building and Construction"))
+
+    def test_one_kept_category_keeps_the_posting(self):
+        from quantscraper.tagging import _mcf_off_industry
+
+        self.assertIsNone(
+            _mcf_off_industry("Building and Construction, Engineering")
+        )
+
+    def test_banking_and_finance_is_never_gated(self):
+        """`Junior Quantitative Analyst (Multi-Strategy)` is filed here."""
+        from quantscraper.tagging import _mcf_off_industry
+
+        self.assertIsNone(_mcf_off_industry("Banking and Finance"))
+
+    def test_an_unrecognised_category_passes(self):
+        """A drop list fails towards keeping, so a new name the portal invents
+        reaches the reader rather than vanishing."""
+        from quantscraper.tagging import _mcf_off_industry
+
+        self.assertIsNone(_mcf_off_industry("Some Category We Have Not Seen"))
+        self.assertIsNone(_mcf_off_industry(None))
+
+    def test_every_gated_name_is_one_the_portal_actually_publishes(self):
+        """A name with a typo gates nothing and looks like it gates something."""
+        from quantscraper.tagging import _MCF_OFF_INDUSTRY
+
+        self.assertTrue(_MCF_OFF_INDUSTRY <= set(mcf.CATEGORIES))
