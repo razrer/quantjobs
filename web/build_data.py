@@ -129,10 +129,35 @@ TEASER = 260
 # to markers that no operating company puts in its own name -- `Capital` and
 # `Investment` are firm words, not fund words, however often funds use them.
 _VEHICLE = re.compile(
-    r"\b(ucits|sicav|sicaf|oeic|etfs?|fcp|fonds|fond|sub-?fund|fund|funds"
-    r"|compartment|feeder|umbrella|trust|plc\s+fund)\b",
+    r"\b(ucits|sicav|sicaf|icav|oeic|ccf|sif|raif|etfs?|fcp|fonds|fond"
+    r"|sub-?fund|fund|funds|compartment|feeder|umbrella|trust|plc\s+fund)\b",
     re.IGNORECASE,
 )
+
+
+# Public suffixes that are two labels deep. Without these `gresearch.co.uk`
+# reads as the firm "Co", which is the same mistake as taking the leftmost
+# label and reading `cards.barclaycardus.com` as "Cards".
+_TWO_LABEL_TLDS = (
+    "co.uk", "org.uk", "ac.uk", "com.hk", "com.sg", "com.au", "co.jp",
+    "com.br", "co.za", "co.nz", "com.cn", "co.in",
+)
+
+
+def _domain_label(domain: str) -> str:
+    """The registrable label of a domain, title-cased for a card.
+
+    Neither end of the host is the answer on its own: the leftmost label is
+    `cards` or `careers`, and the rightmost is the TLD.
+    """
+    host = domain.casefold().strip(".")
+    for suffix in _TWO_LABEL_TLDS:
+        if host.endswith(f".{suffix}"):
+            host = host[: -(len(suffix) + 1)]
+            break
+    else:
+        host = host.rsplit(".", 1)[0]
+    return host.rsplit(".", 1)[-1].replace("-", " ").title()
 
 
 def display_name(names: list[str], domain: str) -> str:
@@ -150,10 +175,15 @@ def display_name(names: list[str], domain: str) -> str:
     fund names, the shortest of those is still better than the bare domain.
     """
     candidates = [n for n in names if n and len(n) < 60]
-    if not candidates:
-        return domain.split(".")[0].replace("-", " ").title()
     operating = [n for n in candidates if not _VEHICLE.search(n)]
-    candidates = operating or candidates
+    # When a domain resolves to nothing *but* vehicles, the domain's own label
+    # is the better card. `cards.barclaycardus.com` carries one name and it is
+    # "Barclays US Equities Volatility Premium Fund" -- a card headed that way
+    # reads as a job at a fund, which is a claim; "Barclaycardus" reads as a
+    # domain we have not put a name to, which is the truth.
+    if not operating:
+        return _domain_label(domain)
+    candidates = operating
 
     best = min(candidates, key=len)
     # Strip the legal form first, so `DPE INVESTMENT GESELLSCHAFT MBH` does not
@@ -164,6 +194,15 @@ def display_name(names: list[str], domain: str) -> str:
         if shorter == best or not shorter:
             break
         best = shorter
+
+    # Stripping can leave the name hanging on a connector. `_SUFFIX` carries
+    # both `europe` and `nv`, so "Cigna Life Insurance Company of Europe NV"
+    # came out as "Cigna Life Insurance Company of" -- which reads as a
+    # truncation bug rather than a name.
+    words = best.split()
+    while len(words) > 1 and words[-1].casefold() in _CONNECTORS:
+        words.pop()
+    best = " ".join(words) or best
 
     if best.isupper() or best.islower():
         parts = [_recase(w) for w in best.split()]
