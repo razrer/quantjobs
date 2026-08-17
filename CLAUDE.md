@@ -333,6 +333,26 @@ Each of these silently produced wrong results before being caught:
   sorts an approaching deadline above everything else, so a wrong one nails the
   wrong card to the top of the page for weeks. Same asymmetry as the roster's
   `GRASSHOPPER ESCAPEMENT, LLC`, two layers up.
+- **Platsbanken is not a census, and three files claimed it was.** Publishing
+  there is **voluntary** for private employers — only state agencies must
+  announce openings — so "every job advertised in Sweden is published to
+  Platsbanken" was false, and "JobStream makes a hub complete" followed from
+  it. Measured against our own data: of the Stockholm employers reached through
+  their *own* board, JobStream carries **0 of 55**. Not a shortfall, a disjoint
+  set — Swedbank, Nordnet, Tink, Qliro, Intrum and Svea all advertise on their
+  own Teamtailor and Workday boards and nowhere in the feed. It is a wide net,
+  not a backstop, and `coverage.blindspot` prints the number every run so the
+  assumption cannot creep back. The capture-recapture estimator was never wrong
+  — it *requires* both samples to be incomplete — but the two turn out to be
+  near-disjoint rather than independent, which biases the population down and
+  makes any share it reports a ceiling.
+- **A platform domain is not an employer, and it leaks into three layers.**
+  Over 4,000 Form ADV filers publish a LinkedIn page as their website.
+  `resolve.is_platform_domain` is the one answer: Stage 1 must not merge 6,688
+  firms onto it, Layer 2C must not file Point72's 229 postings under
+  `linkedin.com` (it did), and the Stage 10 miss list must not top out with
+  `youtube.com` and `instagram.com` (it did). Match the registrable suffix —
+  the junk arrives as `uk.linkedin.com` as often as the bare form.
 - **Half of JobStream's ads have no resolvable employer URL**, so `domain` is
   NULL and the board showed 1,737 postings from nobody. `jobs.employer` holds
   the advertiser name verbatim for the sources whose board is not one firm's
@@ -391,6 +411,30 @@ Each of these silently produced wrong results before being caught:
   characters and prefix it with `(?<![a-z0-9-])` so a label cannot start
   mid-label. `tests/test_ats.py` times both. Cap fetched markup too — 23
   patterns over an unbounded body blocks every other thread through the GIL.
+- **Fingerprinting an ATS and reading it are separate capabilities, and the gap
+  is silent.** `ats.py` recognised 22 systems while `extract.py` read 11, so 88
+  boards sat tier A with a token, counted as resolved everywhere, polling
+  nothing. Whenever a host pattern is added, check `extract.EXTRACTORS` has a
+  matching key — `tests/test_icims.py` pins the registration for exactly this.
+- **A vendor's asset URL is the evidence when a firm fronts the board on its own
+  hostname.** `careers.sig.com` names its board nowhere; the only occurrence of
+  `sig` in the markup is `cookie-policy-scripts.icims.com/sig/…`, the cookie
+  banner's script path. Worth 237 postings, and the same shape as the Teamtailor
+  CDN rule — expect it wherever a careers page tiers B with a live feed behind it.
+- **iCIMS has no feed.** The vendor's `format=rss` 302s to a staff login page,
+  so the portal HTML is the only public surface. Job links are
+  `/jobs/{id}/{slug}/job`, `pr` pages 50 at a time, and the list page carries
+  **no anchor text** — the slug is the title, which loses casing and `c++`.
+  Stop paging when a page adds no *new* id: a portal ignoring `pr` serves page
+  one forever and never returns an empty page.
+- **The infrastructure-token list is an *all-pieces* rule, and that is only
+  half right.** It must be, or `jane-street` and `da-vinci` get thrown away. But
+  `jobs.jobvite.com/__assets__` was recorded as a board against three unrelated
+  firms at once — `assets` was already on the list and only the underscores hid
+  it — and `vs-errors.eightfold.ai` passed because `vs` means nothing while
+  `errors` is the vendor's host. Split on `_` as well as `-`, and check the
+  unambiguous words (`assets`, `cdn`, `errors`, `sentry`, `staging`) with *any*
+  rather than *all*.
 - **ATS board tokens are easy to extract wrongly, and the wrong answer looks
   right.** `boards-api.greenhouse.io/v1/boards/{token}` puts an API version
   before the board, so matching the host alone yields `v1` for every Greenhouse

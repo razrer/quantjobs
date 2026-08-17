@@ -54,6 +54,8 @@ nothing in the near-term plan now waits on a human.
 | 11 | Layer 5 — job tagging | **in progress** — lexicon 29 live, 59/268 hand-labelled + 1,000 machine-labelled, relevance 86% |
 | 12 | Layer 6 — the board | **done** — card grid, facet rail, deadlines |
 | 13 | Layer 2C — board discovery | **done** — 23 boards, 989 postings, roster 16→49 |
+| 13b | Platsbanken is not a census | **done** — 0 of 55 Stockholm employers are in it |
+| 14 | Readers for recognised-but-unread ATSes | **done** — iCIMS + Pinpoint, 2,068 postings |
 
 ---
 
@@ -673,14 +675,14 @@ including Arrowstreet Capital.
 
 ## Stage 7 — Layer 4, JobTech JobStream *(done)*
 
-`jobstream.py`. Every job advertised in Sweden is published to Platsbanken, and
-JobTech exposes it as a delta feed — new ads, edited ads, and withdrawn ones —
-with no key and no quota.
+`jobstream.py`. JobTech exposes Platsbanken as a delta feed — new ads, edited
+ads, and withdrawn ones — with no key and no quota.
 
-**This is the one source that makes a hub complete rather than well covered.**
-Firm-level ATS polling only reaches firms we resolved to a feed; JobStream
-reaches every Swedish employer, including the ones we tiered C and the ones we
-never resolved a domain for.
+**This stage was written up as making a hub complete, and that was wrong.** The
+claim was that every job advertised in Sweden is published to Platsbanken, so
+JobStream reached every Swedish employer including the ones we tiered C.
+Advertising there is voluntary for private employers; only state agencies must
+announce openings. See Stage 13b, which measured it: **0 of 55**.
 
 **Exit criterion — met:** delta polling works and a full re-read is never
 needed. Cold start pulled 5,053 changes over a 24-hour window; the very next
@@ -1358,6 +1360,112 @@ RSS: **zero** carried a posting. `pages.py`'s original conclusion survives the
 stronger probe. The tier-B *population* is wealth advisers and VC firms; the
 tier-B *firms that matter* are reached by discovery, above, which is the real
 answer to "get more out of tier B".
+
+---
+
+## Stage 13b — Platsbanken is not a census *(done)*
+
+**The premise Stage 7 was built on was false, and nothing had ever checked it.**
+`jobstream.py` opened with "Every job advertised in Sweden is published to
+Platsbanken"; `coverage.py` called it "a national feed that reaches every
+employer"; this file said it "makes a hub complete rather than well covered".
+Publishing to Platsbanken is **voluntary** for private employers — only state
+agencies are required to announce openings — so none of that followed.
+
+**Measured against our own data, which cost one query.** Of the Stockholm-tagged
+employers this pipeline reaches through their *own* board, how many does
+JobStream also carry?
+
+> **0 of 55.** Not a shortfall — a disjoint set.
+
+Swedbank (26 postings), Nordnet, Tink, Qliro, Savr, Northmill, Intrum, Svea,
+Hedvig, Qred: every one a real Swedish financial employer advertising on its own
+Teamtailor or Workday board, and absent from Platsbanken entirely.
+
+**Why it mattered rather than being a wording slip.** The claim made Stockholm
+read as finished, which is where effort stops going; and it made
+`coverage.missed` read as an exhaustive gap list when it can only ever show
+what the feed happens to know. The two samples turn out to be close to
+*disjoint* rather than independent — our board polling finds firms that
+advertise on their own site, Platsbanken finds firms that advertise publicly,
+and in Sweden those are largely different populations. That biases the
+capture-recapture population downward, so its share is a ceiling.
+
+**Built:** `coverage.blindspot` measures the gap in the other direction — what
+*we* see that the feed does not — and `coverage` prints it every run, because
+an assumption like this creeps back the moment it stops being measured. The
+estimator itself is unchanged and was never wrong: capture-recapture *requires*
+both samples to be incomplete, which is why an incomplete Platsbanken is its
+premise rather than its problem.
+
+**Exit criterion — met:** no file claims Platsbanken is complete, and the
+number that refutes it is printed rather than remembered.
+
+**What this does not change:** JobStream stays exactly as it is. It reaches
+employers we never resolved a domain for, which is real coverage and the reason
+it was built. It is a wide net, not a backstop.
+
+---
+
+## Stage 14 — the ATSes we recognised and could not read *(done)*
+
+**A board can be tier A, hold a token, and still poll nothing.** `ats.py`
+fingerprints 22 systems; `extract.py` read 11 of them. The other 11 resolved
+cleanly, counted as resolved in every summary, and returned silence — **88
+boards** in that state, the quietest failure in the pipeline because nothing
+about the row looks wrong.
+
+**Reconnaissance first, and it changed the order of work.** All eight
+token-carrying systems were probed against real tokens from the database before
+a line was written. The fingerprint counts turned out to be a poor guide to
+difficulty:
+
+| ATS | Boards | Found |
+|---|---|---|
+| iCIMS | 38 | No feed at all — the vendor's `format=rss` now 302s to a staff login page. Portal HTML only. |
+| Pinpoint | 8 | `/postings.json` is the whole board in one request, with descriptions |
+| Taleo | 11 | 405; wants POST with a portal id |
+| Jobvite | 10 | `format=rss` serves HTML, API 302s |
+| Varbi | 6 | 404 "Unallowed call" |
+| Eightfold | 5 | Returns page config, not postings |
+| Homerun | 5 | HTML only |
+| Join | 4 | Route is real, 422s on `page`/`pageSize` at every value tried |
+
+**Built: `pinpoint` and `icims`.** Pinpoint is ordinary JSON. iCIMS is parsed
+out of the portal, because there is nothing else — job links have a fixed
+`/jobs/{id}/{slug}/job` shape, `pr` pages 50 at a time, and paging stops when a
+page adds no new posting rather than when it comes back empty, because a portal
+ignoring `pr` serves page one forever. Both regex halves are length-bounded:
+every stall this project has had came from an unbounded run over fetched markup.
+
+**iCIMS gives a title and a URL and nothing else**, and that is worth having
+rather than skipping. `judge` refuses to reject on a title alone, so these land
+in `unknown` instead of being wrongly excluded, and every one opens.
+
+**SIG needed one more pattern, and it is the best find of the stage.**
+`careers.sig.com` fronts `careers-sig.icims.com` and names the board nowhere —
+the only occurrence of `sig` in the markup is the vendor's cookie-banner script
+path, `cookie-policy-scripts.icims.com/sig/…`. Same shape as the Teamtailor CDN
+rule from Stage 5: when a firm fronts a board on its own hostname, the vendor's
+asset URL is the evidence. **237 postings.**
+
+**Also fixed: five tier-A rows held the vendor's own infrastructure as a board.**
+`jobs.jobvite.com/__assets__` was recorded against three unrelated firms at once
+— Five Rings among them — and `assets` was already on the infrastructure list;
+only the underscores hid it. `vs-errors.eightfold.ai` survived because that list
+is an *all-pieces* rule, right for `jane-street` and wrong when one half is the
+vendor's error host. There is now an any-piece rule for the unambiguous words,
+and the five rows were cleared back to tier B for re-probing.
+
+**Exit criterion — met:** 2,068 postings landed from 47 boards that previously
+returned nothing (1,831 across 46 iCIMS/Pinpoint boards, plus SIG's 237), one
+board failed loudly rather than silently (`icims/akebia`, a dead board), and no
+tier-A row holds an infrastructure token.
+
+**Deferred with specifics, not vaguely:** Taleo, Jobvite, Varbi, Eightfold,
+Homerun and Join are 41 boards between them, and each now has a recorded reason
+its obvious endpoint does not work. None is a quant employer of note, which is
+why they wait.
 
 ---
 
