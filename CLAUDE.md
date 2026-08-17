@@ -421,6 +421,24 @@ Each of these silently produced wrong results before being caught:
   `sig` in the markup is `cookie-policy-scripts.icims.com/sig/…`, the cookie
   banner's script path. Worth 237 postings, and the same shape as the Teamtailor
   CDN rule — expect it wherever a careers page tiers B with a live feed behind it.
+- **A board page serving a dead end does not mean there is no feed.** Varbi's
+  `/{lang}/what:list/` answers *404 Unallowed call* for every language, and
+  Homerun's board is script-rendered and links out to the firm's own host
+  (`jobs.tiqets.work`). Both publish a feed — `/what:rssfeed/` on the Varbi
+  host, `feed.homerun.co/{token}` — and both carry the description the board
+  page does not. Read the page's own link shapes before concluding a vendor has
+  no feed; guessing paths found neither.
+- **A trailing slash was a silent 50-posting cap.** Jobvite pages at
+  `/{token}/search/?p=1`; `/{token}/search?p=1` — no slash — serves the first
+  page while looking like it paged, so `?p=2` returning nothing read as "there
+  is no second page". Sikich's own pagination text says `1-50 of 73`, which is
+  the check: the board states its own size, so compare against it.
+- **Taleo needs a per-board portal id and does not publish one.** `POST
+  /careersection/rest/jobboard/searchjobs` is the right shape — it answers with
+  `requisitionList` and `pagingData` — but without the right `portal=` it
+  returns `careerSectionUnAvailable: true`, and the section page is a 1,534-byte
+  redirect stub. Eightfold's `/api/apply/v2/jobs` returns the page *config*
+  rather than postings, and Join 422s on every `page`/`pageSize` value tried.
 - **iCIMS has no feed.** The vendor's `format=rss` 302s to a staff login page,
   so the portal HTML is the only public surface. Job links are
   `/jobs/{id}/{slug}/job`, `pr` pages 50 at a time, and the list page carries
