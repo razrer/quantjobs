@@ -63,7 +63,7 @@ from . import ats, db, extract, http
 # whole failure mode here is two sides of a comparison drifting apart.
 from .domains import _labels, _needles, _token_sets, fold_text
 from .models import Job
-from .resolve import _PLATFORM_DOMAINS, normalize_name
+from .resolve import is_platform_domain, normalize_name
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS board_lookups (
@@ -463,22 +463,9 @@ def _domain_for(connection: sqlite3.Connection, result) -> str | None:
                 " WHERE query = ? AND domain IS NOT NULL",
                 (name,),
             ).fetchone()
-            if row and not _is_platform(row["domain"]):
+            if row and not is_platform_domain(row["domain"]):
                 return row["domain"]
     return None
-
-
-def _is_platform(domain: str) -> bool:
-    """Whether `domain` is a social platform rather than a firm's own host.
-
-    Matched on the registrable suffix, because the junk arrives as
-    `uk.linkedin.com` and `mu.linkedin.com` as often as the bare form.
-    """
-    host = domain.casefold()
-    return any(
-        host == platform or host.endswith(f".{platform}")
-        for platform in _PLATFORM_DOMAINS
-    )
 
 
 def run(

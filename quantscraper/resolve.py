@@ -74,6 +74,26 @@ _PLATFORM_DOMAINS = {
     "youtube.com",
 }
 
+
+def is_platform_domain(domain: str | None) -> bool:
+    """Whether `domain` names a social platform rather than a firm's own host.
+
+    Lives here because `_PLATFORM_DOMAINS` does, and three layers need the same
+    answer: Stage 1 must not merge 6,688 firms onto one LinkedIn page, Layer 2C
+    must not file Point72's postings under `linkedin.com`, and Stage 10's miss
+    list must not tell the reader to go resolve `youtube.com`'s careers board.
+
+    Matched on the registrable suffix, because the junk arrives as
+    `uk.linkedin.com` and `mu.linkedin.com` at least as often as the bare form.
+    """
+    if not domain:
+        return False
+    host = domain.casefold()
+    return any(
+        host == platform or host.endswith(f".{platform}")
+        for platform in _PLATFORM_DOMAINS
+    )
+
 # Backstop for platforms not listed above. A domain shared by more than this
 # many distinct firm names is a host, not an identifier. Set generously: real
 # corporate groups share a domain across a dozen or so entities (Man Group's

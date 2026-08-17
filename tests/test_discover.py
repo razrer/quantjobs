@@ -15,7 +15,7 @@ from __future__ import annotations
 import unittest
 from unittest import mock
 
-from quantscraper import ats, discover, extract
+from quantscraper import ats, discover, extract, resolve
 from quantscraper.discover import Discovery
 from quantscraper.models import Job
 
@@ -293,9 +293,9 @@ class RecordTest(unittest.TestCase):
         everybody -- and the no-clobber guard would then lock it in.
         """
         for junk in ("linkedin.com", "uk.linkedin.com", "x.com", "youtube.com"):
-            self.assertTrue(discover._is_platform(junk), junk)
+            self.assertTrue(resolve.is_platform_domain(junk), junk)
         for real in ("janestreet.com", "linkedin-partners.com", "tower-research.com"):
-            self.assertFalse(discover._is_platform(real), real)
+            self.assertFalse(resolve.is_platform_domain(real), real)
 
     def test_a_miss_is_cached_so_it_is_not_re_probed(self):
         discover.record(self.connection, [Discovery("Nobody", "nobody.com", None, None, "no board")])

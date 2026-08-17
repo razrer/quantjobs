@@ -93,5 +93,43 @@ class EstimateTest(unittest.TestCase):
         self.assertEqual(coverage.estimate(self.connection).theirs, 0)
 
 
+class BlindspotTest(EstimateTest):
+    """Platsbanken is a second sample, not a census, and the docs said census.
+
+    Publishing there is voluntary for private employers. Measured against real
+    data the two sources are near-disjoint: 0 of 55 Stockholm employers reached
+    through their own board have any ad in the feed.
+    """
+
+    def test_an_employer_absent_from_the_feed_is_counted(self):
+        self._posting("teamtailor", "swedbank.com", "1")
+        self._posting(coverage.SECOND_SOURCE, "kommun.se", "j1")
+
+        spot = coverage.blindspot(self.connection)
+
+        self.assertEqual((spot.ours, spot.unseen), (1, 1))
+        self.assertEqual(spot.share, 1.0)
+        self.assertIn("swedbank.com", spot.examples)
+
+    def test_an_employer_the_feed_also_carries_is_not_counted(self):
+        self._posting("teamtailor", "shared.se", "1")
+        self._posting(coverage.SECOND_SOURCE, "shared.se", "j1")
+
+        spot = coverage.blindspot(self.connection)
+
+        self.assertEqual((spot.ours, spot.unseen), (1, 0))
+        self.assertEqual(spot.examples, ())
+
+    def test_no_direct_employers_reports_nothing_rather_than_zero_percent(self):
+        """An empty numerator and an empty denominator are different answers.
+
+        0% blind would read as "the feed sees everything", which is the exact
+        claim this measurement exists to refuse.
+        """
+        self._posting(coverage.SECOND_SOURCE, "kommun.se", "j1")
+
+        self.assertIsNone(coverage.blindspot(self.connection).share)
+
+
 if __name__ == "__main__":
     unittest.main()

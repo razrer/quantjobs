@@ -23,10 +23,26 @@ designing against: a confident answer where the honest one is "not yet".
 estimate anyway. An employer advertising in the second source that our pipeline
 does not poll is not a statistic, it is a named gap with a domain attached.
 
-**The second source exists for exactly one hub.** Sweden has JobStream, a
-national feed that reaches every employer. Copenhagen, Amsterdam, Switzerland,
-Hong Kong and Singapore have nothing comparable, so their coverage is
-unmeasured -- and reported as unmeasured, not as complete.
+**The second source exists for exactly one hub**, and it is a second sample
+rather than a census. Sweden has JobStream. Copenhagen, Amsterdam,
+Switzerland, Hong Kong and Singapore have nothing comparable, so their coverage
+is unmeasured -- and reported as unmeasured, not as complete.
+
+**JobStream being incomplete is not a problem for the estimator -- it is the
+premise.** Capture-recapture needs two samples that each miss things; if either
+were a census there would be nothing to estimate. What *was* a problem is that
+this file described it as "a national feed that reaches every employer", which
+invites the reader to treat Stockholm as finished and the miss list as
+exhaustive. Both are false: of the 55 Stockholm employers reached through their
+own boards, JobStream carries **none**. See `blindspot`, which measures that
+directly, and `jobstream.py`, which used to make the same claim more loudly.
+
+**The independence assumption is the real caveat**, and it leans the same way.
+Both samples favour employers with a web presence, and they turn out to be
+close to disjoint rather than independent -- our board polling finds firms that
+advertise on their own site, Platsbanken finds firms that advertise publicly,
+and in Sweden those are largely different populations. That biases the
+population estimate downward, so any share it produces is a ceiling.
 """
 
 from __future__ import annotations
@@ -35,6 +51,7 @@ import sqlite3
 from dataclasses import dataclass
 
 from . import tagging
+from .resolve import is_platform_domain
 
 # Below this, the estimator is noise. With an overlap of one, moving a single
 # employer between samples moves the estimate by a factor of two.
@@ -133,7 +150,7 @@ def missed(connection: sqlite3.Connection, limit: int = 40):
     feed only -- so its own board is either untiered, tier C, or resolved to
     an ATS with no extractor.
     """
-    return connection.execute(
+    rows = connection.execute(
         """
         SELECT j.domain, COUNT(*) AS ads, a.tier, a.ats
         FROM jobs j
@@ -156,6 +173,66 @@ def missed(connection: sqlite3.Connection, limit: int = 40):
         """,
         (SECOND_SOURCE, SECOND_SOURCE, limit),
     ).fetchall()
+    # A platform is not a board to go and resolve. Over 4,000 Form ADV filers
+    # publish a LinkedIn page as their website, so those domains reach `jobs`
+    # attached to whichever firm arrived first -- and this list, whose whole
+    # value is that every row is actionable, was topping out with `youtube.com`
+    # and `instagram.com`.
+    return [row for row in rows if not is_platform_domain(row["domain"])]
+
+
+@dataclass(frozen=True, slots=True)
+class Blindspot:
+    """What the national feed does not see, for the hub that has one."""
+
+    hub: str
+    ours: int          # employers we reach through their own board
+    unseen: int        # ...that the national feed carries no ad for
+    examples: tuple[str, ...]
+
+    @property
+    def share(self) -> float | None:
+        return self.unseen / self.ours if self.ours else None
+
+
+def blindspot(connection: sqlite3.Connection, limit: int = 12) -> Blindspot:
+    """Employers we poll directly that the national feed never advertises.
+
+    **This exists because the opposite was asserted for months.** `jobstream.py`
+    opened with "Every job advertised in Sweden is published to Platsbanken",
+    and on that basis Stockholm read as a solved hub. Advertising there is
+    voluntary for private employers, and the measurement is stark: every one of
+    the Stockholm employers we reach through their own board is absent from the
+    feed.
+
+    The direction matters. `missed` asks what the feed knows that we do not --
+    the queue of boards to go and resolve. This asks what *we* know that the
+    feed does not, which is the number that says whether the feed could ever
+    have served as a backstop. It cannot, so both directions have to be worked.
+    """
+    theirs = _domains(
+        connection,
+        "SELECT DISTINCT domain FROM jobs WHERE ats = ? AND domain IS NOT NULL",
+        SECOND_SOURCE,
+    )
+    rows = connection.execute(
+        """
+        SELECT j.domain, COUNT(*) AS n
+        FROM jobs j
+        JOIN job_tags t ON t.ats = j.ats AND t.token = j.token
+                       AND t.job_id = j.job_id
+        WHERE t.dimension = 'hub' AND t.value = ? AND t.tagger = ?
+          AND j.ats != ? AND j.domain IS NOT NULL AND j.removed_at IS NULL
+        GROUP BY j.domain
+        ORDER BY n DESC
+        """,
+        (SECOND_SOURCE_HUB, tagging.TAGGER, SECOND_SOURCE),
+    ).fetchall()
+
+    unseen = [row["domain"] for row in rows if row["domain"] not in theirs]
+    return Blindspot(
+        SECOND_SOURCE_HUB, len(rows), len(unseen), tuple(unseen[:limit])
+    )
 
 
 def by_hub(connection: sqlite3.Connection):

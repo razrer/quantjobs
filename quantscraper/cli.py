@@ -274,6 +274,20 @@ def _coverage(database: str) -> int:
     print("\nunmeasured (no second source): " + ", ".join(
         coverage.unmeasured_hubs(connection)))
 
+    # Printed every run, because the assumption it refutes is the kind that
+    # creeps back: a national feed reads like a backstop until you measure it.
+    spot = coverage.blindspot(connection)
+    print(f"\nwhat the national feed does NOT see, {spot.hub}")
+    if spot.share is None:
+        print("  no employers polled directly here yet -- nothing to compare")
+    else:
+        print(
+            f"  {spot.unseen:,d} of {spot.ours:,d} employers we poll directly"
+            f" ({spot.share:.0%}) have no ad in Platsbanken at all"
+        )
+        print("  " + ", ".join(spot.examples[:8]))
+        print("  advertising there is voluntary -- it is a second sample, not a census")
+
     rows = coverage.missed(connection)
     if rows:
         print(f"\nhiring, reaching us only through the national feed ({len(rows)})")

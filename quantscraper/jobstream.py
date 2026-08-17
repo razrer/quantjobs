@@ -1,14 +1,28 @@
 """Layer 4 -- JobTech JobStream, Sweden's incremental change feed.
 
-Every job advertised in Sweden is published to Platsbanken, and JobTech exposes
-it as a delta feed: ask for everything changed since a timestamp and get back
-new ads, edited ads, and -- the part that matters -- **withdrawn ones**. No key,
-no quota.
+JobTech exposes Platsbanken as a delta feed: ask for everything changed since a
+timestamp and get back new ads, edited ads, and -- the part that matters --
+**withdrawn ones**. No key, no quota.
 
-This is the one source that makes a whole hub complete rather than well
-covered. Firm-level ATS polling only ever reaches firms we resolved to a feed;
-this reaches every Swedish employer, including the ones whose careers page we
-tiered C and the ones we have not resolved a domain for at all.
+**Platsbanken is not a census, and this file used to claim it was.** The
+opening line here read "Every job advertised in Sweden is published to
+Platsbanken", and the rest of the paragraph concluded that Stockholm was
+therefore complete rather than merely well covered. Advertising there is
+voluntary for private employers -- only state agencies must announce openings
+-- so the premise was false and the conclusion with it.
+
+**Measured, because the claim is cheap to test and was never tested.** Take the
+Stockholm-tagged employers this pipeline reaches through their *own* board and
+ask how many of them JobStream also carries: **0 of 55**. Not a shortfall, a
+disjoint set. Swedbank, Nordnet, Tink, Qliro, Savr, Northmill, Intrum and Svea
+all advertise on their own Teamtailor and Workday boards and appear in
+Platsbanken not at all.
+
+**So this is a wide net, not a backstop.** It reaches employers we never
+resolved a domain for, which is real and valuable and why it stays. What it
+does not do is make the hub complete, and nothing downstream may assume it
+does -- `coverage.blindspot` measures the gap on every run rather than letting
+the assumption back in.
 
 **Delta polling is the whole point, so the cursor is durable.** `feed_state`
 holds the last timestamp seen; a run resumes from it and asks only for what
