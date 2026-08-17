@@ -8,8 +8,8 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 from . import (
-    alerts, ats, audit, coverage, db, discover, domains, extract, fca,
-    jobstream, labels, pages, resolve, tagging,
+    alerts, ats, audit, bodies, coverage, db, discover, domains, extract,
+    fca, jobstream, labels, pages, resolve, tagging,
 )
 from .registries import REGISTRIES
 
@@ -163,6 +163,22 @@ def _discover(database: str, limit: int, roster: bool, workers: int) -> int:
     if stranded:
         print(f"\n{len(stranded)} board(s) found for a firm holding no domain,")
         print("so nothing polls them yet: " + ", ".join(sorted(stranded)))
+    return 0
+
+
+def _bodies(database: str, limit: int, workers: int) -> int:
+    connection = db.connect(database)
+    attempted, filled = bodies.run(connection, limit, workers)
+    if attempted:
+        print(f"fetched {attempted:,d} descriptions, filled {filled:,d}")
+    else:
+        print("no body-less postings left in the queue")
+
+    print("\nbodies held")
+    for row in bodies.coverage(connection):
+        held = row["with_body"] or 0
+        share = held / row["postings"] if row["postings"] else 0
+        print(f"  {row['ats']:16s} {held:6,d} / {row['postings']:6,d}  ({share:.0%})")
     return 0
 
 
@@ -528,6 +544,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     discover_command.add_argument("--workers", type=int, default=6)
 
+    bodies_command = commands.add_parser(
+        "bodies", help="fetch descriptions a list endpoint omitted (Layer 3C)"
+    )
+    bodies_command.add_argument("--limit", type=int, default=2000)
+    bodies_command.add_argument("--workers", type=int, default=12)
+
     jobs_command = commands.add_parser(
         "jobs", help="pull postings from resolved ATS boards (Layer 3)"
     )
@@ -622,6 +644,8 @@ def main(argv: list[str] | None = None) -> int:
         return _jobstream(args.db, args.since)
     if args.command == "discover":
         return _discover(args.db, args.limit, args.roster, args.workers)
+    if args.command == "bodies":
+        return _bodies(args.db, args.limit, args.workers)
     if args.command == "jobs":
         return _jobs(args.db, args.limit)
     if args.command == "ats":
