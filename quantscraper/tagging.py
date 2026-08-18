@@ -35,7 +35,7 @@ from . import db, lexicon
 # Bump on every lexicon change: the diff between two versions over the same
 # corpus is a free regression test, and it is the only way to tell "the
 # classifier improved" from "the market moved".
-TAGGER = 31
+TAGGER = 35
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS job_tags (
@@ -52,6 +52,13 @@ CREATE TABLE IF NOT EXISTS job_tags (
 );
 
 CREATE INDEX IF NOT EXISTS job_tags_by_value ON job_tags (dimension, value);
+-- `postings()` asks "has this posting been tagged at the current version", as a
+-- correlated NOT EXISTS on (ats, token, job_id, tagger). The primary key covers
+-- the first three and stops there, so SQLite then walked every row for that
+-- posting -- roughly fifteen dimensions per lexicon version, across every
+-- version still in the table -- to test `tagger`. Measured: 18 seconds to
+-- return 50,529 rows. Putting `tagger` in the index turns that into a seek.
+CREATE INDEX IF NOT EXISTS job_tags_by_tagger ON job_tags (ats, token, job_id, tagger);
 """
 
 _TAGS = re.compile(r"<[^>]+>")
@@ -352,6 +359,56 @@ _NOT_MANAGEMENT = _terms(
     "funeral director", "board of directors",
 )
 
+# The software specialties, treated harder than the rest of engineering.
+#
+# `lexicon.ENGINEERING` is deliberately two-sided and says so: `Software
+# Engineer, Trading Systems` at Optiver is in scope, `Senior Backend Engineer,
+# Payments Platform` is not, and no one-sided list separates them. These
+# titles are the subset where that ambiguity does not exist -- the specialty
+# *is* the job, and no amount of markets context around it makes it quant
+# work.
+#
+# Six hand-labelled rows, one shape: `Senior Software Engineer, Frontend
+# (Coinbase Advisor - Agentic Trading)`, `Senior DevOps Engineer - Trading
+# Platforms`, `Principal Engineer - Trading Core`, `Cloud Engineer`, `Data
+# Infrastructure Engineer` and `Staff QE`. Every one was rejected by hand, and
+# every one had reached `adjacent` or `unknown` on the bare word *trading* --
+# the name of the platform the engineer maintains, not the work. `CLAUDE.md`
+# had already recorded the shape from `Backend Engineer - Trading & Asset
+# Optimization` and fixed it one list over, in `trading_style`.
+#
+# **Bare `software engineer` and `developer` are deliberately absent.** A
+# quant-dev role often calls itself one, and `CLAUDE.md` is explicit that heavy
+# systems engineering is a down-rank rather than a hard drop. `principal
+# engineer` and `staff engineer` are in because they name the software IC
+# ladder outright, which no quant title does.
+#
+# An unambiguous quant word still wins, exactly as it does for a management
+# title: `Quantitative Developer` and `Quant Platform Engineer` never reach
+# this branch.
+_SOFTWARE_SPECIALTY = _terms(
+    "frontend", "front end", "web developer", "mobile developer", "android",
+    "ios developer", "react", "angular", "ui engineer", "ux engineer",
+    "devops", "sre", "site reliability", "cloud engineer", "cloud architect",
+    "infrastructure engineer", "network engineer", "systems administrator",
+    "system administrator", "database administrator", "principal engineer",
+    "staff engineer", "software architect", "solution architect",
+    "security engineer", "cyber security", "cybersecurity",
+    "information security", "penetration testing",
+    "qa engineer", "quality engineer", "test engineer", "automation engineer",
+    "release engineer", "build engineer",
+    # `qe` is two characters and would normally be refused on that alone. It
+    # earns the place by measurement rather than by length: eight titles in the
+    # whole corpus carry it, and the one the tagger rated positively is `Staff
+    # QE` -- the row the sheet rejected as "quality engineering role for
+    # software". In a *body* it would be quantitative easing; this list is read
+    # from the title only.
+    "qe",
+    "it support", "help desk", "helpdesk", "service desk", "desktop support",
+    "application support", "technical support",
+    "salesforce", "servicenow", "sharepoint",
+)
+
 _QUANT_ADJACENT = (
     "trading", "researcher", "research analyst",
     "data scientist", "data science", "machine learning", "deep learning",
@@ -496,15 +553,45 @@ _DESK = {
 #
 # The phrases did not go anywhere: they are `_HARD_GATES["student_only"]` now,
 # which is where a thing you cannot pass belongs, and they still rank.
+# **`vp` and bare `director` moved up to `head_or_md`, and the evidence is
+# four hand-labelled rows saying the same thing four times.** `Credit Risk
+# Sanctioner (VP)`, `Client Portfolio Manager - VP`, `VP, Corporate
+# Development` and `Vice President, Assistant Portfolio Manager` were all
+# labelled `head_or_md` with the note *"filter out becuase VP role"*, against
+# `senior_6_10` here.
+#
+# `PLAN.md` records the argument for the old placement -- at a bank VP is a
+# mid-career grade -- and it is true and no longer decides anything. This list
+# was the only place in the module still saying so: `_MANAGEMENT` has carried
+# `vp`, `vice president` and bare `director` since the user asked for director
+# titles to be removed outright, so the *gate* already treated these postings
+# as unreachable while the *rank* called them mid-career. One word, two lists,
+# two answers -- the shape that has cost this project a bug at every layer.
+#
+# `associate director` and `executive director` stay on `senior_6_10`, and
+# bare `director` would swallow both on a token match -- `_first` takes the
+# first bucket that hits and `head_or_md` is first, so order cannot express
+# this. `_NOT_HEAD_GRADE` below is the guard, and it is the same shape as
+# `_NOT_MANAGEMENT`: the two lists ask different questions of the same word,
+# because seniority is a ladder and management is a gate.
+#
+# `md` was held back as the postal abbreviation for Maryland and the dry-run
+# cleared it: **78 titles in 157,464 carry it and exactly one is rated
+# positively** -- `Financial Institution Credit Risk Management (ED/MD)`, which
+# is an officer seat and belongs here. The state code lives in the *location*
+# column, which this never reads.
 _SENIORITY = {
     "head_or_md": _terms(
         "head of", "managing director", "chief", "partner", "global head",
-        "director of",
+        "director of", "director", "md", "vp", "vice president", "president",
     ),
-    "lead": _terms("lead", "principal", "staff engineer", "team lead"),
+    # `leader` was missing while `lead` was here, so `Applied Science / Data
+    # Science Leader` carried no grade word at all and a body asking for three
+    # years read it as `mid_3_5` -- a leadership title arriving one rung above
+    # entry level. `_MANAGEMENT` had `leader` all along; this list did not.
+    "lead": _terms("lead", "leader", "principal", "staff engineer", "team lead"),
     "senior_6_10": _terms(
-        "senior", "vp", "vice president", "erfaren", "associate director",
-        "executive director", "avp",
+        "senior", "erfaren", "avp", "associate director", "executive director",
     ),
     # `graduate` moved up from `junior_0_2`. In a *title* it names the intake
     # -- `Graduate Trader`, `Graduate Programme` -- and a graduate scheme is a
@@ -517,6 +604,27 @@ _SENIORITY = {
     ),
     "junior_0_2": _terms("junior", "associate", "entry level"),
     "mid_3_5": _terms("mid level", "experienced hire"),
+}
+
+# Titles where `director` is not an officer grade. Two kinds, and bare
+# `director` needs both: the ones where the word means something else entirely
+# (`Art Director`, `Funeral Director`), which `_NOT_MANAGEMENT` already guards
+# on the gate side, and the bank grades stamped on a five-year hire
+# (`Associate Director, EQD Quant`), which the ladder must keep at
+# `senior_6_10`. Both are pinned by tests, and both broke the moment bare
+# `director` went in above.
+_NOT_HEAD_GRADE = _terms(
+    "art director", "creative director", "director of photography",
+    "funeral director", "board of directors",
+    "associate director", "assistant director", "deputy director",
+    "executive director",
+)
+
+# The ladder with the officer rung removed, for re-reading a title whose
+# `director` turned out not to be one.
+_BELOW_HEAD = {
+    value: needles for value, needles in _SENIORITY.items()
+    if value != "head_or_md"
 }
 
 # A number attached to "years of experience" is the least ambiguous statement a
@@ -625,11 +733,25 @@ _HARD_GATES = {
     # not a gate and is deliberately not tagged: a degree preference is how
     # every quantitative posting on earth is written, so tagging it would
     # produce a dimension that fires on the whole corpus and separates nothing.
+    # Read from title and body alike, and the title forms matter: two
+    # hand-labelled rows were rejected as "perfect fit - but has hard
+    # requirement of phd", and only one of them carried a body phrase this
+    # list could see. The other announces it in the title as `PhD+`, which
+    # `fold` keeps as one token because `+` survives folding.
+    #
+    # **Bare `phd` is deliberately absent, and the dry-run is why.** 220 titles
+    # carry it and 29 are rated positively -- `Campus Quantitative Researcher,
+    # PhD`, `Junior Quantitative Researcher (Ph.D.)`, `2027 Internship -
+    # Quantitative Researcher (PhD)`. Those name the *audience* a posting is
+    # open to, not a bar it sets, and `CLAUDE.md` records that an over-eager
+    # student rule threw away Aquatic Capital's `Quantitative Researcher, PhD`
+    # once already. Only the compulsory phrasings are here.
     "phd_required": _terms(
         "phd required", "phd is required", "phd is a requirement",
         "must hold a phd", "must have a phd", "requires a phd",
         "phd mandatory", "phd degree required", "doctorate required",
-        "doctorate is required", "phd essential",
+        "doctorate is required", "phd essential", "phd+", "phd only",
+        "phd candidates only", "phd holders only", "phd degree is required",
     ),
     "visa_sponsorship_none": _terms(
         "no visa sponsorship", "not able to sponsor", "unable to sponsor",
@@ -752,8 +874,27 @@ _CONTRACT = {
 # `heavy_systems` down-rank; the rest reject.
 _EXCLUSION = {
     "actuarial": ("actuary", "actuarial", "aktuarie", "actuaris"),
-    "insurance_pricing": ("insurance pricing", "underwriting", "claims", "skadereglering"),
+    "insurance_pricing": ("insurance pricing", "skadereglering"),
+    # `underwriting` and `claims` used to sit above, and `insurance_pricing` is
+    # on `_BODY_SAFE_EXCLUSIONS` -- so both were matched against the *body*,
+    # where they are ordinary banking words. Debt underwriting is securities
+    # issuance, not insurance. **1,834 postings were rejected this way on a
+    # clean title**, `Associate, FICC Structuring, Fixed Income` among them.
+    # Exactly the failure `CLAUDE.md` names: boilerplate is the default failure
+    # mode of any body-matched rule. They are a title-only category now.
+    "insurance_underwriting": ("underwriting", "claims", "claims handler"),
     "non_markets_fintech": ("payments", "kyc", "aml", "fraud detection", "lending platform"),
+    # Lending is not markets, and the qualifier is the whole difference -- the
+    # same shape as `Credit Risk Operations` and `discretionary_investing`
+    # below. `lexicon.NON_QUANT_FINANCE` carries these too, and that was not
+    # enough on its own: `judge` runs last, so `Senior Lending Analyst -
+    # Portfolio & Risk Analytics` had already reached `adjacent` on *risk
+    # analytics* before anything asked it. An exclusion outranks a weak
+    # positive, which is the branch order that makes this fire.
+    "lending": _terms(
+        "loan analyst", "lending analyst", "distressed loan", "loan servicing",
+        "loan officer", "mortgage analyst",
+    ),
     "insurance_ops": (
         "insurance accounting", "insurance reporting", "policy administration",
         "skadeforsikring", "forsikring",
@@ -1123,6 +1264,11 @@ GATES = {
     "off_industry": "another profession entirely",
     "off_location": "outside the target and semi-target geography",
     "out_of_reach": "a rank unreachable from under a year of experience",
+    # The only gate that removes a posting whose *relevance* is `relevant`.
+    # A compulsory doctorate cannot be acquired between now and the
+    # application, so the fit does not matter -- see where it is set, for why
+    # this is a gate rather than a rejection.
+    "phd_required": "a doctorate the reader does not have",
 }
 
 # --------------------------------------------------------------------------
@@ -1262,6 +1408,27 @@ def _relevance_of(role: tuple[str, str] | None) -> str:
     title has already said *quantitative* by the time this is called, and the
     asymmetry this project is built on points one way: under-rating a real
     opening costs the opening, over-rating one costs a few seconds of reading.
+
+    **All trading seats sit here at `less_relevant`, and splitting them by
+    `trading_style` was tried and measured and reverted.** It looked
+    well-evidenced -- `Quantitative Trader` labelled `relevant`, `Experienced
+    FX/Forex Trader` and `Digital Assets Trader` labelled `adjacent`, against
+    one bucket saying `less_relevant` to all three -- and scoring the whole
+    sheet rather than those three rows showed it gains **one row out of
+    eighty**, because it silently broke two that had agreed.
+
+    The sheet contradicts itself on exactly this axis, which is the real
+    finding. `Algorithmic Trader` ("trading job but with focus on quant
+    strategies") is `less_relevant` and `Quantitative Trader` ("very
+    relevant, only downside is trading role") is `relevant` -- the same
+    category, two rungs. At one firm, `Graduate Trader` is `less_relevant`
+    while `Digital Assets Trader` is `adjacent`. A rank drawn from that is
+    fitted to labeller noise, and it moved 194 postings across the corpus to
+    buy 1.25% on the fixture.
+
+    `trading_style` still records the fact, which is what it is for: it is
+    filterable, and it does not pretend to imply a rank the evidence does not
+    support.
     """
     name = _class_of(role)
     if name in _FAR:
@@ -1419,6 +1586,14 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
         if not _hit(just_title, _NOT_MANAGEMENT) else None
     )
 
+    # A software-specialty title outranks a weak positive, for the same reason
+    # a management title does: the title has already said what the job is, and
+    # the quant-sounding word beside it is the name of the system rather than
+    # the work. Read from the job title alone, like `desk` and `management`
+    # above -- `Data Infrastructure Engineer` sits in a department called
+    # *Engineering*, and a department is not a role. See `_SOFTWARE_SPECIALTY`.
+    software = _hit(just_title, _SOFTWARE_SPECIALTY)
+
     # One value, and from the title first. `_ROLE_CLASS` replaced the
     # multi-valued `role_family` because seven values is a word count rather
     # than a classification, and its order is the priority: `operations`
@@ -1432,8 +1607,13 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
 
     # **Most trading postings are not quant trading**, and the difference is
     # one word in the title. `Quantitative Trader` and `Energy Trader` are
-    # both `role_class: trading`, both `less_relevant`, and only one of them
-    # is the job -- so the split gets its own dimension rather than a rank.
+    # both `role_class: trading` and only one of them is the job -- so the
+    # split gets its own dimension rather than a rank.
+    #
+    # **A dimension rather than a rank, and that was re-tested rather than
+    # assumed.** Feeding this into `_relevance_of` looked obviously right and
+    # measured at one row out of eighty; see that function for why the sheet
+    # cannot settle it.
     #
     # Read from the **title alone**, deliberately. `role_class` falls back to
     # the body, and over a Kraken posting body that fallback files SOX
@@ -1495,6 +1675,18 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
         add("relevance", "adjacent", f"{domain_only!r} qualified by {desk!r}")
     elif management and not certain:
         add("relevance", "rejected", f"management title: {management!r}")
+    elif software and not certain and not _hit(just_body, lexicon.QUANT_MARKETS_BODY):
+        # The specialty is the job. `Senior DevOps Engineer - Trading
+        # Platforms` and `Cloud Engineer` both reached the board on a markets
+        # word that belongs to the platform, and both were rejected by hand.
+        #
+        # A body naming markets *activity* still holds it open, which is the
+        # same exemption `lexicon.judge` gives a named occupation and it is
+        # load-bearing: `tests/test_tagging.py` pins a `Cloud Engineer` at a
+        # firm running *statistical arbitrage* reaching `adjacent`, and that
+        # is a real posting shape rather than a hypothetical. Nothing writes
+        # *statistical arbitrage* about a platform it merely hosts.
+        add("relevance", "rejected", f"software title: {software!r}")
     elif core and back:
         # The title says quant and the body describes the middle office.
         # `Quantitative Trading Associate` is the standing example: market-hours
@@ -1577,6 +1769,7 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
         if not from_body:
             add("asset_class", "unstated", None)
 
+    hard: set[str] = set()
     for dimension, mapping in (("horizon", _HORIZON), ("hard_gates", _HARD_GATES)):
         found = _every(mapping, text)
         if dimension == "hard_gates" and _hit(text, _PHD_NOT_REQUIRED):
@@ -1585,8 +1778,31 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
             found = [(v, e) for v, e in found if v != "phd_required"]
         for value, evidence in found:
             add(dimension, value, f"{evidence!r}")
+            if dimension == "hard_gates":
+                hard.add(value)
         if not found:
             add(dimension, "unknown", None)
+
+    # **A compulsory doctorate is an eligibility fact, and it gates.** Two
+    # hand-labelled rows say so: `Quantitative Researcher (Full-Time - PhD+)`
+    # and `PhD Degree Required - Quantitative Analyst/Programmer` were both
+    # labelled `rejected`, with the note *"perfect fit - but has hard
+    # requirement of phd"*.
+    #
+    # "Perfect fit" is the important half. The *relevance* of those postings is
+    # `relevant` and stays `relevant` -- the role is exactly this line of work,
+    # and saying otherwise would put an eligibility fact on a scale that
+    # measures subject matter. That is the mistake this file finished unwinding
+    # for `student_intern`, at the user's own decision, and `student_only`
+    # lives in `hard_gates` for the same reason.
+    #
+    # So it comes off the *board* rather than out of the *verdict*, which is
+    # what a gate is for: the row stays in `jobs`, the tag keeps its evidence,
+    # and `list --exclude phd_required` shows what it ate. One line in `GATES`
+    # puts them back, with no re-tag.
+    if "phd_required" in hard:
+        add("exclusion_reason", "phd_required",
+            _hit(text, _HARD_GATES["phd_required"]) or "doctorate compulsory")
 
     # A soft filter and never a gate: it caps the fit one notch rather than
     # rejecting, because a posting wanting Dutch is still worth seeing. English
@@ -1626,7 +1842,21 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
     # Losing a real "Senior" mentioned only in a body costs an over-rating,
     # which is the cheap direction. Inventing a managing director costs the
     # posting.
-    rank = _first(_SENIORITY, title)
+    # **`just_title`, not `title`.** Every comment in this block says the rank
+    # is read from the title alone, and the argument was made twice over -- and
+    # the code passed `fold(title, department)`, which is the title *and the
+    # department*. It went unnoticed while the needles were words like `head
+    # of` that a department rarely carries. Bare `director` is not one of
+    # those: `Associate - Fund Governance` sits in a department called
+    # *Director Services*, and that posting is named in the comments here
+    # already as the case this must not get wrong.
+    rank = _first(_SENIORITY, just_title)
+    if rank and rank[0] == "head_or_md" and _hit(just_title, _NOT_HEAD_GRADE):
+        # The officer word belongs to a phrase that is not an officer grade.
+        # Re-read the ladder with that rung out of the way -- `Associate
+        # Director, EQD Quant` is a `senior_6_10` hire and `Art Director` is
+        # not on this ladder at all.
+        rank = _first(_BELOW_HEAD, just_title)
 
     # The one thing a body says about rank that beats the title, and it is a
     # number rather than a word. Both hand-labelled disagreements were this:

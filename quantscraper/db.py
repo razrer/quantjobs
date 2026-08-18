@@ -84,6 +84,25 @@ def connect(path: Path | str = DEFAULT_PATH) -> sqlite3.Connection:
     # that one landing mid-batch aborts a run and loses the work since its last
     # flush. Waiting is always the better trade here.
     connection.execute("PRAGMA busy_timeout = 60000")
+    # **WAL, because the dominant cost in this pipeline is commit, not work.**
+    # `tag` rewrites ~2.4M rows in `job_tags` every version bump, batched 2,000
+    # at a time -- about 1,200 transactions, and under the default rollback
+    # journal each one creates, fsyncs and deletes a journal file. Measured on
+    # this database, that is most of the wall time of a re-tag; the classifying
+    # itself is a few minutes.
+    #
+    # `NORMAL` rather than `FULL` is the deliberate half of this. Under WAL it
+    # is durable against a process crash and gives up only the last commits to
+    # an OS or power failure -- and every table it protects here is derived and
+    # rebuilt on demand (`job_tags` from `jobs`, `firms` from `employers`).
+    # The raw registry tables are append-only and written once per fetch, where
+    # the cost does not arise.
+    #
+    # WAL also lets a reader run while a writer holds the database, which is
+    # what the `busy_timeout` above exists to survive: `domains` and `ats` are
+    # both hours against different hosts and are meant to run side by side.
+    connection.execute("PRAGMA journal_mode = WAL")
+    connection.execute("PRAGMA synchronous = NORMAL")
     connection.executescript(SCHEMA)
     _migrate(connection)
     return connection

@@ -318,6 +318,27 @@ class DistanceFromTheCentreTest(unittest.TestCase):
         self.assertEqual(tags["relevance"], {"less_relevant"})
         self.assertEqual(tags["role_class"], {"trading"})
 
+    def test_trading_style_records_the_split_without_ranking_it(self):
+        """Ranking on it was tried, measured at one row out of eighty, and
+        reverted -- the sheet puts `Algorithmic Trader` at `less_relevant` and
+        `Quantitative Trader` at `relevant`, which is the same category twice.
+
+        The dimension stays because the fact is worth filtering on. This test
+        exists so the next reader finds the answer instead of re-deriving it.
+        """
+        quant = _tags(title="Quantitative Trader", department="Trading")
+        pure = _tags(title="Graduate Trader", department="Trading")
+
+        self.assertEqual(quant["trading_style"], {"quant"})
+        self.assertEqual(pure["trading_style"], {"pure"})
+        self.assertEqual(quant["relevance"], pure["relevance"])
+
+    def test_the_desks_name_is_still_not_a_seat_on_it(self):
+        """Bare *trading* is a department, and `_TRADER_SEAT` matches the
+        nouns for the job."""
+        tags = _tags(title="Backend Engineer - Trading & Asset Optimization")
+        self.assertEqual(tags["trading_style"], {"unstated"})
+
     def test_a_title_naming_both_research_and_developer_is_a_build_seat(self):
         """Schonfeld's `Quantitative Research / Developer` folds to
         "research developer", and the day job is shipping tools."""
@@ -1061,3 +1082,122 @@ class EnrolmentBoundProgrammes(unittest.TestCase):
                       "Summer Analyst, Systematic Trading"):
             with self.subTest(title=title):
                 self.assertNotEqual(lexicon.judge(title).verdict, "reject")
+
+
+class SoftwareSpecialtyTest(unittest.TestCase):
+    """Six hand-labelled rows, one shape. Every one reached `adjacent` or
+    `unknown` on the bare word *trading* -- the name of the platform the
+    engineer maintains, not the work -- and every one was rejected by hand."""
+
+    def test_the_specialty_outranks_a_weak_positive(self):
+        for title in ("Senior Software Engineer, Frontend (Agentic Trading)",
+                      "Senior DevOps Engineer - Trading Platforms",
+                      "Principal Engineer - Trading Core",
+                      "Cloud Engineer",
+                      "Data Infrastructure Engineer",
+                      "Staff QE"):
+            with self.subTest(title=title):
+                self.assertEqual(_tags(title=title)["relevance"], {"rejected"})
+
+    def test_an_unambiguous_quant_word_still_wins(self):
+        """`CLAUDE.md` is explicit that heavy systems engineering is a
+        down-rank rather than a hard drop, and many quant-dev roles are
+        advertised as an engineering seat."""
+        for title in ("Quantitative Developer",
+                      "Quant Platform Engineer",
+                      "Quantitative Research Engineer"):
+            with self.subTest(title=title):
+                self.assertNotIn("rejected", _tags(title=title)["relevance"])
+
+    def test_bare_software_engineer_is_not_on_the_list(self):
+        """The list is a proper subset of `lexicon.ENGINEERING` on purpose:
+        `Software Engineer, Trading Systems` at Optiver is in scope, and no
+        one-sided list of engineering words separates it from a payments
+        backend. Only titles where the specialty *is* the job are here."""
+        self.assertIsNone(tagging._hit(
+            tagging.fold("Software Engineer, Trading Systems"),
+            tagging._SOFTWARE_SPECIALTY,
+        ))
+
+    def test_a_markets_activity_body_still_holds_one_open(self):
+        """The escape is narrowed, not closed -- nothing writes *statistical
+        arbitrage* about a platform it merely hosts."""
+        tags = _tags(
+            title="Cloud Engineer",
+            description="We are an investment management firm running "
+                        "statistical arbitrage strategies. You will run our "
+                        "Kubernetes clusters. " * 8,
+        )
+        self.assertNotIn("rejected", tags["relevance"])
+
+
+class VicePresidentIsAnOfficerGrade(unittest.TestCase):
+    """Four hand-labelled rows, all noted "filter out becuase VP role".
+
+    `PLAN.md` records the argument for the old placement -- at a bank VP is a
+    mid-career grade -- and `_MANAGEMENT` had already stopped believing it,
+    so the gate and the ladder disagreed about the same word.
+    """
+
+    def test_vp_reads_as_head_or_md(self):
+        for title in ("Credit Risk Sanctioner (VP)",
+                      "Client Portfolio Manager - VP",
+                      "VP, Corporate Development",
+                      "Vice President, Assistant Portfolio Manager"):
+            with self.subTest(title=title):
+                self.assertEqual(_tags(title=title)["seniority"], {"head_or_md"})
+
+    def test_a_years_figure_cannot_demote_an_officer_title(self):
+        """`_FLOOR_DECIDES` deliberately excludes the structural grades. A
+        VP posting asking for seven years is a VP posting."""
+        tags = _tags(title="Vice President, Assistant Portfolio Manager",
+                     description="You will need 7+ years of experience. " * 12)
+        self.assertEqual(tags["seniority"], {"head_or_md"})
+
+    def test_md_is_read_and_maryland_is_not(self):
+        """78 titles in 157,464 carry `md` and one is rated positively, an
+        `(ED/MD)` officer seat. The state code lives in the location column,
+        which the ladder never reads."""
+        self.assertEqual(
+            _tags(title="Northland Capital Markets - MD -Investment Banking",
+                  location="Baltimore, MD")["seniority"],
+            {"head_or_md"},
+        )
+
+    def test_the_ladder_reads_the_title_and_not_the_department(self):
+        """Every comment in that block says so and the code passed
+        `fold(title, department)`. It went unnoticed while the needles were
+        phrases a department rarely carries; bare `director` is not one."""
+        self.assertNotIn(
+            "head_or_md",
+            _tags(title="Associate - Fund Governance",
+                  department="Director Services")["seniority"],
+        )
+
+
+class DoctorateIsAnEligibilityFactNotAVerdict(unittest.TestCase):
+    """Two hand-labelled rows: "perfect fit - but has hard requirement of
+    phd". *Perfect fit* is the half that decides where this belongs."""
+
+    def test_a_compulsory_doctorate_gates_without_touching_relevance(self):
+        tags = _tags(title="Quantitative Researcher (Full-Time - PhD+)")
+        self.assertEqual(tags["relevance"], {"relevant"})
+        self.assertIn("phd_required", tags["exclusion_reason"])
+
+    def test_a_bare_phd_in_a_title_is_an_audience_not_a_bar(self):
+        """220 titles carry it and 29 are rated positively -- `Campus
+        Quantitative Researcher, PhD` among them. `CLAUDE.md` records that an
+        over-eager student rule threw away Aquatic Capital's posting once."""
+        for title in ("Campus Quantitative Researcher, PhD",
+                      "Junior Quantitative Researcher (Ph.D.)",
+                      "2027 Internship - Quantitative Researcher (Master or PhD)"):
+            with self.subTest(title=title):
+                tags = _tags(title=title)
+                self.assertNotIn("phd_required",
+                                 tags.get("exclusion_reason", set()))
+
+    def test_the_negation_still_holds(self):
+        """" no phd required " contains " phd required "."""
+        tags = _tags(title="Quantitative Researcher",
+                     description="No PhD required for this role. " * 12)
+        self.assertNotIn("phd_required", tags.get("exclusion_reason", set()))

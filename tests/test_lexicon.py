@@ -312,8 +312,6 @@ class MethodologyIsNotMarkets(unittest.TestCase):
          "Numerical methods and model validation for heat exchangers. "),
         ("Staff Data Scientist, Planning and Forecasting",
          "You will run backtests of our demand forecasts weekly. "),
-        ("Commercial Garage Door Sales Representative",
-         "Familiarity with our options pricing sheet is a plus. "),
         ("Senior NetSuite Engineer",
          "Maintain the pricing models inside our ERP configuration. "),
         ("Interest & Product Logic Specialist",
@@ -336,6 +334,38 @@ class MethodologyIsNotMarkets(unittest.TestCase):
                     description=(body + "You will sit with the trading desk. ") * 20,
                 )
                 self.assertNotEqual(call.verdict, "reject")
+
+    def test_a_named_occupation_is_decided_before_this_rule_applies(self):
+        """`Commercial Garage Door Sales Representative` used to sit in the
+        fixture above and it was doing two jobs at once.
+
+        The titles above are ambiguous ones -- a chemist, an analyst, an
+        engineer -- and the rule they pin is about *method* vocabulary needing
+        a markets anchor. A sales representative is not ambiguous: step 6 has
+        already named the occupation by the time any of that runs, and a
+        markets anchor beside it means only that the salesman sells to a
+        trading desk. The hand-labelled sheet forced the distinction -- a
+        `Wealth Advisor` with a 28,572-character body came back `undecided` on
+        one phrase from the firm's own description of itself.
+        """
+        for extra in ("", "You will sit with the trading desk. "):
+            with self.subTest(extra=extra or "no anchor"):
+                call = lexicon.judge(
+                    "Commercial Garage Door Sales Representative",
+                    description=("Familiarity with our options pricing sheet "
+                                 "is a plus. " + extra) * 20,
+                )
+                self.assertEqual(call.verdict, "reject")
+                self.assertEqual(call.reason, "non_quant_finance")
+
+    def test_but_a_phrase_naming_markets_activity_still_holds_one_open(self):
+        """The escape is narrowed, not closed. A body that says *statistical
+        arbitrage* is not a firm describing its customers."""
+        call = lexicon.judge(
+            "Wealth Advisor",
+            description="You will support our statistical arbitrage desk. " * 20,
+        )
+        self.assertNotEqual(call.verdict, "reject")
 
     def test_a_phrase_that_names_markets_needs_no_anchor(self):
         """`statistical arbitrage` and `smart order routing` are not written

@@ -425,6 +425,26 @@ NON_QUANT_FINANCE = _terms(
     "small business specialist", "client associate",
     # An audit or tax *programme* seat, which the analyst words above miss.
     "audit staff", "audit intern", "tax staff", "tax intern",
+    # Lending, and the qualifier is the whole difference -- the same shape as
+    # `Credit Risk Operations` and as the `investment analyst` exclusion the
+    # sheet already forced. `Distressed Loan Analyst` reached `keep` on the
+    # bare word *analyst* plus one phrase from a long body, and was labelled
+    # "a lawyer/accountant job"; `Senior Lending Analyst - Portfolio & Risk
+    # Analytics` reached `adjacent` on *risk analytics*. Step 5 runs first, so
+    # `Quantitative Analyst, Lending` keeps its quant reading.
+    "loan analyst", "lending analyst", "distressed loan", "loan servicing",
+    # Real-estate and insurance broking. `Associate, Brokerage` and two
+    # `Brokerage Coordinator` postings were all labelled "real estate job",
+    # and the only live posting the bare word touches that the tagger rated
+    # positively is `Senior Risk Analyst - Insurance Brokerage`, which belongs
+    # here too. A prime-brokerage quant is unaffected: step 5 has already let
+    # every quantitative title through by the time this runs.
+    "brokerage",
+    # Investment banking, which the sheet rejected nine rows in a row and
+    # `ACTION-REQUIRED.md` recorded as a decision. Bare `capital markets` is
+    # deliberately absent -- 166 titles carry it and three of them are quant
+    # seats at RBC and a treasury desk; the two IB desks are named instead.
+    "investment banking", "equity capital markets", "debt capital markets",
     "sales agent", "sales development", "account handler", "financial planner",
     "claim representative", "client manager", "deposit specialist",
     "commercial banking", "business banking", "premier banking",
@@ -565,6 +585,16 @@ STUDENT_PROGRAMME = _terms(
     "duales studium", "dual course of studies", "duale ausbildung",
     "ausbildung zum", "ausbildung zur", "werkstudent", "werkstudentin",
     "werkstudium",
+    # A contract or a contest that cannot be held without being a student, both
+    # from the hand-labelled sheet: `Euronext Securities Copenhagen - Student
+    # Employee` ("student job - also no relevant tasks") and Walleye's `Stock
+    # Competition (2026)` ("this is a stock competition for students"). One
+    # title each in the whole corpus and neither touches a posting the tagger
+    # rates positively, which is the check that decides a needle here. Bare
+    # `competition` is not on the list -- three titles carry it and one is a
+    # *Competition Law* seat.
+    "student employee", "student worker", "stock competition",
+    "trading competition", "case competition", "student ambassador",
 )
 
 # `are enrolled` is deliberately absent: "employees who are enrolled in our
@@ -655,9 +685,38 @@ def judge(
     # nothing left for an anchor to add: a body saying "backtesting
     # infrastructure for statistical arbitrage" has already answered the
     # question, and two tests pin that the narrowing does not cost it.
-    quant_body = first(body, QUANT_MARKETS_BODY)
+    markets_activity = first(body, QUANT_MARKETS_BODY)
+    quant_body = markets_activity
     if quant_body is None and (markets_role or markets_body):
         quant_body = first(body, QUANT_METHOD_BODY)
+
+    # **What it takes to overturn a title that already named the occupation**,
+    # which is a stronger question than what it takes to read an ambiguous one.
+    #
+    # Step 6 below runs only after step 5 has let every quantitative title
+    # through, so by the time it fires the title has said *wealth advisor* or
+    # *loan officer* and said nothing quantitative at all. Its body escape was
+    # a single `quant_body` phrase -- and a wealth manager's advertisement
+    # contains one the way every governance document contains "model
+    # validation". Measured on the hand-labelled sheet: `Wealth Advisor` with
+    # no body rejects, and the same title with a 28,572-character body came
+    # back `undecided` on one phrase from the firm's own description of itself.
+    #
+    # So the escape now needs a phrase that names markets *activity* outright
+    # rather than a method shared with every technical field. That is the split
+    # `QUANT_MARKETS_BODY` already draws and the same asymmetry `CLAUDE.md`
+    # records for it: *monte carlo* is derivatives pricing at a bank and
+    # radiation shielding at a reactor, but nothing writes *statistical
+    # arbitrage* in passing.
+    #
+    # Counting phrases was the alternative and `CLAUDE.md` has already measured
+    # it as the wrong rule one layer down -- two method phrases is what a
+    # thermal-fluids analyst carries. Here it would be weaker still, because a
+    # finance title guarantees the markets context that made counting look like
+    # evidence.
+    #
+    # `markets_activity` is the first half of `quant_body` above, kept under
+    # its own name because step 6 wants exactly that half and nothing else.
 
     # 1. A named occupation. The strongest evidence in the module -- but a
     #    quantitative word in the title *itself* means the title is doing
@@ -727,8 +786,8 @@ def judge(
     # 6. Finance, but the relationship-and-processing part of it.
     hit = first(role, NON_QUANT_FINANCE)
     if hit:
-        if quant_body:
-            return Verdict("undecided", None, f"{hit} + {quant_body}", "weak")
+        if markets_activity:
+            return Verdict("undecided", None, f"{hit} + {markets_activity}", "weak")
         return Verdict("reject", "non_quant_finance", hit, "strong")
 
     # 6b. A title-only anchor, below the finance list on purpose -- `Sales

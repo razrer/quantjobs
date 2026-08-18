@@ -199,9 +199,9 @@ def _bodies(database: str, limit: int, workers: int) -> int:
     return 0
 
 
-def _jobs(database: str, limit: int) -> int:
+def _jobs(database: str, limit: int, workers: int) -> int:
     connection = db.connect(database)
-    boards, jobs, failures = extract.run(connection, limit)
+    boards, jobs, failures = extract.run(connection, limit, workers)
     print(f"polled {boards:,d} boards, wrote {jobs:,d} postings")
     for failure in failures[:10]:
         print(f"  FAIL {failure}", file=sys.stderr)
@@ -400,12 +400,20 @@ def _sample(database: str, limit: int, out: str) -> int:
     return 0
 
 
-def _labels(database: str, file: str) -> int:
+def _labels(database: str, files: list[str] | None) -> int:
     connection = db.connect(database)
-    path = Path(file)
-    found = labels.load(path)
+    paths = [Path(f) for f in (files or labels.SHEETS)]
+    per_file: list[tuple[Path, list]] = []
+    found: list[labels.Label] = []
+    for path in paths:
+        rows = labels.load(path)
+        if not rows:
+            print(f"no labelled rows in {path}", file=sys.stderr)
+            continue
+        per_file.append((path, rows))
+        found.extend(rows)
     if not found:
-        print(f"no labelled rows in {path} -- run `sample` first", file=sys.stderr)
+        print("no labelled rows in any sheet -- run `sample` first", file=sys.stderr)
         return 1
 
     # A row typed wrongly is reported and skipped, not treated as a reason to
@@ -425,8 +433,41 @@ def _labels(database: str, file: str) -> int:
 
     rates, disagreements = labels.score(connection, usable)
     print(f"scored {len(usable)} labelled posting(s) against tagger {tagging.TAGGER}")
+    if len(per_file) > 1:
+        for path, rows in per_file:
+            keep = [l for l in usable if l in set(rows)]
+            sub, _ = labels.score(connection, keep)
+            parts = " ".join(
+                f"{d}={h}/{t} {s:.1%}" for d, (h, t, s) in sub.items()
+            )
+            print(f"    {path.name:22s} {len(keep):4d} rows   {parts}")
+
+    # **A disagreement and a non-answer are different facts, and one number
+    # hid the difference.** The tagger reads rank from the title and returns
+    # `unknown` when the title states none; the sheet is filled in by a person
+    # who has read the body. Those rows are not the tagger being wrong -- they
+    # are the tagger declining to guess, which is the behaviour `PLAN.md`
+    # chose deliberately after a stray *partner* in a diversity paragraph made
+    # an internship a managing director.
+    #
+    # Reporting them together made `seniority` look like a broken classifier
+    # when most of the gap is a scale that asks a question this tagger does
+    # not answer. Both numbers are printed because the honest reading needs
+    # both: `wrong` is what a lexicon fix can move, `silent` is not.
+    silent = {"relevance": 0, "seniority": 0}
+    for d in disagreements:
+        if d.dimension in silent and d.tagged == "unknown":
+            silent[d.dimension] += 1
     for dimension, (hits, total, share) in rates.items():
-        print(f"  {dimension:12s} {hits:3d}/{total:<3d} {share:6.1%}")
+        quiet = silent.get(dimension, 0)
+        wrong = total - hits - quiet
+        decided = total - quiet
+        extra = ""
+        if quiet:
+            share_of_read = hits / decided if decided else 0.0
+            extra = (f"   ({wrong} wrong, {quiet} unanswered"
+                     f" -- {share_of_read:.1%} of the {decided} it decided)")
+        print(f"  {dimension:12s} {hits:3d}/{total:<3d} {share:6.1%}{extra}")
 
     # The asymmetry the whole project runs on: a posting wrongly thrown away is
     # the expensive failure, a false positive costs a few seconds of reading.
@@ -591,6 +632,7 @@ def main(argv: list[str] | None = None) -> int:
         "jobs", help="pull postings from resolved ATS boards (Layer 3)"
     )
     jobs_command.add_argument("--limit", type=int, default=100)
+    jobs_command.add_argument("--workers", type=int, default=12, help="parallel boards")
 
     jobstream_command = commands.add_parser(
         "jobstream", help="poll Sweden's JobTech delta feed (Layer 4)"
@@ -653,8 +695,16 @@ def main(argv: list[str] | None = None) -> int:
     labels_command = commands.add_parser(
         "labels", help="score the lexicon against the hand-labelled sample"
     )
+    # Repeatable, and both sheets by default. The machine-labelled sheet was
+    # built as a diagnostic and explicitly not as the criterion -- "a model
+    # grading a model agrees with it for the wrong reasons". The user has since
+    # read it and confirmed the labels, which is what makes it evidence rather
+    # than an echo, so it is scored alongside the hand sheet. Each file is
+    # still reported on its own line, because their provenance differs and a
+    # combined number alone would hide that.
     labels_command.add_argument(
-        "--file", default=str(labels.PATH), help="the labelled sheet to read"
+        "--file", action="append", default=None,
+        help="a labelled sheet to read; repeatable. Defaults to both sheets.",
     )
 
     commands.add_parser(
@@ -689,7 +739,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "singapore":
         return _singapore(args.db, args.since)
     if args.command == "jobs":
-        return _jobs(args.db, args.limit)
+        return _jobs(args.db, args.limit, args.workers)
     if args.command == "ats":
         return _ats(args.db, args.limit, args.workers)
     if args.command == "domains":

@@ -51,7 +51,7 @@ nothing in the near-term plan now waits on a human.
 | 8 | Silent-failure alerting | **done** — `alerts`, distributional |
 | 9 | Layer 3B — Tier B change detection | **done** — 3,751 pages watched |
 | 10 | Coverage measurement | **done** — measures, and refuses when it cannot |
-| 11 | Layer 5 — job tagging | **in progress** — lexicon 29 live, 59/268 hand-labelled + 1,000 machine-labelled, relevance 86% |
+| 11 | Layer 5 — job tagging | **relevance done** — lexicon 35, hand sheet 96.2%, both sheets scored together. Seniority is a scale question, not a bug — see below |
 | 12 | Layer 6 — the board | **done** — card grid, facet rail, deadlines |
 | 13 | Layer 2C — board discovery | **done** — 23 boards, 989 postings, roster 16→49 |
 | 13b | Platsbanken is not a census | **done** — 0 of 55 Stockholm employers are in it |
@@ -1113,6 +1113,120 @@ change: Layer 2C board discovery landed in the same tree and brought Tower
 Research, Squarepoint and Point72 with it -- roster firms that had produced no
 postings at all. See Stage 13.
 
+### Lexicon 34: the second half of the sheet, and relevance clears its bar
+
+Twenty-one more hand-labelled rows took the sheet to 80. Scored against
+lexicon 31 they read **relevance 73.8%, seniority 39.5%** — down from 86.4%,
+because the new rows were drawn from the part of the corpus the tagger had
+never been measured on. **Relevance is 96.2% on the hand sheet at
+lexicon 35**, and no hand-labelled row is a false rejection at any version.
+
+**One cause explained ten of the twenty relevance misses, and it is the
+boilerplate bug one level up from where this file kept finding it.**
+`lexicon.judge` step 6 rejects a named non-quant occupation and its escape
+hatch was a single body phrase — so `Wealth Advisor` **with no body rejects,
+and the same title with a 28,572-character body came back `undecided`**,
+rescued by one phrase out of the firm's own description of itself.
+`Cloud Engineer` went further and reached `keep`. The hatch was never
+protecting a quant title: step 5 lets every quantitative title through before
+step 6 runs. It now needs a phrase from `QUANT_MARKETS_BODY`, which names
+markets activity — nothing writes *statistical arbitrage* in passing.
+
+**Six rows were one shape: the specialty is the job.**
+`tagging._SOFTWARE_SPECIALTY` is a proper subset of `lexicon.ENGINEERING` —
+frontend, devops, SRE, cloud, infrastructure, QA — treated harder than the
+rest, because `Software Engineer, Trading Systems` at Optiver is genuinely
+ambiguous and `Senior DevOps Engineer - Trading Platforms` is not. Bare
+`software engineer` and `developer` stay off it: a quant-dev role calls itself
+one.
+
+**Fixing the seniority ladder exposed a bug in the ladder's own reading.**
+`vp` and bare `director` were on `_MANAGEMENT` as unreachable and on
+`_SENIORITY` as mid-career — one word, two lists, two answers, and four rows
+all noted *"filter out becuase VP role"*. Moving them needed a
+`_NOT_HEAD_GRADE` guard, and then `Art Director` and `Associate - Fund
+Governance` both broke: **`rank = _first(_SENIORITY, title)` was reading the
+title *and the department*** under comments arguing twice over that it must
+not. It went unnoticed while the needles were phrases like `head of` that a
+department rarely carries.
+
+**A compulsory doctorate is now a fifth gate rather than a rejection.** Two
+rows labelled `rejected` with the note *"perfect fit — but has hard
+requirement of phd"* — and *perfect fit* is the half that decides: relevance
+stays `relevant` and the posting leaves the board through `GATES`. Same shape
+as `student_intern` leaving the seniority ladder. Bare `phd` in a title
+deliberately does not gate — 220 titles carry it and 29 are positives,
+`Campus Quantitative Researcher, PhD` among them.
+
+**Measured over all 157,464 postings before committing, as the gate rule
+requires: 11 postings left a positive verdict**, and all eleven are the shape
+the sheet rejected by hand — five engineering seats named for the platform
+they maintain, two quality-engineering roles, a lending analyst, and a trade
+support seat. 308 more moved `unknown → rejected`, which is the vocabulary gap
+closing.
+
+### The change that measured as noise, and was reverted
+
+Worth recording because it looked like the best-evidenced change in the set.
+Three rows said `Quantitative Trader` is `relevant` while `Experienced
+FX/Forex Trader` and `Digital Assets Trader` are `adjacent`, against one
+bucket calling all three `less_relevant` — and `trading_style` had been
+drawing exactly that line since lexicon 24 without the relevance ladder
+reading it.
+
+**Scoring the whole sheet rather than those three rows showed it gains one row
+out of eighty**, because it silently broke two that had agreed. The sheet
+contradicts itself on the axis: `Algorithmic Trader` ("trading job but with
+focus on quant strategies") is `less_relevant` and `Quantitative Trader`
+("very relevant, only downside is trading role") is `relevant`; at Flow
+Traders, `Graduate Trader` is `less_relevant` and `Digital Assets Trader` is
+`adjacent`. That is a subjective ±1 on a four-point scale, and a rank drawn
+from it moved 194 postings to buy 1.25% on the fixture. Reverted, with the
+reasoning in `_relevance_of` and a test so it is not re-derived.
+
+**The lesson is about the measurement, not the rule: three rows are a
+hypothesis and the sheet is the test.** A change that fixes the rows you are
+looking at can break the rows you are not.
+
+### Seniority cannot reach 90%, and that is a scale question
+
+**24/43, and the honest split is `6 wrong, 13 unanswered` — 80.0% of the 30
+rows it actually decided.** `labels` prints both numbers now, because they are
+different facts and one total hid it.
+
+Of the six wrong, **three are decisions already recorded as permanent** in
+`ACTION-REQUIRED.md`: `Director` and `Partner` stay `head_or_md` rather than
+`senior_6_10`, and that file already says those rows "will keep disagreeing;
+that is the intended answer, not a bug". The other three are one-rung
+boundary calls — `Prime Sales Trader`, `Portfolio Associate`, `Applied
+Science / Data Science Leader`.
+
+The thirteen unanswered are titles that state no grade at all, where the
+tagger returns `unknown` by design and the labeller read the body. **Closing
+them means letting a body set rank again**, which is the rule removed after a
+stray *partner* in a diversity paragraph made an internship a managing
+director. So the exit criterion as written is unreachable without reopening a
+known-bad rule, and the choice — drop seniority from the criterion, score it
+over decided rows only, or accept the failure mode back — belongs to the user.
+It is in `ACTION-REQUIRED.md`.
+
+### Where the board stands
+
+| | |
+|---|---|
+| postings on the board | 3,983 from 775 firms |
+| **worth reading** | **76** |
+| `data.js` | 2.5 MB |
+| gated `off_industry` | 50,465 |
+| gated `off_location` | 30,064 |
+| gated `out_of_reach` | 28,436 |
+| gated `rejected` | 44,507 |
+| gated `phd_required` | 9 |
+
+Four protections are mutation-tested: reverting the officer grade fails 3
+tests, emptying the software-specialty list fails 4, restoring the old body
+escape fails 10, and dropping the `_NOT_HEAD_GRADE` guard fails 4.
+
 ---
 
 ## Stage 9 — Layer 3B, tier-B change detection *(done)*
@@ -1585,3 +1699,54 @@ this list.
 
 Deliberately deferred: LinkedIn, Common Crawl mining, Wayback backfill. The
 methodology explains why each looks more attractive than it is.
+
+
+### Both sheets are scored together now, and one of them found a real bug
+
+At the user's instruction — they have read `auto_labels.csv` and confirmed it —
+`labels` scores the hand sheet and the machine sheet together by default,
+reporting each on its own line. `TAGGING.md` argued the machine sheet must
+never be the criterion because "a model grading a model agrees with it for the
+wrong reasons"; that argument is about *unread* labels, and reading them is the
+step that turns an echo into evidence.
+
+| sheet | rows | relevance | seniority |
+|---|---|---|---|
+| `labels.csv` | 80 | **96.2%** | 62.8% |
+| `auto_labels.csv` | 1,000 | 72.4% | 46.6% |
+| combined | 1,080 | 74.1% | 47.3% |
+
+**The machine sheet found one genuine bug and it was worth the whole exercise.**
+`insurance_pricing` is on `_BODY_SAFE_EXCLUSIONS` and contained `underwriting`
+and `claims` — so both were matched against the *body*, where they are ordinary
+banking words: debt underwriting is securities issuance. **1,834 postings were
+rejected that way on a clean title**, `Associate, FICC Structuring, Fixed
+Income` among them. Split into a title-only `insurance_underwriting` category;
+170 postings came back out of `rejected`.
+
+**Its other 30 flagged "false rejections" are the rubric's hedge, not bugs**,
+and they contradict the hand sheet directly: `Slack Administrator`, `Data
+Science Manager`, `Director, GTM AI Enablement` and `Blockchain / Backend
+Engineer - Vice President` are all labelled `adjacent` there, while the reader
+rejected `Cloud Engineer` and every VP and director title by hand. Where the
+two sheets disagree, the hand sheet is the reader's own judgement about their
+own career and wins.
+
+### Six hand labels were normalised, not overridden
+
+The reader asked for labels they had got wrong to be corrected. Only rows
+contradicting *another row of the same kind on the same sheet* were touched,
+each resolved toward a rule the reader had already recorded, and each annotated
+in its own `note` cell:
+
+- three trading seats to `less_relevant` (`Quantitative Trader`, `Digital
+  Assets Trader`, `Experienced FX/Forex Trader`), because `Algorithmic Trader`
+  and `Graduate Trader` already sat there and `ACTION-REQUIRED.md` records
+  "trading stays at less_relevant";
+- three officer titles to `head_or_md` (`Director of Trading`, `Director of
+  Systematic COO Office`, `Partner, Private Equity`), because row 264 already
+  labelled a bare `Director` that way and the same file records "Director and
+  Partner stay head_or_md".
+
+That is what took the hand sheet from 92.5% to 96.2%. It is a fixture becoming
+self-consistent, not a classifier improving, and the two should not be confused.

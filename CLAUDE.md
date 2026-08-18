@@ -644,8 +644,7 @@ Advisor` fell through both and was reported `unknown`: "nothing looked at
 this", when three rules had. It runs only on the branch that would otherwise
 emit `unknown`, so it can convert a non-answer and can never overturn a
 positive — which is what stops it manufacturing a false rejection in the rows
-that matter. It also costs ~0.1 ms per posting; a full re-tag is ~10 minutes,
-dominated by writing a million rows, not by classifying.
+that matter. It also costs ~0.1 ms per posting.
 
 **A department is nothing but the desk's name, so it must never reject the
 role.** `Senior Trading Associate` sits in a department called *Trading
@@ -863,3 +862,122 @@ first: it keyed on `role_class: trading`, whose lexicon includes bare
 seat now (`_TRADER_SEAT`). And `_QUANT_CORE` held only the participle forms, so
 `Algorithmic Trader` is not "algorithmic trading" and read as a trader with no
 quant signal at all. When a needle is a phrase, check the noun form of it too.
+
+**A body can overturn a title-based occupation rejection, and it is the same
+boilerplate bug one level up.** `lexicon.judge` step 6 rejects a named
+non-quant occupation, and its escape hatch was a single `quant_body` phrase —
+so `Wealth Advisor` **with no body rejects, and the same title with a
+28,572-character body came back `undecided`**, rescued by one phrase out of the
+firm's own description of itself. `Cloud Engineer` went further and reached
+`keep`. The escape now needs a phrase from `QUANT_MARKETS_BODY`, which names
+markets *activity*: nothing writes *statistical arbitrage* in passing, and step
+5 has already let every quantitative title through before step 6 runs, so the
+hatch was never protecting a quant title in the first place. Counting phrases
+is not the fix here either — a finance title guarantees the markets context
+that made counting look like evidence one layer down.
+
+**Where a specialty is the job, no markets context around it changes that.**
+`lexicon.ENGINEERING` is deliberately two-sided and must stay so — `Software
+Engineer, Trading Systems` at Optiver is in scope. `tagging._SOFTWARE_SPECIALTY`
+is the proper subset where the ambiguity does not exist: frontend, devops, SRE,
+cloud, infrastructure, QA, IT support. Six hand-labelled rows were rejected on
+sight and every one had reached `adjacent` or `unknown` on the bare word
+*trading* — the name of the platform, not the work. Bare `software engineer`
+and `developer` are deliberately absent, because a quant-dev role calls itself
+one. A body naming markets activity still holds one open, which is pinned by a
+test: a `Cloud Engineer` at a firm running *statistical arbitrage* is a real
+posting shape.
+
+**One word, two lists, two answers — check the other list.** `_MANAGEMENT` had
+treated `vp`, `vice president` and bare `director` as unreachable since the user
+asked for director titles to go, while `_SENIORITY` still called them
+`senior_6_10`. The gate and the ladder disagreed about the same word, and four
+hand-labelled rows all read *"filter out becuase VP role"*. Moving them needed a
+`_NOT_HEAD_GRADE` guard, because bare `director` swallows `Associate Director`
+— a bank's five-year grade — and `Art Director`, where the word is not a rank at
+all. `_first` takes the first bucket that hits, so ordering cannot express this.
+
+**Seniority was reading the title *and the department*, under comments arguing
+twice over that it must not.** `rank = _first(_SENIORITY, title)` where `title`
+is `fold(row["title"], row["department"])`. It went unnoticed while the needles
+were phrases like `head of` that a department rarely carries; bare `director` is
+not one of those, and `Associate - Fund Governance` sits in a department called
+*Director Services* — the exact posting the comments there name as the case not
+to get wrong. Whenever a needle gets shorter, re-check what text it is matched
+against.
+
+**A compulsory doctorate is an eligibility fact, not a verdict.** Two rows were
+labelled `rejected` with the note *"perfect fit — but has hard requirement of
+phd"*, and *perfect fit* is the half that decides where it belongs: relevance
+stays `relevant` and the posting comes off the board through `GATES` instead.
+Same shape as `student_intern` leaving the seniority ladder, at the user's own
+decision. **Bare `phd` in a title must never gate** — 220 titles carry it and 29
+are rated positively, including `Campus Quantitative Researcher, PhD`. It names
+the audience a posting is open to, not a bar it sets. Only the compulsory
+phrasings gate, and `phd+` is one of them because `+` survives folding.
+
+**A labelled disagreement and a labelled non-answer are different facts, and
+one number hid it.** `seniority` scored 39.5% against the hand-labelled sheet
+and most of the gap was the tagger returning `unknown` on titles that state no
+grade — which is the behaviour chosen deliberately after a stray *partner* in a
+diversity paragraph made an internship a managing director. `labels` prints
+both now: `wrong` is what a lexicon fix can move, `unanswered` is not, and only
+the first is evidence of a bug.
+
+
+## What is actually slow, measured rather than assumed
+
+**`jobs` was the only network command running serially, and it is Layer 3.**
+`ats`, `domains`, `pages`, `discover` and `bodies` have all used a 12-worker
+pool for a long time; `extract.run` was a plain `for` loop over all 911 boards.
+Measured on a 36-board sample spread across 16 ATSes: **32.3s serial, 4.5s
+parallel — 7.2x**, and a full run goes from roughly 14 minutes to 2. Politeness
+is unchanged and that is what makes it safe: `http._throttle` books its
+interval **per host** under a lock, so two workers on different boards never
+share a slot and two on the same host still queue a second apart. The comment
+on `_last_hit` had already made that argument for `domains`.
+
+Note the shape of the measurement, because the first attempt said *1.0x*: a
+sample taken with `targets(con, 24)` was 1,363 postings from 24 boards, so it
+was pagination against a handful of hosts, where the per-host throttle is the
+floor and parallelism cannot help. **Spread the sample across hosts, or a
+concurrency change measures nothing.**
+
+**A re-tag is not "dominated by writing rows", and this file used to say it
+was.** Profiled over the real corpus:
+
+| phase | cost |
+|---|---|
+| classifying 157,464 postings | **5.5 min** — 2.11 ms each, `_hit` is 52% of it |
+| writing ~2.4M rows | ~2 min |
+| `postings()`, finding what to tag | 7.2s, now 1.1s |
+
+So classification dominates, by roughly three to one. WAL plus
+`synchronous=NORMAL` is worth only 1.1x on the writes — it is in `db.connect`
+for the concurrency, not the speed.
+
+**`postings()` needed an index nobody had noticed was missing.** It asks "is
+this posting tagged at the current version" as a correlated `NOT EXISTS` on
+`(ats, token, job_id, tagger)`. The primary key covers the first three and
+stops, so SQLite walked every row for that posting — about fifteen dimensions
+per lexicon version, across every version still in the table — to test
+`tagger`. `job_tags_by_tagger` makes it a seek: **7.2s to 1.1s**, and the plan
+goes from `sqlite_autoindex_job_tags_1` to a covering index. Whenever a query
+filters on a column that is in the table and not in the index, check the plan
+before assuming the primary key covers it.
+
+**`job_tags` grows by ~2.4M rows per version bump and does not shed the old
+ones.** The retention was already known to be broken — the primary key omits
+`tagger`, so a version's rows are partially overwritten rather than kept — so
+the table accumulates cost for a history it cannot actually serve. Pruning
+superseded taggers after a successful re-tag is the obvious fix and is
+deliberately *not* done here: it deletes rows, and that is the user's call even
+in a derived table.
+
+**Do not speed the pipeline up by filtering at ingest.** It is the first thing
+that suggests itself and it breaks principle 4. Every lexicon bug in this
+project has been fixed by re-running the tagger over stored rows; a posting
+dropped at write time cannot be recovered without re-scraping. The legitimate
+version of the idea is to filter the *work* rather than the *data*, which
+`bodies.py` already does — it fetches a description only for postings whose
+verdict a body could change.

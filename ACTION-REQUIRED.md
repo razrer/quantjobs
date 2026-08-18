@@ -7,26 +7,60 @@ Nothing here is urgent — the project runs fine without any of it. These are th
 places where I hit a wall that needed a human, not a decision I should make for
 you.
 
-**Two things are genuinely waiting on you** — item 1, the labelling sheet, and
-item 2, two national registers that want an account. Everything below them is
-resolved or optional, and the two design decisions I had open are answered and
-recorded at the end of item 1.
+**Two things are genuinely waiting on you** — item 0, one decision about what
+the seniority score is even supposed to mean, and item 2, two national
+registers that want an account. Item 1, the labelling sheet, has done its job
+for relevance and no longer blocks anything.
 
 ---
 
-## 1. Label 100 postings, so the classifier has a fixture
+## 0. Decide what the seniority criterion is
 
-**This is the last thing standing between Stage 11 and done**, and it is the
-only kind of work I cannot do for you: it needs your judgement about your own
-career, not mine.
+**This is the only thing standing between Stage 11 and done, and it is a
+question rather than a task.** Nothing is broken; the criterion asks for
+something the tagger deliberately refuses to produce.
 
-**Where it stands: 59 of 268 labelled**, with **209 rows waiting**. Nothing you
-already filled in was touched. The criterion is 90% on both dimensions, no
-false rejection, and at least 100 rows.
+**Seniority scores 24/43, and the split is the whole story: 6 wrong, 13
+unanswered.** Over the rows it actually decided it is **80.0%**. `labels`
+prints both numbers now, because a disagreement and a non-answer are different
+facts and one total hid it.
 
-**Scored against lexicon 29: relevance 86.4%, seniority 50.0%.** Relevance was
-64.7% three passes ago; the jump is items 5 and 6 below. Seniority rose once
-`student_intern` left the scale — see the end of this item.
+The thirteen unanswered are titles that state no grade at all — `Quantitative
+Equity Researcher`, `Asset Management Analyst`, `Staff QE`. You read the body
+and wrote a level; the tagger returns `unknown`, because rank is read from the
+title only. **That rule exists because a stray *partner* in a diversity
+paragraph made a Schonfeld internship a managing director**, and a body saying
+"you will report to the Head of Trading" made `Graduate Trader` the same.
+Every authority word in a body is furniture.
+
+And of the six wrong, **three are calls you already made**: `Director` and
+`Partner` stay `head_or_md`, recorded further down this file as "will keep
+disagreeing; that is the intended answer, not a bug". The remaining three are
+one-rung boundary calls.
+
+So 90% is not reachable by fixing anything. Three ways out, and it is your
+call:
+
+- **Drop seniority from the exit criterion.** It is a ranking input, not a
+  gate — the gate is `out_of_reach`, which reads `_MANAGEMENT` and is already
+  right on every row you labelled. This is what I would pick.
+- **Score it over decided rows only** — 80.0% today, and the bar means "when
+  it answers, is it right".
+- **Let the body set rank again**, and accept the internship-becomes-MD
+  failure back. I would not.
+
+---
+
+## 1. The labelling sheet — done its job for relevance
+
+**Relevance is 96.2% on the hand sheet at lexicon 35, with no false
+rejection at any version.** The criterion is 90%, so this half is met. The
+remaining work is item 0 above, which is a decision rather than more labelling.
+
+**More rows are welcome and no longer urgent.** 80 of 268 are filled in; the
+sheet still holds the rest if you want to keep going, and it is never
+destructive — re-running `sample` tops it up and preserves everything you have
+written.
 
 **The sheet no longer offers VP roles or postings in Kiruna.** It had been
 gating on `off_industry` alone while the board gates on four reasons, so it
@@ -40,7 +74,53 @@ was 2,061 postings and the gates took it to 637, of which you have done 59 and
 is a good sign rather than a bad one, since it means most of the ambiguity the
 frame existed to surface has been removed rather than deferred.
 
-**Six things your labels taught the lexicon**, each now a rule with tests:
+**What your last twenty-one rows taught it**, on top of the six below — each
+now a rule with tests, and each dry-run over all 157,464 postings first:
+
+- **A long body was overturning a title that had already named the job.**
+  `Wealth Advisor` with no body rejects; the *same title* with a
+  28,572-character body came back `undecided`, rescued by one phrase out of
+  the firm's own blurb. `Cloud Engineer` went further and came back as a keep.
+  The escape now needs a phrase that names markets *activity* — nothing writes
+  *statistical arbitrage* in passing.
+- **Where a specialty is the job, no markets context changes it.** Frontend,
+  devops, SRE, cloud, infrastructure, QA — six of your rows, one shape, all
+  reaching the board on the bare word *trading*, which is the name of the
+  platform. Bare `software engineer` and `developer` are deliberately *not* on
+  that list, so quant-dev roles are untouched.
+- **`VP` is an officer grade.** Four rows, all noted "filter out becuase VP
+  role". `_MANAGEMENT` had already been treating it as unreachable while the
+  seniority ladder called it mid-career — one word, two lists, two answers.
+- **Two bugs fell out of fixing that**: bare `director` had no equivalent of
+  the `Art Director` guard, and the ladder was reading the title *and the
+  department*, so a posting in a department called *Director Services* read as
+  a director.
+- **Lending is not markets** — `Distressed Loan Analyst`, `Senior Lending
+  Analyst`. Same "the qualifier is the whole difference" shape as `Credit Risk
+  Operations`.
+- **Brokerage, IB desks, student competitions** — vocabulary, each measured
+  against the postings the tagger already rates positively before going in.
+
+**One change I made, measured, and took back out**, because you should know it
+was considered: ranking `Quantitative Trader` above `Digital Assets Trader` on
+`trading_style`. It gains **one row out of eighty** and moves 194 postings,
+because your own labels put `Algorithmic Trader` at `less_relevant` and
+`Quantitative Trader` at `relevant` — the same category, two rungs — and at
+Flow Traders put `Graduate Trader` at `less_relevant` and `Digital Assets
+Trader` at `adjacent`. If there is a real distinction there, tell me what it
+is and I will encode it; from the sheet alone it is a coin flip.
+
+**One decision I made that is yours to overturn.** Your two PhD rows
+("perfect fit - but has hard requirement of phd") are **gated off the board
+rather than rejected**. Relevance stays `relevant`, because *perfect fit* is
+what you wrote and the role genuinely is this line of work; the posting leaves
+the page through `GATES`, the way `student_only` does. It costs two rows of
+agreement on the sheet and it is one line to reverse. Say the word if you would
+rather they reject outright. Bare `PhD` in a title deliberately does **not**
+gate — 220 titles carry it and 29 are real positives, `Campus Quantitative
+Researcher, PhD` among them.
+
+**Six things your earlier labels taught the lexicon**, each a rule with tests:
 
 1. **No management roles.** A management title rejects unless an unambiguous
    quant word appears — so `Director of Trading` and `Product Manager - B2C

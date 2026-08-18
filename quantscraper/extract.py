@@ -27,6 +27,7 @@ import json
 import re
 import sqlite3
 import urllib.error
+from concurrent.futures import ThreadPoolExecutor
 import urllib.parse
 import xml.etree.ElementTree as ElementTree
 from collections.abc import Callable
@@ -718,22 +719,52 @@ def targets(connection: sqlite3.Connection, limit: int) -> list[sqlite3.Row]:
     ).fetchall()
 
 
-def run(connection: sqlite3.Connection, limit: int) -> tuple[int, int, list[str]]:
-    """Pull postings for resolved boards. Returns (boards, jobs, failures)."""
+def _poll(row) -> tuple[object, list, str | None]:
+    """Fetch one board. Returns (row, postings, failure) -- never raises.
+
+    Runs on a worker thread, so it touches the network and nothing else. The
+    `sqlite3` connection stays on the calling thread: a connection is not
+    shared safely across threads, and the writes are fast next to the fetches.
+    """
+    try:
+        return row, EXTRACTORS[row["ats"]](row["token"]), None
+    # One board with an unexpected payload must not abandon the rest -- the
+    # same rule `fetch` follows for registries. Failures are returned and
+    # printed rather than swallowed, so a broken format is still loud.
+    except (urllib.error.HTTPError, urllib.error.URLError, ValueError, KeyError,
+            AttributeError, TypeError, IndexError, TimeoutError, OSError) as exc:
+        return row, [], f"{row['ats']}/{row['token']}: {type(exc).__name__} {exc}"
+
+
+def run(
+    connection: sqlite3.Connection, limit: int, workers: int = 12,
+) -> tuple[int, int, list[str]]:
+    """Pull postings for resolved boards. Returns (boards, jobs, failures).
+
+    **Polled in parallel, and this is the one command that was not.** Every
+    other network module here -- `ats`, `domains`, `pages`, `discover`,
+    `bodies` -- has run on a thread pool for exactly this reason, and Layer 3
+    was a plain serial loop over every resolved board. It is the slowest thing
+    in the pipeline by a wide margin: a Workday board pages twenty postings at
+    a time behind a one-second-per-host throttle, so State Street's 1,295
+    openings alone are sixty-five sequential seconds, and there are hundreds of
+    boards.
+
+    Politeness is unchanged, which is what makes this safe rather than merely
+    faster. `http._throttle` books its interval **per host** under a lock, so
+    two workers on two different boards never share a slot, and two workers on
+    the same host still queue one second apart. The comment on `_last_hit`
+    already made this argument for `domains`; nothing about it was specific to
+    domain probing.
+    """
     rows = targets(connection, limit)
     total = 0
     failures: list[str] = []
-    for row in rows:
-        extractor = EXTRACTORS[row["ats"]]
-        try:
-            jobs = extractor(row["token"])
-        # One board with an unexpected payload must not abandon the rest --
-        # the same rule `fetch` follows for registries. Failures are returned
-        # and printed rather than swallowed, so a broken format is still loud.
-        except (urllib.error.HTTPError, urllib.error.URLError, ValueError, KeyError,
-                AttributeError, TypeError, IndexError, TimeoutError, OSError) as exc:
-            failures.append(f"{row['ats']}/{row['token']}: {type(exc).__name__} {exc}")
-            continue
-        if jobs:
-            total += db.upsert_jobs(connection, row["domain"], jobs)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for row, jobs, failure in pool.map(_poll, rows):
+            if failure:
+                failures.append(failure)
+                continue
+            if jobs:
+                total += db.upsert_jobs(connection, row["domain"], jobs)
     return len(rows), total, failures

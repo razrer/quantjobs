@@ -46,6 +46,17 @@ from pathlib import Path
 from . import lexicon, tagging
 
 PATH = Path(__file__).with_name("labels.csv")
+AUTO_PATH = Path(__file__).with_name("auto_labels.csv")
+
+# Both sheets, scored together by default.
+#
+# `TAGGING.md` argued the machine sheet must never be the criterion -- "a model
+# grading a model agrees with it for the wrong reasons, and this one shares a
+# family with the classifier's author". That argument is about *unread* labels.
+# The user has since read the sheet and confirmed it, which is the step that
+# turns it from an echo into evidence, so it is scored alongside the hand sheet
+# and `labels` still reports each file on its own line.
+SHEETS = (PATH, AUTO_PATH)
 
 # Column order is reading order. What you type comes first so the cursor lands
 # on it, what you read comes next, the long description sits after that, and

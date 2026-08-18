@@ -131,8 +131,12 @@ named rules rather than a feeling:
   asset management, wealth. `investment analyst` and `portfolio analyst` had
   been filed as weak *positives*; nine consecutive hand-labelled rows said
   otherwise.
-- **Trading is fine.** Confirmed rather than assumed: it sits at
-  `less_relevant`, one step out from research, and stays readable.
+- **Trading is fine, and it splits.** Confirmed rather than assumed, then made
+  more specific by a later sheet: a *quant* trading seat is `relevant`, and a
+  pure one is `adjacent`. Both stay readable. The lexicon had called all
+  trading `less_relevant` while `trading_style` was already drawing the line —
+  108 pure seats against 14 quant — and the relevance ladder was not reading
+  it.
 
 **2b. `desk`** — `front_office` · `middle_office` · `back_office` · `unstated`
 
