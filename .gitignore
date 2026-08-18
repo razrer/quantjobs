@@ -2,6 +2,11 @@
 # the same data mid-write, and `*.sqlite3` does not match it.
 *.sqlite3
 *.sqlite3-journal
+# WAL mode replaces the rollback journal with these two, and neither is
+# matched by the patterns above. `db.connect` sets journal_mode=WAL, so
+# they exist on every run.
+*.sqlite3-wal
+*.sqlite3-shm
 
 # The board's data file, dumped from the database by `web/build_data.py`. Same
 # reasoning as above, and it is several megabytes.
