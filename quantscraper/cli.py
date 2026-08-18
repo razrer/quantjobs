@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 
 from . import (
     alerts, ats, audit, bodies, coverage, db, discover, domains, extract,
-    fca, jobstream, labels, mycareersfuture, pages, resolve, tagging,
+    fca, jobstream, labels, mycareersfuture, pages, resolve, sites, tagging,
 )
 from .registries import REGISTRIES
 
@@ -54,14 +54,22 @@ def _resolve(database: str) -> int:
     return 0
 
 
-def _audit(database: str, verbose: bool) -> int:
+def _audit(database: str, verbose: bool, job_pipeline: bool = False) -> int:
     connection = db.connect(database)
     if not connection.execute(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'firms'"
     ).fetchone():
         print("no firms table -- run `resolve` first", file=sys.stderr)
         return 1
-    print(audit.format_report(audit.run(connection, audit.load_roster()), verbose))
+    roster = audit.load_roster()
+    if job_pipeline:
+        # `discover` owns the roster-to-(names, domain) resolution, and it is
+        # wired here rather than imported by `audit` so that module keeps its
+        # one promise: it reads, and it depends on nothing that writes.
+        targets = discover.roster_targets(connection, roster)
+        print(audit.format_pipeline(audit.pipeline(connection, targets, roster)))
+        return 0
+    print(audit.format_report(audit.run(connection, roster), verbose))
     return 0
 
 
@@ -116,13 +124,23 @@ def _fca(database: str, limit: int) -> int:
     return 0
 
 
-def _ats(database: str, limit: int, workers: int) -> int:
+def _ats(database: str, limit: int, workers: int, reprobe: bool = False) -> int:
     connection = db.connect(database)
-    tally = ats.run(connection, limit, workers)
-    if tally:
-        print("resolved " + ", ".join(f"{n} tier {t}" for t, n in sorted(tally.items())))
+    if reprobe:
+        # A pattern added to `ats.py` changes what the stored answers should
+        # have been, and nothing re-asks on its own. Promotions only: see
+        # `ats.reprobe`.
+        checked, promoted, corrected = ats.reprobe(connection, limit, workers)
+        print(
+            f"re-walked {checked:,d} domains, {promoted:,d} promoted to tier A,"
+            f" {corrected:,d} careers pages moved off a platform"
+        )
     else:
-        print("nothing left to fingerprint")
+        tally = ats.run(connection, limit, workers)
+        if tally:
+            print("resolved " + ", ".join(f"{n} tier {t}" for t, n in sorted(tally.items())))
+        else:
+            print("nothing left to fingerprint")
 
     print("\ntiers")
     for row in ats.summary(connection):
@@ -201,6 +219,10 @@ def _bodies(database: str, limit: int, workers: int) -> int:
 
 def _jobs(database: str, limit: int, workers: int) -> int:
     connection = db.connect(database)
+    # Layer 3C rides Layer 3: each hand-written reader is an `ats_resolution`
+    # row like any board, so it has to exist before `targets` runs. Idempotent,
+    # and cheap enough not to need its own command.
+    sites.register(connection)
     boards, jobs, failures = extract.run(connection, limit, workers)
     print(f"polled {boards:,d} boards, wrote {jobs:,d} postings")
     for failure in failures[:10]:
@@ -651,6 +673,13 @@ def main(argv: list[str] | None = None) -> int:
     audit_command.add_argument(
         "-v", "--verbose", action="store_true", help="list what each hit matched"
     )
+    audit_command.add_argument(
+        "--pipeline",
+        action="store_true",
+        help="measure the job pipeline instead of the universe: which roster"
+        " firms actually produce postings, which is a different property and"
+        " was 16/163 while every hub reported 100%% present",
+    )
     domains_command = commands.add_parser(
         "domains", help="resolve firm names to domains (Layer 2)"
     )
@@ -678,6 +707,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     ats_command.add_argument("--limit", type=int, default=500)
     ats_command.add_argument("--workers", type=int, default=12)
+    ats_command.add_argument(
+        "--reprobe",
+        action="store_true",
+        help="re-walk tier B and tokenless tier A, which a new pattern may now"
+        " fingerprint; promotions only, never a demotion",
+    )
 
     discover_command = commands.add_parser(
         "discover", help="find the board a careers page never named (Layer 2C)"
@@ -829,7 +864,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "jobs":
         return _jobs(args.db, args.limit, args.workers)
     if args.command == "ats":
-        return _ats(args.db, args.limit, args.workers)
+        return _ats(args.db, args.limit, args.workers, args.reprobe)
     if args.command == "domains":
         return _domains(args.db, args.limit, args.workers, args.regrade)
     if args.command == "fca":
@@ -839,7 +874,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "resolve":
         return _resolve(args.db)
     if args.command == "audit":
-        return _audit(args.db, args.verbose)
+        return _audit(args.db, args.verbose, args.pipeline)
     return _fetch(args.registries or list(REGISTRIES), args.db)
 
 

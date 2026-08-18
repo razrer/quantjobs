@@ -459,6 +459,96 @@ Each of these silently produced wrong results before being caught:
   user; `www.teamtailor.com` fits the `{board}.teamtailor.com` shape and yields
   `www`. `ats.py` filters both against a list of infrastructure hostnames.
   Always read the first handful of tokens before trusting a batch.
+- **A board URL escaped inside a JSON island matches no host pattern.** Julius
+  Baer ships its navigation as JSON inside an HTML attribute, so its Workday
+  board arrives as
+  `&quot;https:\/\/juliusbaer.wd3.myworkdayjobs.com\/en-US\/External&quot;`
+  — neither the slashes nor the quotes are what the pattern expects, and a
+  Switzerland roster firm sat in tier B with a live feed behind it. `fingerprint`
+  unescapes before matching. On a random tier-B sample that rescues 1 page in
+  400 and the number is not the argument: tier B at large is wealth advisers
+  with WordPress sites, and among the tier-B *roster* firms it rescued one in
+  ten. Pick the frame before believing a yield.
+- **A social profile is not a careers page, and it out-ranks the real one.**
+  `careers_candidates` ranks off-site links first — an off-site careers link is
+  usually the ATS itself — so a firm linking "Jobs" to LinkedIn or "werken bij"
+  to Instagram puts a platform URL at the top, and only three candidates are
+  ever fetched. `handelsbanken.se` and `pggm.nl` both resolved that way; 53
+  domains tiered B on a social page. `resolve.is_platform_domain` is the answer
+  here as in the three layers it already guards.
+- **Oracle Fusion's board token is `podhost|siteNumber`, and neither half works
+  alone.** The pod host (`ejqi.fa.ocs.oraclecloud.eu`) is the customer's own
+  Fusion instance, and `CX_1001` is Oracle's default site number that most
+  tenants keep — so a token of the site collides across every firm on the
+  platform. `TotalJobsCount` is honest on every page, including one past the
+  end, so Oracle has no `total: 0` trap; it is still used as a *check* against
+  what arrived rather than as the stop condition, which is the rule that caught
+  Jobvite's missing slash.
+- **`tbe.taleo.net` is Taleo Business Edition, a host every small tenant
+  shares.** `varde.com` and `hanoverco.com` both resolved to the board `tbe`
+  and `uhgcu.org` to `baxter` — a token several unrelated domains agree on is
+  the vendor's infrastructure, which is the signal `_NOT_A_TOKEN` exists for.
+  Taleo is unreadable *and* mis-tokenised; treat its 11 rows as unresolved.
+- **SuccessFactors puts the board in the query string, not the host.** 59
+  boards carry `career{N}.successfactors.{eu,com}` with a NULL token because
+  the company is `?company=pfapensionP`. Reading it is a dead end regardless:
+  the career site answers 206 KB of shell with no job id, with or without a
+  session and its `_s.crb` token, and the vendor's RSS path 404s. PFA and Swiss
+  Re are here.
+- **Guessing careers paths rescues tier C into tier B and no further.** 150
+  tier-C domains re-walked with `/careers`, `/jobb`, `/karriere` and the rest:
+  23 became readable pages, **none fingerprinted to any ATS**. Same answer
+  Stage 13 got about tier B — that population has no board, and the firms that
+  matter are reached by `discover`.
+- **Some roster firms run no ATS at all, and Stockholm is where that shows.**
+  `audit --pipeline` put Stockholm at 7/20 and hand-probing the misses found
+  AP4 publishing five openings as ordinary links, AP7 four as bolded titles
+  linking out to two different recruiters, Brummer one as a paragraph, and
+  Nordea 112 through a JSON endpoint on its own domain. There is no vendor to
+  fingerprint. `sites.py` is the answer and is deliberately a short list: each
+  reader rides Layer 3 as `ats='site'`, and each **raises** rather than
+  returning `[]` when the anchor it keys on is missing, because an empty board
+  and a broken parser are opposite facts that look identical from outside.
+- **A firm that advertises nothing says so, and that sentence is the anchor.**
+  Captor and Norron have no board -- one line saying there are no vacancies and
+  an email address. A reader returning `[]` for them would be indistinguishable
+  from one whose page had been redesigned underneath it, so `_prose_board`
+  requires *either* a posting *or* the no-vacancies phrase.
+- **A hand-edited careers page has no house style.** AP7 writes three of its
+  four openings as `<a><strong>Title</strong></a>` and the fourth as
+  `<strong><a>Title</a></strong>` -- and the fourth is the Senior Portfolio
+  Manager, Asset Allocation seat. One nesting cost the most relevant row on the
+  page.
+- **`sjunde.se` is not AP7.** It is *Sjunde Konsultbolaget*, a Stockholm IT
+  consultancy, and it resolved on a weak name match while `fi_se` publishes no
+  website for the fund. `discover._domain_for` asked only that a domain be
+  non-NULL, so a weak row on the roster's spelling beat a registry-published
+  one on the full name. It prefers non-weak now over both sources before
+  falling back -- *excluding* weak outright was tried and is worse, because
+  Coeli resolves to `coeli.com` weakly and by no other route.
+- **Two roster firms had ceased to exist.** AP1 and AP6 were both wound up at
+  the end of 2025 by riksdag decision (`ap1.se`: "AP1:s verksamhet upphörde vid
+  utgången av 2025"; `ap6.se`: "Sjätte AP-fondens verksamhet upphörde"), and
+  their domains now serve AP4's and AP2's sites. A roster line that names a
+  dead firm is a permanent miss nobody can close -- check the page before
+  building a reader for it.
+- **Some boards name the firm only in the location field.** Hailey HR labels
+  every card with a *workplace*, so Coeli's eight postings say `Coeli Stockholm
+  HK` and name the firm nowhere else -- titles are ordinary, bodies are Swedish
+  prose. `discover.corroboration_text` reads location for this reason; the URL
+  is still never read, because a guessed board carries the guess in every link.
+- **Entities were never decoded, and HTML-sourced formats carry them.** Coeli's
+  `Business &amp; Risk Operations` folded to the token `amp`; Swedish spells
+  `ä` as `&#xE4;`, which would fold to nothing a needle matches. `extract._text`
+  runs `html.unescape` now -- same class of silent damage as the `fold` bug.
+- **Handelsbanken publishes its Swedish jobs on LinkedIn only.** Its careers
+  page links there and nowhere else; the `careers.handelsbanken.co.uk` API its
+  own bundle names is the **UK** board (46 jobs, all UK). A structural limit,
+  not a gap -- LinkedIn is deliberately out of scope.
+- **A few large firms simply refuse us**, and it is not our trust store this
+  time: ABN AMRO answers 503, Nasdaq times out, Citadel Securities and Jyske
+  Bank answer 403. `curl` with a browser UA reaches all four. Recorded as a
+  structural limit rather than chased.
 - **Form ADV** `Website Address` is a LinkedIn page for over 4,000 filers, plus
   ~2,000 more on other social platforms. Useless for domain resolution, and it
   merges the whole long tail into one firm if used as an identity key.

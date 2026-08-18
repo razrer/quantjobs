@@ -360,3 +360,35 @@ class WorkdayHostTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CorroborationFieldsTest(unittest.TestCase):
+    """Which posting fields may prove a board belongs to a firm."""
+
+    def _job(self, **kwargs):
+        from quantscraper.models import Job
+
+        base = dict(ats="hailey", token="coeli", job_id="1", title="Private Equity Associate")
+        base.update(kwargs)
+        return Job(**base)
+
+    def test_the_employing_entity_in_the_location_field_corroborates(self):
+        """Hailey HR labels every card with a workplace, not a city.
+
+        Coeli's eight postings say `Coeli Stockholm HK` and name the firm
+        nowhere else -- the titles are ordinary and the bodies are Swedish
+        prose about the role. Without the location the board was rejected as
+        belonging to another firm, which is the opposite of the truth.
+        """
+        jobs = [self._job(location="Coeli Stockholm HK")]
+        self.assertIsNotNone(discover.corroborate("coeli", jobs, None))
+
+    def test_the_url_still_never_corroborates(self):
+        """Every posting on a guessed board carries the guess in its link."""
+        jobs = [self._job(url="https://coeli.careers.haileyhr.app/x", location="Stockholm")]
+        self.assertIsNone(discover.corroborate("coeli", jobs, None))
+
+    def test_a_lone_word_of_a_multi_word_firm_is_still_not_proof(self):
+        """`_needles` grades it weak, which is what contains the location rule."""
+        jobs = [self._job(location="Capital Stockholm")]
+        self.assertIsNone(discover.corroborate("capital fund management", jobs, None))

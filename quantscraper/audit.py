@@ -271,3 +271,210 @@ def format_report(results: list[Result], verbose: bool = False) -> str:
         lines.append("")
 
     return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------
+# The other coverage question: is the firm *polled*, not merely *present*?
+#
+# `run` above measures the employer universe. That is not the same property as
+# being in the job pipeline, and the two had drifted completely apart without
+# anything saying so: every focus hub reported 100% present while 147 of the
+# 163 roster firms produced no postings at all. Being in `employers` and having
+# a board somebody reads are different facts, and only the first was checked.
+#
+# Stage 13 fixed a large part of that and the number was quoted from a
+# throwaway script, which is the same "typed fresh each time" problem this
+# module was written to end. It is a command now.
+
+
+
+
+@dataclass(slots=True)
+class PipelineResult:
+    """One roster *line*, and how many postings the firm behind it contributes.
+
+    Per line, not per firm, and that is deliberate: Jane Street occupies four
+    roster lines because it hires in four hubs, and "is Hong Kong covered?" has
+    to count it in Hong Kong. `discover.roster_targets` dedupes -- correctly,
+    since probing one firm four times is waste -- so the two views are rejoined
+    here. The headline count dedupes again; only the per-hub rates do not.
+    """
+
+    entry: Entry
+    domain: str | None
+    postings: int
+    # How the postings were found. `domain` is the normal path -- the board was
+    # reached from the firm's own host. `employer` is the path for the sources
+    # whose board is not one firm's own (JobStream, MyCareersFuture), where the
+    # advertiser's name is the only handle there is.
+    via: str | None = None
+    # Whether a board exists that Layer 3 can actually poll. This is a
+    # different question from `postings` and the gap between them is the whole
+    # point: Captor's careers page says "For tillfallet har vi inga lediga
+    # tjanster", so it is read, understood and empty. Reporting that as a
+    # coverage miss would send someone to build a reader that already exists,
+    # and no amount of engineering makes a firm advertise a job it does not
+    # have.
+    board: bool = False
+
+    @property
+    def polled(self) -> bool:
+        return self.postings > 0
+
+
+def pipeline(
+    connection: sqlite3.Connection, targets, roster: list[Entry]
+) -> list[PipelineResult]:
+    """Postings per roster line, given `discover.roster_targets`.
+
+    `targets` is passed in rather than built here so this module keeps its one
+    promise: it reads, and it imports nothing that writes.
+
+    **Both tables are read once and matched in memory.** The obvious shape is a
+    `LIKE '%name%'` per firm per spelling, which is a full scan of 157,000
+    postings several hundred times over and takes minutes. The distinct
+    employer names are a few thousand rows; scanning those is instant, and the
+    answer is identical.
+    """
+    by_domain = {
+        row["domain"]: row["n"]
+        for row in connection.execute(
+            "SELECT domain, COUNT(*) AS n FROM jobs"
+            " WHERE domain IS NOT NULL GROUP BY domain"
+        )
+    }
+    by_employer = [
+        (row["employer"].casefold(), row["n"])
+        for row in connection.execute(
+            "SELECT employer, COUNT(*) AS n FROM jobs"
+            " WHERE employer IS NOT NULL GROUP BY employer"
+        )
+    ]
+    # Domains with a board Layer 3 can address. Guarded because this module is
+    # also used before any fingerprinting has run, and a missing table is not
+    # an error -- it means nothing has been resolved yet.
+    pollable: set[str] = set()
+    if connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ats_resolution'"
+    ).fetchone():
+        pollable = {
+            row["domain"]
+            for row in connection.execute(
+                "SELECT domain FROM ats_resolution"
+                " WHERE tier = 'A' AND token IS NOT NULL"
+            )
+        }
+
+    counted = {}
+    for target in targets:
+        postings, via = by_domain.get(target.domain or "", 0), None
+        if postings:
+            via = "domain"
+        else:
+            # Best spelling first, and the first that hits wins -- the same
+            # order `discover` builds tokens in, so a firm reported as reached
+            # by name was reached under a name it actually publishes.
+            for name in target.names:
+                folded = name.casefold()
+                hits = sum(n for employer, n in by_employer if folded in employer)
+                if hits:
+                    postings, via = hits, "employer"
+                    break
+        counted[normalize_name(target.label) or target.label] = (
+            target.domain,
+            postings,
+            via,
+            target.domain in pollable,
+        )
+
+    results = []
+    for entry in roster:
+        if entry.expected_absent:
+            continue
+        domain, postings, via, board = counted.get(
+            normalize_name(entry.name) or entry.name, (None, 0, None, False)
+        )
+        results.append(PipelineResult(entry, domain, postings, via, board))
+    return results
+
+
+def format_pipeline(results: list[PipelineResult]) -> str:
+    """The report, focus hubs first and the misses named.
+
+    Naming them is the whole value. A rate says how much is missing; only the
+    list says *what*, and every firm on it is a specific piece of work --
+    Danske Bank was on it, tier B with 139 Oracle postings behind it.
+    """
+    firms = {normalize_name(r.entry.name) or r.entry.name: r for r in results}
+    producing = [r for r in firms.values() if r.polled]
+    reached = [r for r in firms.values() if r.polled or r.board]
+    lines = [
+        f"job pipeline -- {len(reached)}/{len(firms)} roster firms are reached,"
+        f" {len(producing)} produce postings today",
+        "",
+        "present (the universe) and polled (the pipeline) are different",
+        "properties. `audit` alone measures the first, and every focus hub",
+        "reported 100% present while the second was 16/163.",
+        "",
+        "  reached   = a board Layer 3 can poll, or postings already in hand",
+        "  producing = that board has an opening on it right now",
+        "",
+        "The gap between them is not a gap in coverage. Captor's careers page",
+        "says it has no vacancies -- read, understood, and empty. No amount of",
+        "engineering makes a firm advertise a job it does not have; a reader",
+        "buys that the day it does, the posting arrives unasked.",
+        "",
+        "Hub rates count roster lines, so a firm hiring in four hubs is",
+        "counted in four -- the question is whether the hub is covered.",
+        "",
+    ]
+
+    hubs: dict[tuple[str, str], list[PipelineResult]] = {}
+    for result in results:
+        hubs.setdefault((result.entry.priority, result.entry.hub), []).append(result)
+
+    for priority in (FOCUS, "deprioritized"):
+        chosen = {h: rs for (p, h), rs in hubs.items() if p == priority}
+        if not chosen:
+            continue
+        lines.append(f"{priority} hubs")
+        lines.append(f"  {'':14s}{'reached':^13s}{'producing':^13s} postings")
+        for hub, rows in sorted(chosen.items(), key=lambda kv: -len(kv[1])):
+            got = [r for r in rows if r.polled]
+            have = [r for r in rows if r.polled or r.board]
+            lines.append(
+                f"  {hub:<14s}"
+                f"{len(have):3d}/{len(rows):<3d}({100 * len(have) / len(rows):4.0f}%)"
+                f"  {len(got):3d}/{len(rows):<3d}({100 * len(got) / len(rows):4.0f}%)"
+                f"  {sum(r.postings for r in got):7,d}"
+            )
+        lines.append("")
+
+    # Only firms with *no board at all* are work. A firm with a reader and no
+    # openings is finished, and listing it as a miss is how a work queue fills
+    # with things nobody can fix.
+    missing = {
+        (r.entry.hub, r.entry.name): r
+        for r in results
+        if not r.polled and not r.board and r.entry.priority == FOCUS
+    }
+    if missing:
+        lines.append("focus-hub firms with no pollable board -- each is a piece of work")
+        for (hub, name), result in sorted(missing.items()):
+            lines.append(
+                f"  {hub:<14s}{name:<32s} {result.domain or '(no domain)'}"
+            )
+        lines.append("")
+
+    quiet = sorted(
+        (r.entry.hub, r.entry.name)
+        for r in results
+        if r.board and not r.polled and r.entry.priority == FOCUS
+    )
+    if quiet:
+        lines.append("focus-hub firms reached, with nothing posted today")
+        for hub, name in quiet:
+            lines.append(f"  {hub:<14s}{name}")
+        lines.append("")
+
+    return "\n".join(lines)

@@ -36,6 +36,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from . import db, http
+from .resolve import is_platform_domain
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS ats_resolution (
@@ -139,6 +140,27 @@ ATS_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("breezy", re.compile(_HOST_LABEL + r"\.breezy\.hr", re.I)),
     ("join", re.compile(r"join\.com/companies/([a-z0-9_-]+)", re.I)),
     ("homerun", re.compile(_HOST_LABEL + r"\.homerun\.co", re.I)),
+    # Hailey HR, a Nordic ATS on its own hostname per customer. Coeli sat in
+    # tier C with eight openings behind it -- the careers link on its homepage
+    # points at `coeli.careers.haileyhr.app`, which nothing recognised.
+    ("hailey", re.compile(_HOST_LABEL + r"\.careers\.haileyhr\.app", re.I)),
+    # Oracle Fusion Recruiting, which nothing here recognised until Danske Bank
+    # -- a Copenhagen roster firm -- was found sitting in tier B with 139 live
+    # postings behind it. The board is addressed by two parts that are not
+    # adjacent in the URL: the *pod host* (`ejqi.fa.ocs.oraclecloud.eu`, which
+    # is the customer's Fusion instance and differs per firm and per region)
+    # and the *site number* (`CX_1001`, which names the career site on it).
+    # A firm may run several sites on one pod, so neither half identifies a
+    # board alone. `_ORACLE_HCM` assembles `host|site` for the same reason
+    # `_workday_token` assembles three parts by name rather than by position.
+    (
+        "oracle_hcm",
+        re.compile(
+            r"(?P<host>" + _LABEL + r"\.fa\.[a-z0-9]{1,20}\.oraclecloud\.(?:com|eu))"
+            r"/hcmUI/CandidateExperience/(?:[A-Za-z_-]{1,12}/)?sites/(?P<site>[A-Za-z0-9_]{1,40})",
+            re.I,
+        ),
+    ),
 )
 
 # Careers links in the languages of the focus hubs. Missing the Swedish or
@@ -285,6 +307,79 @@ def _workday_token(match: re.Match[str]) -> str | None:
     return f"{token}|{parts['host']}" if parts.get("host") else token
 
 
+# Escapes that hide a board URL from every host pattern above.
+#
+# Julius Baer's careers page carries its navigation as a JSON blob inside an
+# HTML attribute, so the Workday board arrives spelled
+# `&quot;https:\/\/juliusbaer.wd3.myworkdayjobs.com\/en-US\/External&quot;`
+# -- doubly escaped, because it is JSON inside a JSON string inside an
+# attribute. Neither the slashes nor the quotes are what the pattern expects,
+# so a Switzerland roster firm tiered B with a live feed behind it. Any site
+# rendering its links through a JSON island does the same, which today is most
+# of them.
+#
+# Undoing the escapes can only *add* matches, and every guard downstream still
+# applies: `_is_infrastructure` still rejects a vendor's own host, and Layer 3
+# still has to read the board before anything is recorded against it.
+#
+# Longest first, so the doubled form is consumed before the single one turns
+# its leading backslash into a stray character.
+_ESCAPES = (
+    ("\\\\/", "/"),  # \\/ -- JSON encoded again inside a JSON string
+    ("\\/", "/"),  # \/  -- ordinary JSON string escaping
+    ("\\u002F", "/"),  # the same slash, written as a code point
+    ("\\u002f", "/"),
+    ("&#x2F;", "/"),
+    ("&#x2f;", "/"),
+    ("&#47;", "/"),
+    ("&quot;", '"'),
+    ("&#39;", "'"),
+    ("&amp;", "&"),
+)
+
+
+def _unescape(markup: str) -> str:
+    """Markup with JSON and HTML escaping undone, for matching only.
+
+    Nothing is stored from this -- `fingerprint` matches against it and the
+    evidence it returns is the unescaped span, which is what a reader wants to
+    see anyway.
+    """
+    for escaped, plain in _ESCAPES:
+        if escaped in markup:
+            markup = markup.replace(escaped, plain)
+    return markup
+
+
+def _oracle_hcm_token(match: re.Match[str]) -> str | None:
+    """`podhost|siteNumber`, because neither half names a board on its own.
+
+    The pod host is the customer's own Fusion instance -- `ejqi.fa.ocs.
+    oraclecloud.eu` is Danske Bank's -- so it is not vendor infrastructure the
+    way `boards-api.greenhouse.io` is, and it cannot be dropped. The site
+    number is not unique either: `CX_1001` is Oracle's default and most
+    tenants keep it, so a token of the site alone would collide across every
+    firm on the platform. Both, joined, address exactly one board.
+    """
+    parts = match.groupdict()
+    host, site = parts.get("host"), parts.get("site")
+    if not (host and site):
+        return None
+    return f"{host.casefold()}|{site}"
+
+
+# Formats whose token is assembled from named groups rather than taken from the
+# first captured one. Both of these address a board with parts that appear in
+# the URL in an order the pattern cannot rely on -- Workday because its two
+# hosts invert tenant and `wdN`, Oracle because the pod host and the site
+# number are separated by a fixed path segment. Everything else takes the first
+# non-empty group.
+_TOKEN_BUILDERS = {
+    "workday": _workday_token,
+    "oracle_hcm": _oracle_hcm_token,
+}
+
+
 def fingerprint(markup: str, url: str | None = None) -> tuple[str, str | None, str] | None:
     """(ats, token, evidence) for the first ATS the markup points at.
 
@@ -294,15 +389,15 @@ def fingerprint(markup: str, url: str | None = None) -> tuple[str, str | None, s
     `url` is where the markup came from, and it is only needed for the
     custom-domain case below, where the page's own host *is* the board.
     """
+    markup = _unescape(markup)
     for name, pattern in ATS_PATTERNS:
         for match in pattern.finditer(markup):
             groups = [g for g in match.groups() if g]
-            # Workday's parts are all needed and the two hosts order them
-            # differently, so they are assembled by name. Everything else takes
-            # the first non-empty group as its board token.
-            token = _workday_token(match) if name == "workday" else (
-                groups[0] if groups else None
-            )
+            # A few formats need their parts assembled by name -- see
+            # `_TOKEN_BUILDERS`. Everything else takes the first non-empty
+            # group as its board token.
+            build = _TOKEN_BUILDERS.get(name)
+            token = build(match) if build else (groups[0] if groups else None)
             if token is None:
                 continue  # tenant without a site is not pollable
             if _is_infrastructure(token):
@@ -331,7 +426,26 @@ def fingerprint(markup: str, url: str | None = None) -> tuple[str, str | None, s
 
 
 def careers_candidates(markup: str, domain: str) -> list[str]:
-    """Careers URLs linked from a homepage, most promising first."""
+    """Careers URLs linked from a homepage, most promising first.
+
+    Off-site links rank above on-site ones, because an off-site careers link is
+    usually the ATS itself -- which is the whole thing being looked for.
+
+    **That ranking is exactly why a social profile has to be excluded.** A firm
+    linking "Jobs" to its LinkedIn page or "werken bij" to an Instagram account
+    puts a platform URL at the top of this list, and only three candidates are
+    ever fetched, so the firm's real careers page is never looked at. Both of
+    those are real: `handelsbanken.se` resolved to
+    `linkedin.com/company/handelsbanken/jobs/` and `pggm.nl` to
+    `instagram.com/werkenbijpggm/`, and both are roster firms in a focus hub.
+    53 domains sat in tier B on a social page.
+
+    `resolve.is_platform_domain` is the same list Stage 1 uses to refuse a
+    shared host as a firm identity and Layer 2C uses to refuse one as a board's
+    domain. This is the fourth layer it leaks into and the answer is the same
+    one: a host thousands of unrelated firms publish on is nobody's careers
+    page.
+    """
     found: list[str] = []
     for href in _HREF.findall(markup):
         low = href.casefold()
@@ -340,9 +454,8 @@ def careers_candidates(markup: str, domain: str) -> list[str]:
         url = urllib.parse.urljoin(f"https://{domain}/", href.strip())
         if not url.startswith("http"):
             continue
-        # An off-site careers link is usually the ATS itself, which is exactly
-        # what we are looking for, so those are kept and ranked first.
-        offsite = urllib.parse.urlsplit(url).netloc.casefold().endswith(domain) is False
+        if is_platform_domain(urllib.parse.urlsplit(url).netloc):
+            continue
         if url not in found:
             found.append(url)
         if len(found) > 40:
@@ -435,6 +548,48 @@ def targets(connection: sqlite3.Connection, limit: int) -> list[str]:
     return [row["domain"] for row in rows]
 
 
+def reprobe_targets(connection: sqlite3.Connection, limit: int) -> list[sqlite3.Row]:
+    """Domains whose stored answer predates a fingerprinting fix.
+
+    A pattern added here changes what the *stored* answers should have been,
+    and nothing re-asks on its own: a firm tiered B before Oracle was
+    recognised stays tier B forever, which is exactly the silent state this
+    module's docstring warns about. `domains --regrade` exists for the same
+    reason one layer down.
+
+    Two populations, and each is a specific failure rather than "everything":
+
+      * **tier B** -- a careers page ran on nothing recognised. This is where a
+        new pattern pays: Danske Bank was here with 139 Oracle postings, and
+        Julius Baer with a Workday board escaped inside a JSON island. The 53
+        rows whose careers page is a LinkedIn or Instagram profile are tier B
+        too, so they come along.
+      * **tier A with no token** -- a board nobody can poll. `targets` skips it
+        because it *is* tiered, and a tier-B sweep never touches it either. 98
+        rows sat in that state once, `lynxhedge.se` among them.
+
+    Tier C is deliberately absent. It was measured rather than assumed: 150
+    tier-C domains were re-walked with the standard careers paths guessed on
+    the firm's own host, 23 became readable pages and **none of them
+    fingerprinted to any ATS**. The tier-C population is small advisers with no
+    board, which is the same answer Stage 13 got about tier B in general -- the
+    firms that matter there are reached by `discover`, not by another crawl.
+
+    The stored `careers_url` comes back with each row, because `reprobe` needs
+    to know what it is replacing.
+    """
+    return connection.execute(
+        """
+        SELECT domain, careers_url FROM ats_resolution
+        WHERE tier = 'B'
+           OR (tier = 'A' AND token IS NULL)
+        ORDER BY tier, domain
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+
+
 def record(connection: sqlite3.Connection, results: list[Resolution]) -> None:
     timestamp = db.now()
     with connection:
@@ -466,6 +621,72 @@ def run(connection: sqlite3.Connection, limit: int, workers: int = 12) -> dict[s
                 batch.clear()
     record(connection, batch)
     return tally
+
+
+def _improves(result: Resolution, stored: sqlite3.Row) -> bool:
+    """Whether a re-walk's answer is worth writing over the stored one.
+
+    **A re-probe may only improve, never demote.** The whole population is
+    already tiered B or A, and a host that times out during one sweep would
+    otherwise fall to tier C -- which deletes the careers URL `pages.py` has
+    been diffing for months, on the strength of one bad request. Same asymmetry
+    `discover.record` enforces one layer over: a wrong board is cheap, losing a
+    working feed is not.
+
+    Two answers qualify:
+
+      * a pollable board, which is the point of the sweep;
+      * a real careers page replacing a *platform* one. That is not a
+        promotion -- it stays tier B -- but leaving it alone would keep Layer 3B
+        diffing `instagram.com/werkenbijpggm/` forever, watching a page that
+        can never carry a posting. The walk stopped producing those; the stored
+        rows still hold them.
+    """
+    if result.tier == "A" and result.token:
+        return True
+    old = stored["careers_url"]
+    return bool(
+        result.careers_url
+        and old
+        and is_platform_domain(urllib.parse.urlsplit(old).netloc)
+        and not is_platform_domain(urllib.parse.urlsplit(result.careers_url).netloc)
+    )
+
+
+def reprobe(
+    connection: sqlite3.Connection, limit: int, workers: int = 12
+) -> tuple[int, int, int]:
+    """Re-walk the domains a fingerprinting fix could have changed.
+
+    Returns (re-checked, promoted to tier A, careers pages corrected).
+    """
+    connection.executescript(SCHEMA)
+    rows = reprobe_targets(connection, limit)
+    if not rows:
+        return 0, 0, 0
+
+    checked = promoted = corrected = 0
+    batch: list[Resolution] = []
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for stored, result in zip(rows, pool.map(resolve_domain, [r["domain"] for r in rows])):
+            checked += 1
+            if not _improves(result, stored):
+                continue
+            if result.tier == "A":
+                promoted += 1
+            else:
+                corrected += 1
+            batch.append(result)
+            # Written in tens rather than hundreds, because an improvement here
+            # is rare -- a whole sweep may find a few dozen across four thousand
+            # domains -- and an hour of walking that ends in a crash should not
+            # lose them. `run` batches at 100 because every domain it visits
+            # produces a row.
+            if len(batch) >= 10:
+                record(connection, batch)
+                batch.clear()
+    record(connection, batch)
+    return checked, promoted, corrected
 
 
 def summary(connection: sqlite3.Connection):

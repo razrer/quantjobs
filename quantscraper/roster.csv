@@ -35,13 +35,13 @@ Stockholm,focus,Captor,Captor Fund Management,active,
 Stockholm,focus,Coeli,Coeli Asset Management,active,
 Stockholm,focus,Norron,Norron Asset Management,active,Fund management business being sold to Simplicity AB (announced July 2026).
 Stockholm,focus,Atlant,Atlant Fonder,active,
-Stockholm,focus,AP1,Första AP-fonden,active,Not FI-supervised; carried by the seed registry.
+Stockholm,focus,AP1,Första AP-fonden,absent,"Wound up. ap1.se: ""Första AP-fonden (AP1) har avvecklats ... AP1:s verksamhet upphörde vid utgången av 2025"" — riksdag restructuring of the buffer funds; the domain now serves AP4's site."
 Stockholm,focus,AP2,Andra AP-fonden,active,Not FI-supervised; carried by the seed registry.
 Stockholm,focus,AP3,Tredje AP-fonden,active,Not FI-supervised; carried by the seed registry.
 Stockholm,focus,AP4,Fjärde AP-fonden,active,Not FI-supervised; carried by the seed registry.
 Stockholm,focus,AP5,Femte AP-fonden,absent,No Femte AP-fonden exists. The buffer funds are AP1-AP4 and AP6; AP7 runs the premium pension default.
-Stockholm,focus,AP6,Sjätte AP-fonden,active,Not FI-supervised; carried by the seed registry.
-Stockholm,focus,AP7,Sjunde AP-fonden,active,
+Stockholm,focus,AP6,Sjätte AP-fonden,absent,"Wound up. ap6.se: ""Sjätte AP-fondens verksamhet upphörde enligt riksdagens beslut vid utgången av 2025, efter 30 år"" — the domain now serves AP2's site."
+Stockholm,focus,AP7,Sjunde AP-fonden,active,"Domain is ap7.se. sjunde.se is Sjunde Konsultbolaget, an unrelated Stockholm IT consultancy, and resolved as a false match."
 Stockholm,focus,Nasdaq Stockholm,Nasdaq Clearing,active,No bare "Nasdaq" alias -- it matches every index fund tracking the Nasdaq-100. Note "Nasdaq AB" is also unsafe: normalization strips AB as a legal form and leaves the bare token.
 Stockholm,focus,SEB,Skandinaviska Enskilda Banken,active,
 Stockholm,focus,Handelsbanken,Svenska Handelsbanken,active,

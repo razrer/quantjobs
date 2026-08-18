@@ -94,6 +94,13 @@ DISCOVERABLE: tuple[str, ...] = (
     "personio",
     "bamboohr",
     "breezy",
+    # Hailey HR addresses a board as `{token}.careers.haileyhr.app`, which is a
+    # single guessable name like the rest of this list. It is here because
+    # Coeli sat in tier C -- its careers page is on `coeli.se` while the roster
+    # holds `coeli.com`, so the walk from the roster's domain never reached the
+    # link -- with eight openings behind it. A Nordic vendor is exactly the
+    # case a name guess rescues when a domain walk cannot.
+    "hailey",
 )
 
 # Descriptions are where a firm names itself -- "At Jane Street, we..." -- but
@@ -210,14 +217,28 @@ def board_name(ats: str, token: str) -> str | None:
 def corroboration_text(jobs: list[Job], name: str | None) -> str:
     """Everything about a board that could name its owner, folded for matching.
 
-    Titles, departments and descriptions only. **Never the URL**: every posting
-    on a guessed board carries the guessed token in its link, so matching on
-    that would be the board agreeing with the question it was asked.
+    Titles, departments, locations and descriptions. **Never the URL**: every
+    posting on a guessed board carries the guessed token in its link, so
+    matching on that would be the board agreeing with the question it was
+    asked. The location is not that -- it is a field the employer filled in.
+
+    **Location is here because some boards put the employing entity in it.**
+    Hailey HR labels every card with a *workplace* rather than a city, so
+    Coeli's eight postings say `Coeli Stockholm HK` and say `Coeli` nowhere
+    else: the titles are ordinary job titles and the bodies are Swedish prose
+    about the role. Without this the board was rejected as "a live board that
+    named another firm", which is the opposite of what it is.
+
+    The risk it introduces is narrow and worth naming: a firm whose whole name
+    is one word that is also a place would corroborate off any posting in that
+    place. `_needles` is what contains it -- a lone word is graded weak the
+    moment a firm has more than one, and only strong needles count.
     """
     parts: list[str] = [name] if name else []
     for job in jobs[:_CORROBORATION_POSTINGS]:
         parts.append(job.title or "")
         parts.append(job.department or "")
+        parts.append(job.location or "")
         parts.append((job.description or "")[:_CORROBORATION_CHARS])
     return fold_text(" ".join(parts))
 
@@ -455,16 +476,36 @@ def _domain_for(connection: sqlite3.Connection, result) -> str | None:
     firms also claim, and the *next* discovery to land there would be blocked
     by the no-clobber guard -- so the first firm to arrive would quietly own a
     host belonging to everybody. Better no domain than that one.
+
+    **A weak match is a last resort, and it was being taken as a first one.**
+    `domains.py` grades every guess strong or weak and `domains.coverage`
+    counts only the strong, because one word out of several is not proof. This
+    asked only that a domain be non-NULL, so a weak row on the roster's own
+    spelling beat a *registry-published* one on the firm's full name:
+    `Sjunde AP-fonden` weakly matched `sjunde.se`, which is Sjunde
+    Konsultbolaget, an unrelated Stockholm IT consultancy, while the seed
+    registry gives AP7 `ap7.se` outright. Four openings sat behind the wrong
+    host.
+
+    So grade beats name order: every non-weak row is tried, over both sources,
+    before any weak one. Excluding weak rows outright was tried and is worse --
+    Coeli resolves to `coeli.com` weakly and by no other route, and dropping it
+    left a live eight-posting board with no domain to attach itself to. The
+    fuzziness is tolerable precisely because `record` refuses to overwrite a
+    working board with it.
     """
-    for source in (result.entry.candidates, tuple(result.firms.values())):
-        for name in source:
-            row = connection.execute(
-                "SELECT domain FROM domain_lookups"
-                " WHERE query = ? AND domain IS NOT NULL",
-                (name,),
-            ).fetchone()
-            if row and not is_platform_domain(row["domain"]):
-                return row["domain"]
+    sources = (result.entry.candidates, tuple(result.firms.values()))
+    for weak_allowed in (False, True):
+        for source in sources:
+            for name in source:
+                row = connection.execute(
+                    "SELECT domain FROM domain_lookups"
+                    " WHERE query = ? AND domain IS NOT NULL"
+                    + ("" if weak_allowed else " AND method NOT LIKE '%weak%'"),
+                    (name,),
+                ).fetchone()
+                if row and not is_platform_domain(row["domain"]):
+                    return row["domain"]
     return None
 
 

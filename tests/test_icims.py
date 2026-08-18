@@ -240,6 +240,27 @@ class JobviteTest(unittest.TestCase):
         self.assertEqual(len(jobs), 1)
         self.assertEqual(fetch.call_count, 2)
 
+    def test_a_board_handing_over_less_than_it_advertises_is_loud(self):
+        """The total was parsed and then compared to nothing.
+
+        Stage 16 records "the advertised total is checked on every board", and
+        the parsed figure was assigned to a local that was never read again --
+        so the guard that found the missing trailing slash in the first place
+        was not running afterwards. `1-50 of 73` is the whole evidence a cap
+        leaves behind.
+        """
+        pages = [_jv_page(_jv_row("1", "Quant", "London"), shown=1, total=73), _jv_page()]
+        with mock.patch.object(extract.http, "get_text", side_effect=pages):
+            with self.assertRaises(ValueError) as caught:
+                extract.jobvite("acme")
+        self.assertIn("advertises 73", str(caught.exception))
+
+    def test_a_board_stating_no_total_is_not_treated_as_empty(self):
+        """Most pages carry no pagination line, and 0 must not mean a failure."""
+        pages = [_jv_page(_jv_row("1", "Quant", "London")), _jv_page()]
+        with mock.patch.object(extract.http, "get_text", side_effect=pages):
+            self.assertEqual(len(extract.jobvite("acme")), 1)
+
     def test_title_and_location_are_read_from_their_own_cells(self):
         page = _jv_page(_jv_row("oX1", "Equity Analyst, Public Real Estate", "Chicago, Illinois"))
         with mock.patch.object(extract.http, "get_text", side_effect=[page, _jv_page()]):

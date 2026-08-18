@@ -58,6 +58,8 @@ nothing in the near-term plan now waits on a human.
 | 14 | Readers for recognised-but-unread ATSes | **done** — iCIMS + Pinpoint, 2,068 postings |
 | 15 | The board, and the body it was reading | **done** — board unknowns 5,611 → 2,341 |
 | 16 | The last ATSes, and Singapore | **done** — Jobvite/Varbi/Homerun read, MCF swept |
+| 17 | The ATSes the focus hubs actually run | **done** — Oracle read, 26 boards |
+| 18 | Stockholm and Hong Kong, firm by firm | in progress |
 
 ---
 
@@ -1849,3 +1851,224 @@ hide both.
 If senior-but-relevant postings are wanted back, the lever is removing
 `senior_6_10` from `_OUT_OF_REACH` -- a different decision from this fix, and
 one line.
+
+---
+
+## Stage 17 — the ATSes the focus hubs actually run
+
+**The measurement that chose this stage, and it is a command now.** Stage 13
+found its work by cross-referencing `roster.csv` against `jobs` in a throwaway
+script — the same "typed fresh each time" problem `audit.py` was written to
+end, and the number it produced (16/163, later 49/163) could not be re-checked
+without rewriting the script. `audit --pipeline` asks it properly:
+
+```
+job pipeline -- 61/120 roster firms produce postings
+
+focus hubs
+  Stockholm       7/20  ( 35.0%)
+  Copenhagen      2/7   ( 28.6%)
+  Switzerland     6/11  ( 54.5%)
+  Amsterdam       8/13  ( 61.5%)
+  Hong Kong       8/9   ( 88.9%)
+  Singapore       9/10  ( 90.0%)
+```
+
+**Present and polled are different properties and the report says so on every
+run.** `audit` alone reports 100% *present* for all six focus hubs. The hub
+rates count roster *lines* rather than deduped firms, deliberately: Jane Street
+occupies four lines because it hires in four hubs, `discover.roster_targets`
+dedupes it to one probe — correctly — and reporting it in one hub would answer
+"is Hong Kong covered?" with a fact about Amsterdam. The headline dedupes
+again, so it stays a count of firms.
+
+### What the 29 focus-hub misses turned out to be
+
+Every one was probed by hand before any code was written, which is the
+discipline this project keeps needing:
+
+| cause | firms |
+|---|---|
+| an ATS nothing here recognised | Danske Bank (Oracle Fusion) |
+| a board hidden by JSON escaping | Julius Baer (Workday) |
+| the careers walk stopped at a social profile | Handelsbanken, PGGM |
+| a recognised ATS with no readable surface | PFA, Swiss Re (SuccessFactors) |
+| the host refuses us | ABN AMRO (503), Nasdaq (timeout), Citadel Securities, Jyske (403) |
+| a script-rendered careers page naming no board | the rest — `discover`'s problem, not Layer 2's |
+
+### Oracle Fusion Recruiting, which nothing recognised at all
+
+`ejqi.fa.ocs.oraclecloud.eu/hcmUI/CandidateExperience/en/sites/CX_1001/...` is
+Danske Bank's board and it was sitting in tier B with **139 live postings**
+behind it. The REST endpoint is clean —
+`/hcmRestApi/resources/latest/recruitingCEJobRequisitions` with a `finder`
+expression — and it publishes `PostingEndDate`, which makes Oracle only the
+**third** source in this project to state a closing date as a field.
+
+Two things about the token. It is `podhost|siteNumber` and **neither half
+identifies a board alone**: the pod host is the customer's own Fusion instance,
+and `CX_1001` is Oracle's default that most tenants keep, so a token of the
+site would collide across every firm on the platform. And `TotalJobsCount` is
+reported truthfully on every page, including one past the end — so unlike
+Workday it has no `total: 0` trap — but it is still not the stop condition.
+Paging stops on a short page and the advertised total is used as a *check*,
+which is what caught Jobvite's missing slash.
+
+### A board URL escaped inside a JSON island matches nothing
+
+Julius Baer's careers page ships its navigation as JSON inside an HTML
+attribute, so its Workday board arrives spelled
+
+    &quot;href&quot;:&quot;https:\/\/juliusbaer.wd3.myworkdayjobs.com\/...
+
+Neither the slashes nor the quotes are what a host pattern expects. `fingerprint`
+undoes JSON and HTML escaping before matching, which can only *add* matches —
+`_is_infrastructure` still rejects a vendor host and Layer 3 still has to read
+the board before anything is recorded.
+
+Measured on a random 400-page tier-B sample this rescues **1 page**. That is
+the wrong frame and the number is not the reason to do it: the tier-B
+population is wealth advisers with WordPress sites, and among the ten tier-B
+*roster* firms it rescued one. The same lesson as `labels._candidates` drawing
+from a frame of 2,000 rather than 70,000.
+
+### A social profile is not a careers page
+
+`careers_candidates` ranks off-site links first, because an off-site careers
+link is usually the ATS itself — which is exactly why a platform link had to be
+excluded. `handelsbanken.se` resolved to
+`linkedin.com/company/handelsbanken/jobs/` and `pggm.nl` to
+`instagram.com/werkenbijpggm/`; only three candidates are ever fetched, so
+neither firm's real careers page was ever looked at. **53 domains** sat in tier
+B on a social page.
+
+`resolve.is_platform_domain` is the same list Stage 1 uses to refuse a shared
+host as a firm identity and Layer 2C uses to refuse one as a board's domain.
+This is the fourth layer it leaks into.
+
+### Re-probing, and why it may only promote
+
+A pattern added to `ats.py` changes what the *stored* answers should have been,
+and nothing re-asks on its own — a firm tiered B before Oracle was recognised
+stays tier B forever. `ats --reprobe` re-walks tier B and tokenless tier A,
+mirroring `domains --regrade` one layer down.
+
+**It never demotes.** The whole population is already tiered, and a host that
+times out during one sweep would otherwise fall to tier C — which deletes the
+careers URL `pages.py` has been diffing for months, on the strength of one bad
+request. Same asymmetry as `discover.record`: a wrong board is cheap, losing a
+working feed is not.
+
+### Tier C was measured and left alone
+
+The obvious next idea is to guess standard careers paths on the firm's own host
+for the 13,148 domains tiered C for "no careers link on homepage". Measured on
+150 of them: **23 became readable pages and none of them fingerprinted to any
+ATS.** That population is small advisers with no board — the same answer
+Stage 13 got about tier B in general. The firms that matter there are reached
+by `discover`, not by another crawl.
+
+### SuccessFactors is investigated, not untried
+
+59 boards carry `career{N}.successfactors.{eu,com}`, all with a NULL token,
+PFA and Swiss Re among them — and the token is in the query string
+(`?company=pfapensionP`), not the host, which is why the pattern never
+extracted one. The listing behind it is script-rendered: the career site
+answers 206 KB of shell containing no job id, with or without a session and its
+`_s.crb` token, and the vendor's RSS path 404s. It joins Taleo, Eightfold and
+Join as a recorded dead end rather than a silent gap.
+
+Taleo is worse than unread, and this is new: its tokens are wrong. `tbe.taleo.
+net` is Taleo Business Edition, a host shared by every small tenant, so
+`varde.com` and `hanoverco.com` both resolved to the board `tbe`; `uhgcu.org`
+resolved to `baxter`. The same "a token several unrelated domains agree on is
+the vendor's infrastructure" signal `_NOT_A_TOKEN` was built from.
+
+---
+
+## Stage 18 — Stockholm and Hong Kong, firm by firm
+
+**Asked for directly:** make the named firms in the two most important hubs
+actually produce postings, to at least 80%. Hong Kong was already 8/9 (89%);
+Stockholm was 7/20, so this stage is almost entirely Stockholm.
+
+**Every miss was probed by hand before a line was written**, which is the
+discipline this repo keeps needing, and it changed what the work was. The
+thirteen Stockholm misses were not thirteen missing feeds:
+
+| what it turned out to be | firms |
+|---|---|
+| no ATS at all — the firm's own website *is* the board | Nordea, AP4, AP7, Brummer |
+| an ATS nothing recognised | Coeli (Hailey HR) |
+| no board, and the page says so | Captor, Norron |
+| no careers page anywhere | Nordkinn |
+| a board that renders client-side | Alecta (ReachMee) |
+| publishes to LinkedIn only | Handelsbanken |
+| refuses us | Nasdaq Stockholm, Citadel Securities (HK) |
+| **no longer exists** | AP1, AP6 |
+
+### Built: `sites.py`, Layer 3C
+
+`PLAN.md` has carried "per-firm adapters for the top ~50" as deferred since
+Stage 13. This is that work, opened by a measurement rather than by
+enthusiasm. Six readers — Nordea, AP4, AP7, Brummer, Captor, Norron.
+
+They **ride Layer 3 rather than replacing it**: each is an `ats_resolution`
+row with `ats='site'`, so `extract.run` polls it on the same thread pool,
+under the same per-host throttle, into the same `jobs` table, and `alerts.py`
+watches its volume like any other source.
+
+**Every reader raises rather than returning `[]` when its anchor is missing.**
+That is the whole design. An empty board is an answer; a parser whose page was
+redesigned underneath it is not, and from the outside they are the same zero.
+Captor and Norron make the point sharpest — they have no board at all, just a
+sentence saying there are no vacancies, so *that sentence is the anchor*: a
+posting or the phrase, or it raises.
+
+### Three bugs, not three absences
+
+- **`sjunde.se` is not AP7.** It is *Sjunde Konsultbolaget*, a Stockholm IT
+  consultancy, and it won on a weak name match because `fi_se` publishes no
+  website for the fund. `discover._domain_for` asked only that a domain be
+  non-NULL, so a weak row on the roster's own spelling beat a
+  registry-published one on the full name. It prefers non-weak over both
+  sources now before falling back. **Excluding weak outright was tried first
+  and is worse** — Coeli resolves to `coeli.com` weakly and by no other route,
+  and dropping it left a live eight-posting board with no domain to attach to.
+- **A board can name the firm only in its location field.** Hailey HR labels
+  every card with a *workplace*, so Coeli's postings say `Coeli Stockholm HK`
+  and name the firm nowhere else. `corroboration_text` reads location now. The
+  URL is still never read — a guessed board carries the guess in every link.
+- **HTML entities were never decoded.** `Business &amp; Risk Operations` folded
+  to the token `amp`, and Swedish spells `ä` as `&#xE4;`. `extract._text` runs
+  `html.unescape`, which fixes every HTML-sourced format at once.
+
+### Two roster firms had ceased to exist
+
+AP1 and AP6 were both wound up at the end of 2025 by riksdag decision —
+`ap1.se` says *"AP1:s verksamhet upphörde vid utgången av 2025"* and `ap6.se`
+says the same of itself; the domains now serve AP4's and AP2's sites. Both are
+`absent` in `roster.csv` with the quotation as the note. A roster line naming a
+dead firm is a permanent miss nobody can close.
+
+### The measurement now separates two questions
+
+`audit --pipeline` reports **reached** (a board Layer 3 can poll) and
+**producing** (that board has an opening today) as separate columns, because
+netting them off hides both. Captor's page is read, understood and empty; no
+amount of engineering makes a firm advertise a job it does not have, and
+listing it as a coverage miss is how a work queue fills with things nobody can
+fix. Only firms with *no pollable board* appear in the work list.
+
+### Recorded as investigated, not untried
+
+- **ReachMee** (Alecta): the board is a client-side DataTable — `jobsTableClass`
+  appears only in the JS init and there is no `<table>` in the markup, no AJAX
+  URL in the page, and no populated board to verify a parser against. No reader
+  was written, because one that cannot be tested against real postings is the
+  `heyrowan` failure waiting to happen.
+- **Handelsbanken**: its careers page links to LinkedIn and nowhere else. The
+  `careers.handelsbanken.co.uk` API named in its own JS bundle is the **UK**
+  board — 46 postings, all UK.
+- **Citadel Securities and Nasdaq Stockholm**: 403 and a timeout. `curl` with a
+  browser UA reaches both.

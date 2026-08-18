@@ -15,12 +15,17 @@ Nino Options,Amsterdam,NL,Prop trading firm,
 Five Rings,Amsterdam,NL,Prop trading firm,https://fiverings.com
 VivCourt Trading,Amsterdam,NL,Prop trading firm,https://vivcourt.com
 # ── Stockholm: AP buffer funds (governed by AP-fondlagen, not FI-supervised) ──
-# AP7 is FI-supervised and appears in fi_se; AP1-AP4 and AP6 do not.
+# AP1-AP4 and AP6 are not FI-supervised. AP7 is, and appears in fi_se -- but
+# fi_se publishes no website for it, so the domain had to be guessed and was
+# guessed wrong: `sjunde.se` is Sjunde Konsultbolaget, an unrelated Stockholm
+# IT consultancy that matched on the fund's Swedish name. It is here for the
+# website alone, which is the one thing the register does not carry.
 AP1 (Första AP-fonden),Stockholm,SE,Pension fund,https://www.ap1.se
 AP2 (Andra AP-fonden),Gothenburg,SE,Pension fund,https://www.ap2.se
 AP3 (Tredje AP-fonden),Stockholm,SE,Pension fund,https://www.ap3.se
 AP4 (Fjärde AP-fonden),Stockholm,SE,Pension fund,https://www.ap4.se
 AP6 (Sjätte AP-fonden),Gothenburg,SE,Pension fund,https://www.ap6.se
+AP7 (Sjunde AP-fonden),Stockholm,SE,Pension fund,https://www.ap7.se
 # ── Sovereign wealth funds ───────────────────────────────────────────────────
 # State-owned investors are not licensed financial firms, so they appear in no
 # regulator's register anywhere -- not DFSA, not MAS, not the SEC. All five run

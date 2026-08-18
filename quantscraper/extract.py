@@ -23,6 +23,7 @@ looks like a complete result, and every large bank publishes through Workday.
 
 from __future__ import annotations
 
+import html
 import json
 import re
 import sqlite3
@@ -48,9 +49,21 @@ _TAGS = re.compile(r"<[^>]+>")
 
 
 def _text(value: str | None) -> str | None:
+    """Readable text from a fragment of markup.
+
+    **Entities are decoded, and they were not.** The formats that hand over
+    HTML rather than JSON hand over its escaping too, so Coeli's
+    `Operativ chef för Business &amp; Risk Operations` arrived with the `&amp;`
+    intact and folded to the token `amp` -- a word in no lexicon, sitting in
+    the middle of a title, and `tagging.py` reads the title before anything
+    else. Swedish is worse than the ampersand: this markup spells `ä` as
+    `&#xE4;`, so a title could fold to something no needle matches at all,
+    which is the same shape as the `fold` bug that silently disabled every
+    Swedish rule in the file.
+    """
     if not value:
         return None
-    return " ".join(_TAGS.sub(" ", value).split()) or None
+    return " ".join(html.unescape(_TAGS.sub(" ", value)).split()) or None
 
 
 def _json(url: str, **kwargs) -> object:
@@ -395,6 +408,12 @@ def jobvite(token: str) -> list[Job]:
 
     Unlike iCIMS this carries the real title as anchor text, so no casing is
     lost, and a location column besides. There is still no description.
+
+    **And the board states its own size, which is the check.** `1-50 of 73` is
+    what found the missing slash in the first place, and the total was being
+    parsed and then never compared to anything -- so the guard the plan
+    describes as running on every board was not running at all. A shortfall
+    raises now, the same way `oracle_hcm` does.
     """
     jobs: list[Job] = []
     seen: set[str] = set()
@@ -441,6 +460,10 @@ def jobvite(token: str) -> list[Job]:
         # serves page one forever and never returns an empty page.
         if not fresh:
             break
+    if advertised > len(jobs):
+        raise ValueError(
+            f"jobvite/{token}: board advertises {advertised} postings, read {len(jobs)}"
+        )
     return jobs
 
 
@@ -525,6 +548,76 @@ def homerun(token: str) -> list[Job]:
     return jobs
 
 
+# Hailey HR renders its board server-side, so the cards are in the markup --
+# but as Tailwind-classed divs with no ids or data attributes, which means the
+# only stable handles are the anchor's href shape and the tag types inside it.
+# Bounded like every pattern here that runs over fetched bytes.
+#
+# The href is `/{lang}/job/{company}/{job}/{posting}`, three UUIDs. All three
+# are needed to address the posting, and the middle one alone is the job -- a
+# posting is a job published to one board, so the same job can appear twice.
+_HAILEY_CARD = re.compile(
+    r'<a href="(/[a-z]{2}-[A-Z]{2}/job/[0-9a-f-]{36}/[0-9a-f-]{36}/[0-9a-f-]{36})"'
+    r"([\s\S]{0,4000}?)</a>",
+    re.I,
+)
+_HAILEY_TITLE = re.compile(r"<h3[^>]{0,200}>([^<]{2,200})</h3>", re.I)
+# The location chip. Hailey calls it a "workplace" and it is the only text in
+# this exact wrapper, which is why the class is matched rather than a position.
+_HAILEY_PLACE = re.compile(
+    r'<div class="flex items-center justify-between gap-1">([^<]{1,120})</div>', re.I
+)
+_HAILEY_SUMMARY = re.compile(r"<p[^>]{0,300}>([^<]{2,600})</p>", re.I)
+
+
+def hailey(token: str) -> list[Job]:
+    """Hailey HR. Coeli is on this, with eight openings and no way to see them.
+
+    A Nordic ATS that no generic scraper covers, which is exactly the class
+    `ats.py`'s header says Stockholm and Copenhagen cannot be exhaustive
+    without. The board is at `{token}.careers.haileyhr.app` and is rendered
+    server-side, so one request is the whole thing -- no paging, no key, and no
+    JSON endpoint either (`/api/jobs` and the two obvious variants all 404).
+
+    **The card markup carries no ids, so the href shape is the anchor.** Three
+    UUIDs -- company, job, posting -- and the job id is the middle one. Matching
+    on Tailwind class strings would break on the vendor's next redesign; the
+    URL shape is the part they cannot change without breaking their own links.
+
+    The summary is the card's teaser rather than the full description. That is
+    still worth taking: `tagging.py` grades a body-only match `weak`, and a
+    teaser is the firm's own one-line statement of what the job is.
+    """
+    body = http.get_text(f"https://{token}.careers.haileyhr.app/", timeout=25, retries=2)
+    jobs: list[Job] = []
+    seen: set[str] = set()
+    for match in _HAILEY_CARD.finditer(body):
+        href, card = match.group(1), match.group(2)
+        title = _HAILEY_TITLE.search(card)
+        if not title:
+            # No heading means this is not a job card -- Hailey uses the same
+            # anchor shape for the "read more" tile at the foot of the board.
+            continue
+        job_id = href.split("/")[4]
+        if job_id in seen:
+            continue
+        seen.add(job_id)
+        place = _HAILEY_PLACE.search(card)
+        summary = _HAILEY_SUMMARY.search(card)
+        jobs.append(
+            Job(
+                ats="hailey",
+                token=token,
+                job_id=job_id,
+                title=_text(title.group(1)) or "",
+                url=f"https://{token}.careers.haileyhr.app{href}",
+                location=_text(place.group(1)) if place else None,
+                description=_text(summary.group(1)) if summary else None,
+            )
+        )
+    return jobs
+
+
 def pinpoint(token: str) -> list[Job]:
     """Pinpoint. Systematica is on this, and it was tier A polling nothing.
 
@@ -561,6 +654,92 @@ def pinpoint(token: str) -> list[Job]:
                 deadline=job.get("deadline_at"),
                 description=_text(job.get("description")),
             )
+        )
+    return jobs
+
+
+# Oracle asks for the page size inside a `finder` expression rather than as a
+# query parameter, so the whole thing is one opaque-looking string. 200 is
+# comfortably served -- a request for 500 came back with the board's true 139
+# rather than an error -- but it is kept at 200 because a page size a vendor
+# merely tolerates is the kind of thing that starts returning an empty array
+# with HTTP 200 one day, which is the Workday trap two hundred lines up.
+_ORACLE_PAGE = 200
+_ORACLE_PAGES = 1_000
+
+
+def oracle_hcm(token: str) -> list[Job]:
+    """Oracle Fusion Recruiting. `token` is `podhost|siteNumber` -- see `ats.py`.
+
+    Danske Bank is here, with 139 live postings, and it was tier B: nothing in
+    this project recognised Oracle at all until a roster measurement asked why
+    a Copenhagen bank produced no jobs.
+
+    **`TotalJobsCount` is trustworthy here, and is still not the stop
+    condition.** Oracle reports the true total on every page including one past
+    the end, so it does not have Workday's `total: 0` trap -- but the rule this
+    project settled on after that trap is to page until a short page and treat
+    the advertised total as a *check* rather than a bound, which is also what
+    `jobvite` does with its "1-50 of 73" line. So the total is compared against
+    what arrived and a mismatch is raised, which is the loud failure; the
+    silent one would be believing it.
+
+    **`PostingEndDate` is a published closing date**, so it is mapped. Danske's
+    tenant leaves it null on every row, which costs nothing -- the rule is that
+    a deadline is taken when a source states one as a field and is never mined
+    out of a description.
+    """
+    host, _, site = token.partition("|")
+    if not host or not site:
+        raise ValueError(
+            f"oracle_hcm token {token!r} is not podhost|siteNumber -- re-run `ats`"
+        )
+    origin = f"https://{host}"
+    jobs: list[Job] = []
+    advertised: int | None = None
+    for page in range(_ORACLE_PAGES):
+        finder = (
+            f"findReqs;siteNumber={site},limit={_ORACLE_PAGE},"
+            f"offset={page * _ORACLE_PAGE},sortBy=POSTING_DATES_DESC"
+        )
+        payload = _json(
+            f"{origin}/hcmRestApi/resources/latest/recruitingCEJobRequisitions"
+            "?onlyData=true&expand=requisitionList.secondaryLocations"
+            f"&finder={urllib.parse.quote(finder, safe=';,=')}"
+        )
+        items = payload.get("items") or []
+        if not items:
+            break
+        block = items[0]
+        if advertised is None:
+            advertised = block.get("TotalJobsCount")
+        postings = block.get("requisitionList") or []
+        for job in postings:
+            job_id = str(job.get("Id") or "")
+            if not job_id:
+                continue
+            jobs.append(
+                Job(
+                    ats="oracle_hcm",
+                    token=token,
+                    job_id=job_id,
+                    title=job.get("Title") or "",
+                    url=f"{origin}/hcmUI/CandidateExperience/en/sites/{site}/job/{job_id}",
+                    location=job.get("PrimaryLocation"),
+                    department=job.get("Department") or job.get("JobFamily"),
+                    posted_at=job.get("PostedDate"),
+                    deadline=job.get("PostingEndDate"),
+                    description=_text(job.get("ShortDescriptionStr")),
+                )
+            )
+        if len(postings) < _ORACLE_PAGE:
+            break
+    # The board states its own size. A board that says 1,295 and hands over 800
+    # is what a page cap looks like from the outside, and nothing else would
+    # say so -- this is the check that caught Jobvite's missing slash.
+    if advertised is not None and advertised > len(jobs):
+        raise ValueError(
+            f"oracle_hcm/{token}: board advertises {advertised} postings, read {len(jobs)}"
         )
     return jobs
 
@@ -686,6 +865,13 @@ def workday(token: str) -> list[Job]:
     return jobs
 
 
+def _site(token: str) -> list[Job]:
+    """Dispatch to `sites.py`. Imported late: `sites` imports `_text` from here."""
+    from . import sites
+
+    return sites.read(token)
+
+
 EXTRACTORS: dict[str, Callable[[str], list[Job]]] = {
     "greenhouse": greenhouse,
     "lever": lever,
@@ -701,8 +887,14 @@ EXTRACTORS: dict[str, Callable[[str], list[Job]]] = {
     "homerun": homerun,
     "personio": personio,
     "pinpoint": pinpoint,
+    "hailey": hailey,
     "teamtailor": teamtailor,
     "workday": workday,
+    "oracle_hcm": oracle_hcm,
+    # Layer 3C: firms with no ATS at all, read from their own website. One
+    # entry here, dispatched by token -- see `sites.py` for why the list is
+    # deliberately short.
+    "site": _site,
 }
 
 
