@@ -2213,3 +2213,52 @@ def shortlist(connection: sqlite3.Connection, limit: int = 40):
         """,
         (TAGGER, limit),
     ).fetchall()
+
+
+def stale_taggers(connection: sqlite3.Connection) -> list[tuple[int, int]]:
+    """(tagger, rows) for every lexicon version that is not the current one."""
+    connection.executescript(SCHEMA)
+    return [
+        (row["tagger"], row["n"])
+        for row in connection.execute(
+            "SELECT tagger, COUNT(*) AS n FROM job_tags"
+            " WHERE tagger <> ? GROUP BY tagger ORDER BY tagger DESC",
+            (TAGGER,),
+        )
+    ]
+
+
+def prune(connection: sqlite3.Connection) -> int:
+    """Delete every tag written by a superseded lexicon. Returns rows removed.
+
+    **This is deleting data, so the argument for it has to be better than "the
+    table is big".** It is: the retention those rows represent does not exist.
+    `job_tags` is keyed on `(ats, token, job_id, dimension, value)` with **no
+    `tagger` in the key**, so `INSERT OR REPLACE` overwrites the previous
+    version's row whenever a posting keeps the same value in the same
+    dimension. Only rows whose value *changed* survive a re-tag, which is the
+    opposite of a diff -- 34 dead versions were holding 297,056 rows between
+    them, and lexicon 15 had already been erased outright.
+
+    So the table was not storing history. It was storing whichever fragments of
+    thirty-four versions happened not to be overwritten, and those fragments
+    are actively harmful: `CLAUDE.md` records an unpinned `COUNT(*)` reading
+    49,808 postings in a bucket that had already been split out, because six
+    earlier taggers still said so.
+
+    Safe because `job_tags` is derived. Principle 5: raw tables are
+    append-only, derived tables rebuild from scratch on demand. Re-running
+    `tag` reconstructs the current version in full.
+
+    The **current** version is never touched, and this is deliberately a
+    separate command rather than a step inside `run`: a prune that fires
+    automatically at the end of a re-tag would delete the previous version at
+    the exact moment a mistaken lexicon change is most likely to need backing
+    out.
+    """
+    connection.executescript(SCHEMA)
+    with connection:
+        cursor = connection.execute(
+            "DELETE FROM job_tags WHERE tagger <> ?", (TAGGER,)
+        )
+    return cursor.rowcount

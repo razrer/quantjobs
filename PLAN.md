@@ -1750,3 +1750,35 @@ in its own `note` cell:
 
 That is what took the hand sheet from 92.5% to 96.2%. It is a fixture becoming
 self-consistent, not a classifier improving, and the two should not be confused.
+
+
+### Pruning the dead lexicon versions
+
+`job_tags` held 2,827,999 rows, of which **297,056 belonged to thirty-four
+superseded versions** — and they were not history. The primary key omits
+`tagger`, so a re-tag overwrites its predecessor wherever a posting keeps the
+same verdict; what accumulated was whichever fragments happened not to be
+overwritten. `CLAUDE.md` already recorded the cost of that: an unpinned
+`COUNT(*)` read 49,808 postings in a bucket that had been split out, because
+six earlier taggers still said so.
+
+`python -m quantscraper prune` reports by default and deletes on `--apply`. It
+is deliberately not a step inside `tag`: a prune firing at the end of a re-tag
+would delete the previous version at the moment a mistaken lexicon change most
+needs backing out.
+
+| | before | after |
+|---|---|---|
+| `job_tags` rows | 2,827,999 | 2,530,943 |
+| `summary()` | 11.56s | **0.30s** |
+| `postings()` | 3.13s | 1.74s |
+| database | 1,598 MB | 1,402 MB *(after `VACUUM`)* |
+
+Scores and the board are byte-identical across the prune, which is the check
+that mattered.
+
+**A content-hash cache was measured and not adopted.** `tag_posting` is
+deterministic on its inputs, so duplicates could be classified once — 15.3% of
+the corpus is duplicated. Measured over 20,000 postings: 57.2s uncached, 55.8s
+memoised, **1.02x**. The user asked for it only if it was faster, and it is
+not.

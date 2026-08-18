@@ -294,6 +294,32 @@ def _tag(database: str, limit: int, dimension: str) -> int:
     return 0
 
 
+def _prune(database: str, apply: bool) -> int:
+    connection = db.connect(database)
+    stale = tagging.stale_taggers(connection)
+    if not stale:
+        print(f"nothing to prune -- every tag is at lexicon {tagging.TAGGER}")
+        return 0
+
+    total = sum(n for _, n in stale)
+    print(f"{len(stale)} superseded lexicon version(s), {total:,d} rows")
+    for tagger, n in stale[:12]:
+        print(f"  lexicon {tagger:<4d} {n:>10,d}")
+    if len(stale) > 12:
+        print(f"  ... and {len(stale) - 12} more")
+
+    if not apply:
+        # A destructive default is how a derived table becomes an unrecoverable
+        # one by accident. The count above is the whole point of the dry run.
+        print("\nthis was a dry run -- re-run with --apply to delete")
+        return 0
+
+    removed = tagging.prune(connection)
+    print(f"\ndeleted {removed:,d} rows; lexicon {tagging.TAGGER} untouched")
+    print("run VACUUM separately to return the space to the filesystem")
+    return 0
+
+
 def _coverage(database: str) -> int:
     connection = db.connect(database)
 
@@ -707,6 +733,14 @@ def main(argv: list[str] | None = None) -> int:
         help="a labelled sheet to read; repeatable. Defaults to both sheets.",
     )
 
+    prune_command = commands.add_parser(
+        "prune", help="delete tags written by superseded lexicon versions"
+    )
+    prune_command.add_argument(
+        "--apply", action="store_true",
+        help="actually delete; without it this only reports what would go",
+    )
+
     commands.add_parser(
         "coverage", help="estimate how much of the market we see (Stage 10)"
     )
@@ -722,6 +756,9 @@ def main(argv: list[str] | None = None) -> int:
         return _sample(args.db, args.limit, args.out)
     if args.command == "labels":
         return _labels(args.db, args.file)
+    if args.command == "prune":
+        return _prune(args.db, args.apply)
+
     if args.command == "coverage":
         return _coverage(args.db)
     if args.command == "tag":

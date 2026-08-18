@@ -1201,3 +1201,61 @@ class DoctorateIsAnEligibilityFactNotAVerdict(unittest.TestCase):
         tags = _tags(title="Quantitative Researcher",
                      description="No PhD required for this role. " * 12)
         self.assertNotIn("phd_required", tags.get("exclusion_reason", set()))
+
+
+class PruneTest(unittest.TestCase):
+    """`job_tags` accumulated 34 dead lexicon versions holding 297,056 rows,
+    and the retention they represented did not exist: the primary key omits
+    `tagger`, so a re-tag overwrites the previous version wherever a posting
+    keeps the same value. Only rows whose value changed survived."""
+
+    def _connection(self):
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        connection.executescript(tagging.SCHEMA)
+        # **Each version carries a different `value`, and that is not a
+        # convenience -- it is the only way rows from two versions coexist.**
+        # The primary key is `(ats, token, job_id, dimension, value)` with no
+        # `tagger` in it, so a version that reaches the same verdict overwrites
+        # its predecessor outright. Writing this fixture the obvious way raises
+        # `IntegrityError`, which is the bug `prune` exists to clean up after.
+        rows = [
+            ("gh", "firm", "1", "relevance", value, "strong", None, v, "t")
+            for value, v in (("relevant", tagging.TAGGER),
+                             ("less_relevant", tagging.TAGGER - 1),
+                             ("adjacent", 9),
+                             ("rejected", 1))
+        ]
+        connection.executemany(
+            "INSERT INTO job_tags (ats, token, job_id, dimension, value,"
+            " confidence, evidence, tagger, tagged_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", rows,
+        )
+        connection.commit()
+        return connection
+
+    def test_it_reports_before_it_deletes(self):
+        connection = self._connection()
+        stale = dict(tagging.stale_taggers(connection))
+
+        self.assertNotIn(tagging.TAGGER, stale)
+        self.assertEqual(set(stale), {tagging.TAGGER - 1, 9, 1})
+
+    def test_the_current_version_is_never_touched(self):
+        connection = self._connection()
+        removed = tagging.prune(connection)
+
+        self.assertEqual(removed, 3)
+        left = connection.execute(
+            "SELECT DISTINCT tagger FROM job_tags"
+        ).fetchall()
+        self.assertEqual([row["tagger"] for row in left], [tagging.TAGGER])
+
+    def test_pruning_twice_is_a_no_op(self):
+        """It is a derived table and the command is safe to re-run -- the
+        second call must not report work it did not do."""
+        connection = self._connection()
+        tagging.prune(connection)
+
+        self.assertEqual(tagging.prune(connection), 0)
+        self.assertEqual(tagging.stale_taggers(connection), [])
