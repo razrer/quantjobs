@@ -392,3 +392,69 @@ class CorroborationFieldsTest(unittest.TestCase):
         """`_needles` grades it weak, which is what contains the location rule."""
         jobs = [self._job(location="Capital Stockholm")]
         self.assertIsNone(discover.corroborate("capital fund management", jobs, None))
+
+
+class OneWordFirmNameTest(unittest.TestCase):
+    """A one-word firm name is always a strong needle, and that is the hole.
+
+    `bamboohr/blackrock` is BlackRock Asphalt of Tampa -- a live board, a
+    well-formed token, and the wrong company. Its postings contain "blackrock"
+    because that *is* the company's name, so no amount of text matching
+    separates it from BlackRock the asset manager.
+    """
+
+    def _job(self, title, **kwargs):
+        from quantscraper.models import Job
+
+        base = dict(ats="bamboohr", token="blackrock", job_id="1", title=title)
+        base.update(kwargs)
+        return Job(**base)
+
+    def test_an_asphalt_board_does_not_corroborate_an_asset_manager(self):
+        jobs = [
+            self._job("Asphalt Laborer - BlackRock Asphalt", location="Tampa"),
+            self._job("Lowboy Driver", location="Tampa"),
+            self._job("Milling Machine Operator - Tampa, FL", location="Tampa"),
+        ]
+        self.assertIsNone(discover.corroborate("blackrock", jobs, None))
+
+    def test_a_one_word_firm_with_finance_postings_still_corroborates(self):
+        """Voleon and Coeli are both one-word names and both are correct."""
+        jobs = [
+            self._job(
+                "Senior Software Engineer, Trading Strategies",
+                description="Voleon is a technology company applying machine "
+                "learning to investment management.",
+            ),
+            self._job("Quantitative Researcher", description="At Voleon we..."),
+        ]
+        self.assertIsNotNone(discover.corroborate("voleon", jobs, None))
+
+    def test_ordinary_asset_management_titles_are_enough(self):
+        """Coeli's board is mostly `undecided`, and one row rejects on `chef`.
+
+        Swedish for *manager*. Requiring a `keep` verdict would throw the board
+        away; requiring merely "some rejection" would keep the asphalt one.
+        What separates them is that these carry evidence at all.
+        """
+        jobs = [
+            self._job("Private Equity Associate", location="Coeli Stockholm HK"),
+            self._job("Investor Relations Analyst", location="Coeli Stockholm HK"),
+            self._job(
+                "Operativ chef for Business & Risk Operations",
+                location="Coeli Stockholm HK",
+            ),
+        ]
+        self.assertIsNotNone(discover.corroborate("coeli", jobs, None))
+
+    def test_a_multi_word_needle_is_not_second_guessed(self):
+        """The industry read only guards the case `_needles` leaves open."""
+        jobs = [
+            self._job(
+                "Asphalt Laborer",
+                description="Old Mission Capital is hiring.",
+            )
+        ]
+        self.assertIsNotNone(
+            discover.corroborate("old mission capital", jobs, None)
+        )

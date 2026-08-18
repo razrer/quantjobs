@@ -243,18 +243,64 @@ def corroboration_text(jobs: list[Job], name: str | None) -> str:
     return fold_text(" ".join(parts))
 
 
+def _reads_as_another_industry(jobs: list[Job]) -> bool:
+    """Whether nothing on this board looks like it could be finance at all.
+
+    **A one-word firm name is a strong needle and that is where it breaks.**
+    `_needles` grades a lone word strong when it is the firm's whole name --
+    right for `domains.py`, where a page printing "BlackRock" is BlackRock's
+    page. Here it is not, because a board can belong to a company whose name
+    merely *starts* with the same word: `bamboohr/blackrock` is BlackRock
+    Asphalt of Tampa, advertising an Asphalt Laborer, a Lowboy Driver and a
+    Milling Machine Operator. Live board, well-formed token, wrong company --
+    the `cfm` and `heyrowan` failure with a one-word name instead of an
+    acronym.
+
+    So the postings get read rather than merely searched, which is the rule
+    this module was built on. `lexicon.judge` already knows the named trades;
+    a board is rejected only when *every* posting is either an unrelated
+    occupation or carries no signal whatsoever.
+
+    That double condition is doing real work, and a narrower rule was tried
+    first and was wrong. Coeli's board is eight ordinary asset-management
+    postings whose verdicts are mostly `undecided`, and one of them rejects on
+    `chef` -- Swedish for *manager*. Requiring a `keep` would throw it away.
+    Requiring merely "some rejection" would keep BlackRock Asphalt. What
+    separates them is that Coeli's postings carry evidence like *associate* and
+    *analyst*, and an asphalt board carries none.
+    """
+    from . import lexicon
+
+    for job in jobs[:_CORROBORATION_POSTINGS]:
+        verdict = lexicon.judge(job.title, job.department, job.description)
+        if verdict.reason == "unrelated_occupation":
+            continue
+        if verdict.evidence:
+            return False
+        if verdict.verdict == "keep":
+            return False
+    return True
+
+
 def corroborate(normalized: str, jobs: list[Job], name: str | None) -> str | None:
     """Evidence that this board belongs to this firm, or None.
 
     Only *strong* needles count -- the whole name, or a two-word phrase from
     it. `_needles` grades a lone word weak whenever the firm has more than one,
     and a lone word is precisely what lets an HVAC company answer to `cfm`.
+
+    A one-word firm name is the remaining hole, because such a needle is always
+    graded strong. `_reads_as_another_industry` closes it by reading the
+    postings.
     """
     text = corroboration_text(jobs, name)
     for needle, strength in _needles(normalized):
-        if strength == "strong" and f" {needle} " in text:
-            where = "board is named" if name and needle in fold_text(name) else "postings name"
-            return f"{len(jobs)} postings, {where} {needle!r}"
+        if strength != "strong" or f" {needle} " not in text:
+            continue
+        if " " not in needle and _reads_as_another_industry(jobs):
+            continue  # somebody else's company, whose name starts the same way
+        where = "board is named" if name and needle in fold_text(name) else "postings name"
+        return f"{len(jobs)} postings, {where} {needle!r}"
     return None
 
 

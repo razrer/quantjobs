@@ -54,6 +54,26 @@ Balyasny Asset Management,Chicago,US,Multi-strategy hedge fund,https://www.bamfu
 Marshall Wace,London,GB,Systematic hedge fund,https://www.mwam.com
 Millennium Management,New York,US,Multi-strategy hedge fund,https://www.mlp.com
 Oasis Management,Hong Kong,HK,Hedge fund,https://www.oasiscm.com
+# More boards `discover` proved for firms holding no domain. Four of the
+# five verified; each page names its firm as a spaced phrase.
+#
+# The fifth is Teza Technologies, whose Ashby board is proved -- 11
+# postings including Quantitative Researcher and Portfolio Manager, and the
+# postings name the firm seven times. `teza.com` answers 200 with an empty
+# body and nothing at all through our fetcher, so the domain cannot be
+# verified and is not guessed. The board stays unpollable until it can be:
+# `ats_resolution` is keyed on the domain and an unverified one is the
+# silently-empty-feed failure this project keeps designing against.
+BlueCrest Capital Management,London,GB,Systematic hedge fund,https://www.bluecrestcapital.com
+DV Trading,Chicago,US,Prop trading firm,https://dvtrading.co
+Gelber Group,Chicago,US,Prop trading firm,https://www.gelbergroup.com
+Simplex Trading,Chicago,US,Prop trading firm,https://www.simplextrading.com
+# AQR resolved to `lumyna.com`, a UCITS platform that hosts other managers'
+# strategies -- the roster carried a bare `AQR` alias and it matched
+# LUMYNA - AQR GLOBAL RELATIVE VALUE UCITS FUND. The alias is gone and the
+# real domain is here, verified: aqr.com titles itself AQR Capital
+# Management. Same shape as Marshall Wace, which resolved to the same host.
+AQR Capital Management,Greenwich,US,Systematic hedge fund,https://www.aqr.com
 # ── Sovereign wealth funds ───────────────────────────────────────────────────
 # State-owned investors are not licensed financial firms, so they appear in no
 # regulator's register anywhere -- not DFSA, not MAS, not the SEC. All five run

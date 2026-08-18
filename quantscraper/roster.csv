@@ -333,7 +333,7 @@ London,deprioritized,Maven Securities,Maven Derivatives,active,Not in any regist
 # written as `Fidelity Management & Research` because the bare name spans
 # three unrelated groups.
 US,deprioritized,Bridgewater Associates,,active,
-US,deprioritized,AQR Capital Management,AQR,active,
+US,deprioritized,AQR Capital Management,,active,"No bare ""AQR"" alias -- it matches LUMYNA - AQR GLOBAL RELATIVE VALUE UCITS FUND and pulled the firm onto lumyna.com, a UCITS platform hosting other managers' strategies."
 US,deprioritized,Acadian Asset Management,,active,
 US,deprioritized,Numeric Investors,Man Numeric,active,
 US,deprioritized,Dimensional Fund Advisors,,active,

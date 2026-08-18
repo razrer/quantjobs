@@ -603,6 +603,26 @@ Each of these silently produced wrong results before being caught:
   Technologies. The rest hire through recruiters and personal networks, which
   no scraper reaches. Expect the HK rate to sit far below Stockholm's for
   structural reasons, not for want of effort.
+- **A one-word firm name is always a *strong* needle, and that is the last
+  hole in board discovery.** `bamboohr/blackrock` is BlackRock **Asphalt** of
+  Tampa — Asphalt Laborer, Lowboy Driver, Milling Machine Operator — and its
+  postings contain "blackrock" because that is genuinely the company's name.
+  No text rule separates it from BlackRock the asset manager, so
+  `discover._reads_as_another_industry` reads the postings with
+  `lexicon.judge` instead and rejects a one-word match when *every* posting is
+  an unrelated occupation or carries no signal at all. Both halves are load
+  bearing: requiring a `keep` throws away Coeli (eight ordinary
+  asset-management titles, one of which rejects on `chef`, Swedish for
+  *manager*), and requiring merely "some rejection" keeps the asphalt board. A
+  narrower rule was tried first — reject when the word is always followed by
+  the same next word — and it failed both ways, because Coeli's location chip
+  is always "Coeli Stockholm".
+- **A three-letter alias will find a fund, not the firm.** The roster already
+  warned about a bare `Nasdaq`; a bare `AQR` matched *LUMYNA – AQR GLOBAL
+  RELATIVE VALUE UCITS FUND* and put AQR's board on `lumyna.com`, a UCITS
+  platform hosting other managers' strategies. Marshall Wace landed on the same
+  host for the same reason. When adding an alias, check what it matches before
+  trusting it.
 - **A few large firms simply refuse us**, and it is not our trust store this
   time: ABN AMRO answers 503, Nasdaq times out, Citadel Securities and Jyske
   Bank answer 403. `curl` with a browser UA reaches all four. Recorded as a
