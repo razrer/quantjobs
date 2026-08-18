@@ -434,7 +434,7 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
 .card:hover { border-color: var(--rule-firm); box-shadow: var(--shadow-lg); z-index: 40; }
 .card:focus-within { z-index: 40; }
 .card[data-saved="1"] { border-color: var(--accent); }
-.card[data-hidden="1"], .card[data-rejected="1"] { opacity: 0.42; }
+.card[data-rejected="1"] { opacity: 0.42; }
 
 .card-top {
   display: flex;
@@ -611,6 +611,8 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
 .act:hover { background: var(--surface-3); border-color: var(--rule-firm); }
 .act.on { color: var(--accent); border-color: var(--accent); background: var(--accent-bg); }
 .act.go { color: var(--accent); font-weight: 550; }
+.act.warn { color: var(--due-0); }
+.act.warn.on { color: var(--due-0); border-color: var(--due-0); background: var(--due-0-bg); }
 
 .reclass { margin-top: 0.1875rem; }
 .reclass select.mini {
@@ -869,14 +871,16 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
       that set it; the rows stay in the database, and
       <code>list --exclude off_industry</code> shows exactly what it ate. Every
       build prints the count.</p>
-      <p><b>Saved and hidden</b> live in this browser only, keyed on the
-      posting id, and come back with their preset. The two dropdowns under
-      each card's actions correct <b>relevance</b> and <b>seniority</b> by
-      hand when the tagger got one wrong or left it <code>unknown</code> --
-      the override sorts, filters and displays as the corrected value from
-      then on, in this browser, immediately. Setting relevance to
-      <b>rejected</b> takes the posting off the board, the same as a gate
-      would. <b>Run the board through <code>web/serve.py</code></b> (see
+      <p><b>Saved</b> lives in this browser only, keyed on the posting id, and
+      comes back with the <em>Saved</em> preset. <b>Reject</b> is one click for
+      "not this line of work" -- it takes the posting off the board immediately
+      and comes back with the <em>Rejected</em> preset; click it again to
+      undo. The two dropdowns under each card's actions do the same thing more
+      precisely -- correct <b>relevance</b> and <b>seniority</b> by hand when
+      the tagger got one wrong or left it <code>unknown</code> -- and the
+      override sorts, filters and displays as the corrected value from then
+      on, in this browser, immediately. <b>Run the board through
+      <code>web/serve.py</code></b> (see
       <code>CLAUDE.md</code>) and every correction is also upserted straight
       into <code>quantscraper/labels.csv</code> as you make it -- no download,
       no manual merge, and it is there the next time
@@ -965,15 +969,14 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
   const jobs = board.jobs.map((j) => {
     const firm = board.firms[j.firm];
     const left = j.due === undefined ? null : days(j.due);
-    return { ...j, firmName: firm.name, firmDomain: firm.domain, left, age: -days(j.posted) };
+    // The tagger's own answer, kept aside so clearing a correction can restore
+    // it -- overwriting `job.rel` directly would otherwise lose it for good.
+    return { ...j, firmName: firm.name, firmDomain: firm.domain, left, age: -days(j.posted),
+             _orig: { rel: j.rel, sen: j.sen } };
   });
 
   const saved = new Set(JSON.parse(localStorage.getItem("board.saved") || "[]"));
-  const buried = new Set(JSON.parse(localStorage.getItem("board.hidden") || "[]"));
-  const persist = () => {
-    localStorage.setItem("board.saved", JSON.stringify([...saved]));
-    localStorage.setItem("board.hidden", JSON.stringify([...buried]));
-  };
+  const persist = () => localStorage.setItem("board.saved", JSON.stringify([...saved]));
 
   // A hand correction to a dimension the tagger got wrong or left `unknown`.
   // Keyed on posting id, `{ rel?, sen? }` -- only the dimensions actually
@@ -987,7 +990,12 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
 
   function reclassify(job, dim, value) {
     const rec = corrections[job.id] || {};
-    if (value) { rec[dim] = value; job[dim] = value; } else { delete rec[dim]; delete job[dim]; }
+    if (value) {
+      rec[dim] = value; job[dim] = value;
+    } else {
+      delete rec[dim];
+      if (job._orig[dim] !== undefined) job[dim] = job._orig[dim]; else delete job[dim];
+    }
     if (Object.keys(rec).length) corrections[job.id] = rec; else delete corrections[job.id];
     persistCorrections();
     job.v = FACETS.map((f) => f.get(job));
@@ -1167,7 +1175,7 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     // deadline above every spine, which is the rule that actually matters.
     q: "", sort: "fit", pin: 14, group: "firm",
     sel: Object.fromEntries(FACETS.map((f) => [f.key, []])),
-    only: null,            // "saved" | "hidden" | null
+    only: null,            // "saved" | "rejected" | null
   });
 
   let state = FRESH();
@@ -1207,7 +1215,6 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
       apply: (s) => { s.sel.tstyle = ["pure"]; },
       test: (j) => j.tstyle === "pure" },
     { key: "saved", label: "Saved", only: "saved", test: (j) => saved.has(j.id) },
-    { key: "hidden", label: "Hidden", only: "hidden", test: (j) => buried.has(j.id) },
     { key: "rejected", label: "Rejected", only: "rejected", test: (j) => j.rel === "rejected" },
   ];
 
@@ -1243,9 +1250,8 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
       const job = jobs[n];
 
       if (state.only === "saved" && !saved.has(job.id)) continue;
-      if (state.only === "hidden" && !buried.has(job.id)) continue;
       if (state.only === "rejected" && job.rel !== "rejected") continue;
-      if (state.only === null && (buried.has(job.id) || job.rel === "rejected")) continue;
+      if (state.only === null && job.rel === "rejected") continue;
       if (terms.length && !terms.every((t) => hay[n].includes(t))) continue;
 
       let failed = -1, fails = 0;
@@ -1392,7 +1398,10 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
         ${job.url ? `<button class="act go" data-act="open">open ↗</button>` : ""}
         <button class="act${saved.has(job.id) ? " on" : ""}" data-act="save">${saved.has(job.id) ? "saved" : "save"}</button>
         <button class="act" data-act="firm">only this firm</button>
-        <button class="act" data-act="hide">${buried.has(job.id) ? "unhide" : "hide"}</button>
+        <button class="act warn${job.rel === "rejected" ? " on" : ""}" data-act="reject"
+            title="Not this line of work -- removes it from the board and corrects the labelling sheet">
+          ${job.rel === "rejected" ? "rejected ✓" : "reject"}
+        </button>
       </div>
       <div class="acts reclass" title="Correct the tagger -- an override sorts, filters and exports as this value">
         ${reclassSelect(job, "rel", "relevance", RELEVANCE_SCALE)}
@@ -1406,7 +1415,7 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     const fit = job.fit || "unknown";
     return `<article class="card" data-id="${attr(job.id)}" data-fit="${attr(fit)}"
         ${job.left !== null && job.left >= 0 ? `data-due="${level(job.left)}"` : ""}
-        ${saved.has(job.id) ? 'data-saved="1"' : ""}${buried.has(job.id) ? ' data-hidden="1"' : ""}${job.rel === "rejected" ? ' data-rejected="1"' : ""}>
+        ${saved.has(job.id) ? 'data-saved="1"' : ""}${job.rel === "rejected" ? ' data-rejected="1"' : ""}>
       <div class="card-top">
         <span class="pill fit-${FIT_RANK[fit]}">${esc(label(fit))}</span>
         ${dueTag(job)}
@@ -1681,7 +1690,7 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
       const job = jobs.find((j) => j.id === card.dataset.id);
       if (act.dataset.act === "open" && job.url) window.open(job.url, "_blank", "noopener");
       if (act.dataset.act === "save") { saved.has(job.id) ? saved.delete(job.id) : saved.add(job.id); persist(); commit(); }
-      if (act.dataset.act === "hide") { buried.has(job.id) ? buried.delete(job.id) : buried.add(job.id); persist(); commit(); }
+      if (act.dataset.act === "reject") { reclassify(job, "rel", job.rel === "rejected" ? "" : "rejected"); }
       if (act.dataset.act === "firm") { state.sel.firm = [job.firm]; commit(); }
       return;
     }
