@@ -256,6 +256,7 @@ select:hover { border-color: var(--rule-firm); }
 }
 .preset:hover { border-color: var(--rule-firm); background: var(--surface-2); }
 .preset[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: var(--accent-bg); }
+.preset[data-exclude="1"][aria-pressed="true"] { border-color: var(--due-0); color: var(--due-0); background: var(--due-0-bg); }
 .preset .n { font-family: var(--font-mono); font-size: 0.6875rem; color: var(--ink-faint); }
 .preset[aria-pressed="true"] .n { color: inherit; opacity: 0.75; }
 
@@ -871,6 +872,11 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
       that set it; the rows stay in the database, and
       <code>list --exclude off_industry</code> shows exactly what it ate. Every
       build prints the count.</p>
+      <p><b>A red preset in the rail hides without judging.</b> <em>Hide credit
+      risk</em> removes a title match from this browser's view only -- nothing
+      is tagged, nothing is written anywhere, and the lexicon still calls the
+      work relevant. It exists for postings that are a real, correctly-graded
+      fit and just not wanted twice.</p>
       <p><b>Saved</b> lives in this browser only, keyed on the posting id, and
       comes back with the <em>Saved</em> preset. <b>Reject</b> is one click for
       "not this line of work" -- it takes the posting off the board immediately
@@ -1176,6 +1182,7 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     q: "", sort: "fit", pin: 14, group: "firm",
     sel: Object.fromEntries(FACETS.map((f) => [f.key, []])),
     only: null,            // "saved" | "rejected" | null
+    mute: [],              // keys of `exclude` presets currently hiding matches
   });
 
   let state = FRESH();
@@ -1214,6 +1221,14 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     { key: "trader", label: "Pure trader roles",
       apply: (s) => { s.sel.tstyle = ["pure"]; },
       test: (j) => j.tstyle === "pure" },
+    // Not a rejection -- the lexicon reads this work as real and relevant, and
+    // it stays that way in `job_tags` and in any exported correction. `exclude`
+    // presets remove a match from the board the way the search box would, as a
+    // standing toggle instead of a query retyped every time. Title only, same
+    // as the search box: a body mentioning credit risk in passing ("familiarity
+    // with credit risk a plus") is not what this hides.
+    { key: "credit", label: "Hide credit risk", exclude: true,
+      test: (j) => /credit risk|kreditrisk/i.test(j.title) },
     { key: "saved", label: "Saved", only: "saved", test: (j) => saved.has(j.id) },
     { key: "rejected", label: "Rejected", only: "rejected", test: (j) => j.rel === "rejected" },
   ];
@@ -1242,6 +1257,7 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     // written this way, "already closed" shows its real count in the rail
     // instead of the zero a pre-filter would leave it with.
     const showExpired = state.sel.closing.includes("expired");
+    const muted = state.mute.length ? PRESETS.filter((p) => state.mute.includes(p.key)) : [];
 
     const visible = [];
     const counts = FACETS.map(() => new Map());
@@ -1252,6 +1268,7 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
       if (state.only === "saved" && !saved.has(job.id)) continue;
       if (state.only === "rejected" && job.rel !== "rejected") continue;
       if (state.only === null && job.rel === "rejected") continue;
+      if (muted.some((p) => p.test(job))) continue;
       if (terms.length && !terms.every((t) => hay[n].includes(t))) continue;
 
       let failed = -1, fails = 0;
@@ -1581,8 +1598,8 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     $("facets").innerHTML = html;
 
     $("presets").innerHTML = PRESETS.map((p) => {
-      const on = p.only ? state.only === p.only : p.key === activePreset();
-      return `<button class="preset" data-preset="${p.key}" aria-pressed="${on}">
+      const on = p.only ? state.only === p.only : p.exclude ? state.mute.includes(p.key) : p.key === activePreset();
+      return `<button class="preset" data-preset="${p.key}" aria-pressed="${on}" data-exclude="${p.exclude ? 1 : 0}">
         <span>${esc(p.label)}</span><span class="n">${presetCount(p).toLocaleString()}</span></button>`;
     }).join("");
 
@@ -1617,7 +1634,7 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     return null;
   }
 
-  const dirty = () => state.q || state.only || FACETS.some((f) => state.sel[f.key].length);
+  const dirty = () => state.q || state.only || state.mute.length || FACETS.some((f) => state.sel[f.key].length);
 
   function drawCrumbs(n) {
     const bits = FACETS.flatMap((f) =>
@@ -1626,6 +1643,10 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
         return `<button class="crumb" data-facet="${attr(f.key)}" data-value="${attr(v)}">
           ${esc(f.label.toLowerCase())}: ${esc(naming(v))} <i>×</i></button>`;
       }));
+    for (const key of state.mute) {
+      const p = PRESETS.find((pp) => pp.key === key);
+      if (p) bits.unshift(`<button class="crumb" data-mute="${attr(key)}">${esc(p.label.toLowerCase())} <i>×</i></button>`);
+    }
     if (state.only) bits.unshift(`<button class="crumb" data-only="1">${esc(state.only)} only <i>×</i></button>`);
 
     $("crumbs").innerHTML =
@@ -1654,6 +1675,9 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     const preset = PRESETS.find((p) => p.key === button.dataset.preset);
     if (preset.only) {
       state.only = state.only === preset.only ? null : preset.only;
+    } else if (preset.exclude) {
+      const at = state.mute.indexOf(preset.key);
+      if (at === -1) state.mute.push(preset.key); else state.mute.splice(at, 1);
     } else {
       const want = probeOf(preset);
       const off = activePreset() === preset.key;
@@ -1668,6 +1692,7 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     const crumb = e.target.closest(".crumb");
     if (!crumb) return;
     if (crumb.dataset.only) { state.only = null; commit(); }
+    else if (crumb.dataset.mute) { state.mute = state.mute.filter((k) => k !== crumb.dataset.mute); commit(); }
     else toggle(crumb.dataset.facet, crumb.dataset.value);
   });
 
