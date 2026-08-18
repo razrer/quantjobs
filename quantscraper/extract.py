@@ -744,9 +744,14 @@ def oracle_hcm(token: str) -> list[Job]:
     return jobs
 
 
-# ADP asks for the board by its `cid` GUID and answers with the whole thing --
-# no paging parameter is honoured and `meta.totalNumber` states the size, so
-# that is the check rather than the stop condition, as everywhere else here.
+# ADP serves 20 requisitions per request and caps it there: `$top` is accepted
+# and ignored, so the only way through a board is `$skip`. `meta.totalNumber`
+# states the true size on every page, and it is the check rather than the stop
+# condition -- which is how the truncation was caught in the first place. Five
+# boards raised "advertises 174, read 20" on the first run of this reader,
+# which is exactly the round-number shape a cap leaves behind.
+_ADP_PAGE = 20
+_ADP_PAGES = 500
 def _adp_place(requisition: dict) -> str | None:
     """The most specific location ADP's list endpoint states for a posting.
 
@@ -791,33 +796,50 @@ def adp(token: str) -> list[Job]:
     posting in the semi-target US or reject it as off-location; `unknown`
     survives the gate anyway, so the failure direction is safe.
     """
-    payload = _json(
-        "https://workforcenow.adp.com/mascsr/default/careercenter/public/events"
-        f"/staffing/v1/job-requisitions?cid={urllib.parse.quote(token)}"
-    )
-    requisitions = payload.get("jobRequisitions") or []
-    meta = payload.get("meta") or {}
     jobs: list[Job] = []
-    for requisition in requisitions:
-        job_id = str(requisition.get("itemID") or "")
-        if not job_id:
-            continue
-        jobs.append(
-            Job(
-                ats="adp",
-                token=token,
-                job_id=job_id,
-                title=_text(requisition.get("requisitionTitle")) or "",
-                url=(
-                    "https://workforcenow.adp.com/mascsr/default/mdf/recruitment"
-                    f"/recruitment.html?cid={token}&jobId={job_id}"
-                ),
-                location=_adp_place(requisition),
-                posted_at=requisition.get("postDate"),
-                description=_text(requisition.get("requisitionDescription")),
-            )
+    seen: set[str] = set()
+    advertised: int | None = None
+    for page in range(_ADP_PAGES):
+        # `$skip=0` is not the same request as sending no `$skip` at all -- it
+        # returns 19 rows where the bare URL returns 20, which is enough to
+        # make a short-page stop rule end the walk on the first page.
+        skip = f"&$skip={page * _ADP_PAGE}" if page else ""
+        payload = _json(
+            "https://workforcenow.adp.com/mascsr/default/careercenter/public/events"
+            f"/staffing/v1/job-requisitions?cid={urllib.parse.quote(token)}{skip}"
         )
-    advertised = meta.get("totalNumber")
+        requisitions = payload.get("jobRequisitions") or []
+        if advertised is None:
+            advertised = (payload.get("meta") or {}).get("totalNumber")
+        fresh = 0
+        for requisition in requisitions:
+            job_id = str(requisition.get("itemID") or "")
+            if not job_id or job_id in seen:
+                continue
+            seen.add(job_id)
+            fresh += 1
+            jobs.append(
+                Job(
+                    ats="adp",
+                    token=token,
+                    job_id=job_id,
+                    title=_text(requisition.get("requisitionTitle")) or "",
+                    url=(
+                        "https://workforcenow.adp.com/mascsr/default/mdf/recruitment"
+                        f"/recruitment.html?cid={token}&jobId={job_id}"
+                    ),
+                    location=_adp_place(requisition),
+                    posted_at=requisition.get("postDate"),
+                    description=_text(requisition.get("requisitionDescription")),
+                )
+            )
+        # Stop when a page adds nothing new, not when it comes back short.
+        # ADP's page size is not stable -- 20 without `$skip`, 19 with -- so a
+        # short-page rule ends the walk one page in. "Adds nothing new" also
+        # catches a tenant that ignores `$skip` and serves page one forever,
+        # which is the rule Workday and iCIMS each needed.
+        if not requisitions or not fresh:
+            break
     if isinstance(advertised, int) and advertised > len(jobs):
         raise ValueError(
             f"adp/{token}: board advertises {advertised} postings, read {len(jobs)}"

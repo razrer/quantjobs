@@ -2135,3 +2135,25 @@ places and looks exactly like a per-posting location map. The ids are location
 ids; the join matches nothing and would have given every ADP posting a
 confident, wrong city. The board gates on geography, so that is the expensive
 direction — the coarse country on the requisition is used instead.
+
+### What the Hong Kong widening actually showed
+
+All 51 roster firms were probed by name across every discoverable ATS. The
+sweep verified **two** new Hong Kong boards — Eclipse Trading (16 postings) and
+Quantbot Technologies (8) — and both had been sitting tier A with a NULL token,
+recognised and unpollable.
+
+The other 33 are not a backlog. Most small HK funds run no public board:
+their careers pages are a paragraph and an email address, or there is no
+careers page at all. That is the same structural answer Stockholm gave for
+Captor, Norron and Nordkinn, and it is why the Hong Kong rate will sit well
+below Stockholm's however much effort goes in. The roster is doing its job by
+making that visible rather than hiding it behind nine already-solved firms.
+
+**Three bugs the widening exposed, all in domain resolution:**
+
+- a verified board with no domain is silently dropped by `discover.record`,
+  because `ats_resolution` is keyed on the domain — 113 proved postings;
+- `resolve._best` let a social page win a merged firm's `website` field, which
+  is what `harvest_registry_domains` seeds `domain_lookups` from;
+- `athoscap.com` passes the spaced-phrase test and is the wrong Athos.

@@ -576,6 +576,33 @@ Each of these silently produced wrong results before being caught:
   Adding a pattern without a reader now fails the suite instead of quietly
   parking boards in tier A, which is how 88 of them once sat resolved and
   polling nothing.
+- **Naming the firm is necessary and not sufficient.** `athoscap.com` prints
+  "Athos Capital" on the page and passes the spaced-phrase rule — and it is
+  *Athos Capital Partners*, a real-estate private equity firm, not the Hong
+  Kong hedge fund Athos Capital Limited. Same trap as `citadel.com` matching
+  Citadel Securities. When a firm name is two common words, read the title
+  before recording the domain.
+- **A merged firm can inherit a social page as its website, and that field is
+  load-bearing.** `resolve._best` picks the most common value among a group's
+  rows, so Two Sigma's `firms.website` came out `https://x.com/twosigma` while
+  the seed registry carried `twosigma.com` for the same firm.
+  `harvest_registry_domains` seeds `domain_lookups` from that field,
+  `discover._domain_for` reads that, and the board is attached to a host
+  thousands of firms claim — or to nothing, once the platform guard rejects it.
+  `_best_website` prefers any real domain the group holds. Fourth layer
+  `is_platform_domain` has had to guard.
+- **A verified board with no domain polls nowhere.** `ats_resolution` is keyed
+  on the domain, so `discover.record` silently drops a proved board when the
+  firm has none — Akuna, Voleon, Belvedere and Quadrature, 113 postings between
+  them. Voleon and Quadrature publish a LinkedIn page as their Form ADV
+  website; Akuna's only name match in the universe was `Hakuna GmbH`. The seed
+  registry is the route, the same one AP7 needed.
+- **Most small Hong Kong funds run no public board at all**, and this is a
+  finding rather than a gap. All 51 roster firms were probed by name across
+  every discoverable ATS; the sweep found two — Eclipse Trading and Quantbot
+  Technologies. The rest hire through recruiters and personal networks, which
+  no scraper reaches. Expect the HK rate to sit far below Stockholm's for
+  structural reasons, not for want of effort.
 - **A few large firms simply refuse us**, and it is not our trust store this
   time: ABN AMRO answers 503, Nasdaq times out, Citadel Securities and Jyske
   Bank answer 403. `curl` with a browser UA reaches all four. Recorded as a

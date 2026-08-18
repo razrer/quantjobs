@@ -429,8 +429,20 @@ def fingerprint(markup: str, url: str | None = None) -> tuple[str, str | None, s
     custom-domain case below, where the page's own host *is* the board.
     """
     markup = _unescape(markup)
+    # The infrastructure-only fallback below used to be a *second* full sweep
+    # of all 23 patterns over the whole page -- `pattern.search`, run again
+    # from scratch, after the loop just below had already run `finditer` over
+    # every one of them. For the ~95% of pages that fingerprint to nothing at
+    # all (tier B and C), that doubled the regex cost of every fetch for no
+    # different answer: `pattern.search` returns the same first match
+    # `finditer` already yielded, and the loop below sees it first regardless
+    # of whether it goes on to accept or reject it. Recording it in passing
+    # gets the identical fallback for free.
+    fallback: tuple[str, str] | None = None
     for name, pattern in ATS_PATTERNS:
         for match in pattern.finditer(markup):
+            if fallback is None:
+                fallback = (name, match.group(0)[:120])
             groups = [g for g in match.groups() if g]
             # A few formats need their parts assembled by name -- see
             # `_TOKEN_BUILDERS`. Everything else takes the first non-empty
@@ -456,11 +468,11 @@ def fingerprint(markup: str, url: str | None = None) -> tuple[str, str | None, s
             if asset_host in markup and host and _serves_feed(host, path, marker):
                 return name, host, f"{asset_host}, feed verified at {host}"
 
-    # Third pass: the ATS is present but every match was infrastructure.
-    for name, pattern in ATS_PATTERNS:
-        match = pattern.search(markup)
-        if match:
-            return name, None, match.group(0)[:120]
+    # Third pass, without a third scan: the ATS is present but every match was
+    # infrastructure. `fallback` already holds the first pattern (in the same
+    # order this loop would have checked) that matched anywhere in the page.
+    if fallback:
+        return fallback[0], None, fallback[1]
     return None
 
 

@@ -338,11 +338,42 @@ class AdpTest(unittest.TestCase):
             self.assertEqual(extract.adp("cid")[0].location, "Wanchai, HK, Hong Kong")
 
     def test_a_shortfall_against_the_advertised_total_is_loud(self):
+        """This is not hypothetical -- it caught the reader truncating.
+
+        The first version read one page and five boards raised
+        "advertises 174, read 20". ADP caps a request at 20 and ignores `$top`,
+        so `$skip` is the only way through a board.
+        """
         with mock.patch.object(
             extract.http, "get_text", return_value=self._payload(9, self._req("1"))
         ):
             with self.assertRaises(ValueError):
                 extract.adp("cid")
+
+    def test_it_pages_with_skip_and_omits_it_on_the_first_request(self):
+        """`$skip=0` returns 19 rows where the bare URL returns 20.
+
+        Enough of a difference that a short-page stop rule ends the walk on the
+        first page, which is how this was found.
+        """
+        first = self._payload(3, *[self._req(str(n)) for n in range(2)])
+        second = self._payload(3, self._req("9"))
+        third = self._payload(3)
+        with mock.patch.object(
+            extract.http, "get_text", side_effect=[first, second, third]
+        ) as fetch:
+            jobs = extract.adp("cid")
+        self.assertEqual(len(jobs), 3)
+        self.assertNotIn("$skip", fetch.call_args_list[0].args[0])
+        self.assertIn(f"$skip={extract._ADP_PAGE}", fetch.call_args_list[1].args[0])
+
+    def test_a_tenant_ignoring_skip_terminates(self):
+        """Serving page one forever is what an empty-page rule never catches."""
+        same = self._payload(1, self._req("1"))
+        with mock.patch.object(extract.http, "get_text", return_value=same) as fetch:
+            jobs = extract.adp("cid")
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(fetch.call_count, 2)
 
 
 class UkgTest(unittest.TestCase):
