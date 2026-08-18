@@ -434,7 +434,9 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
 .card:hover { border-color: var(--rule-firm); box-shadow: var(--shadow-lg); z-index: 40; }
 .card:focus-within { z-index: 40; }
 .card[data-saved="1"] { border-color: var(--accent); }
-.card[data-hidden="1"] { opacity: 0.42; }
+.card[data-hidden="1"], .card[data-rejected="1"] { opacity: 0.42; }
+.act.warn { color: var(--due-0); }
+.act.warn.on { color: var(--due-0); border-color: var(--due-0); background: var(--due-0-bg); }
 
 .card-top {
   display: flex;
@@ -767,7 +769,10 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     <div class="presets" id="presets"></div>
     <div class="rail-head">
       <h2>Filters</h2>
-      <button class="linky" id="clear" hidden>clear all</button>
+      <span style="display:flex; gap:0.625rem;">
+        <button class="linky" id="export" hidden>export rejected</button>
+        <button class="linky" id="clear" hidden>clear all</button>
+      </span>
     </div>
     <div id="facets"></div>
   </aside>
@@ -854,9 +859,13 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
       that set it; the rows stay in the database, and
       <code>list --exclude off_industry</code> shows exactly what it ate. Every
       build prints the count.</p>
-      <p><b>Saved and hidden</b> live in this browser only, keyed on the posting
-      id. Hidden postings stay in the counts and come back with the
-      <em>hidden</em> preset.</p>
+      <p><b>Saved, hidden and rejected</b> live in this browser only, keyed on
+      the posting id. Hidden and rejected postings stay in the counts and come
+      back with their preset. <b>Reject</b> is for a posting that is not this
+      line of work at all: it comes off the board immediately, and <em>export
+      rejected</em> in the filter rail downloads a CSV shaped like
+      <code>quantscraper/labels.csv</code> so it can be folded into the
+      hand-labelled sheet that trains the lexicon.</p>
     </div>
   </main>
 </div>
@@ -943,10 +952,36 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
 
   const saved = new Set(JSON.parse(localStorage.getItem("board.saved") || "[]"));
   const buried = new Set(JSON.parse(localStorage.getItem("board.hidden") || "[]"));
+  const rejected = new Set(JSON.parse(localStorage.getItem("board.rejected") || "[]"));
   const persist = () => {
     localStorage.setItem("board.saved", JSON.stringify([...saved]));
     localStorage.setItem("board.hidden", JSON.stringify([...buried]));
+    localStorage.setItem("board.rejected", JSON.stringify([...rejected]));
   };
+
+  // A CSV shaped exactly like `quantscraper/labels.csv`'s own header, so the
+  // download can be pasted straight into the hand-labelled sheet that trains
+  // the lexicon -- the board has no backend to write the database itself.
+  const csvCell = (v) => {
+    const s = String(v ?? "");
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  function exportRejected() {
+    const header = ["n", "relevance", "seniority", "note", "title", "firm",
+      "location", "department", "url", "description", "ats", "token", "job_id"];
+    const lines = [header.join(",")];
+    jobs.filter((j) => rejected.has(j.id)).forEach((j, i) => {
+      const [ats, token, ...rest] = j.id.split(":");
+      lines.push([i + 1, "rejected", "", "flagged irrelevant from the board", j.title,
+        j.firmDomain || j.firm, j.loc || "", j.team || "", j.url || "", j.about || "",
+        ats, token, rest.join(":")].map(csvCell).join(","));
+    });
+    const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = "rejected.csv"; a.click();
+    URL.revokeObjectURL(url);
+  }
 
   // --- facets --------------------------------------------------------------
 
@@ -1109,6 +1144,7 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
       test: (j) => j.tstyle === "pure" },
     { key: "saved", label: "Saved", only: "saved", test: (j) => saved.has(j.id) },
     { key: "hidden", label: "Hidden", only: "hidden", test: (j) => buried.has(j.id) },
+    { key: "rejected", label: "Rejected", only: "rejected", test: (j) => rejected.has(j.id) },
   ];
 
   // --- filtering -----------------------------------------------------------
@@ -1144,7 +1180,8 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
 
       if (state.only === "saved" && !saved.has(job.id)) continue;
       if (state.only === "hidden" && !buried.has(job.id)) continue;
-      if (state.only === null && buried.has(job.id)) continue;
+      if (state.only === "rejected" && !rejected.has(job.id)) continue;
+      if (state.only === null && (buried.has(job.id) || rejected.has(job.id))) continue;
       if (terms.length && !terms.every((t) => hay[n].includes(t))) continue;
 
       let failed = -1, fails = 0;
@@ -1284,6 +1321,10 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
         <button class="act${saved.has(job.id) ? " on" : ""}" data-act="save">${saved.has(job.id) ? "saved" : "save"}</button>
         <button class="act" data-act="firm">only this firm</button>
         <button class="act" data-act="hide">${buried.has(job.id) ? "unhide" : "hide"}</button>
+        <button class="act warn${rejected.has(job.id) ? " on" : ""}" data-act="reject"
+            title="Not this line of work -- removes it from the board and queues it for the labelling sheet">
+          ${rejected.has(job.id) ? "rejected ✓" : "irrelevant"}
+        </button>
       </div>
     </div>`;
   }
@@ -1293,7 +1334,7 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     const fit = job.fit || "unknown";
     return `<article class="card" data-id="${attr(job.id)}" data-fit="${attr(fit)}"
         ${job.left !== null && job.left >= 0 ? `data-due="${level(job.left)}"` : ""}
-        ${saved.has(job.id) ? 'data-saved="1"' : ""}${buried.has(job.id) ? ' data-hidden="1"' : ""}>
+        ${saved.has(job.id) ? 'data-saved="1"' : ""}${buried.has(job.id) ? ' data-hidden="1"' : ""}${rejected.has(job.id) ? ' data-rejected="1"' : ""}>
       <div class="card-top">
         <span class="pill fit-${FIT_RANK[fit]}">${esc(label(fit))}</span>
         ${dueTag(job)}
@@ -1465,6 +1506,7 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     }).join("");
 
     $("clear").hidden = !dirty();
+    $("export").hidden = rejected.size === 0;
   }
 
   const presetCache = new Map();
@@ -1549,6 +1591,7 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
   });
 
   $("clear").addEventListener("click", reset);
+  $("export").addEventListener("click", exportRejected);
   function reset() {
     const { sort, pin, group } = state;
     state = { ...FRESH(), sort, pin, group };
@@ -1567,6 +1610,7 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
       if (act.dataset.act === "open" && job.url) window.open(job.url, "_blank", "noopener");
       if (act.dataset.act === "save") { saved.has(job.id) ? saved.delete(job.id) : saved.add(job.id); persist(); commit(); }
       if (act.dataset.act === "hide") { buried.has(job.id) ? buried.delete(job.id) : buried.add(job.id); persist(); commit(); }
+      if (act.dataset.act === "reject") { rejected.has(job.id) ? rejected.delete(job.id) : rejected.add(job.id); persist(); commit(); }
       if (act.dataset.act === "firm") { state.sel.firm = [job.firm]; commit(); }
       return;
     }
