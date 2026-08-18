@@ -51,7 +51,7 @@ nothing in the near-term plan now waits on a human.
 | 8 | Silent-failure alerting | **done** — `alerts`, distributional |
 | 9 | Layer 3B — Tier B change detection | **done** — 3,751 pages watched |
 | 10 | Coverage measurement | **done** — measures, and refuses when it cannot |
-| 11 | Layer 5 — job tagging | **done** — lexicon 35, hand sheet 96.2%, no false rejection, 1,079 rows scored. Seniority taken off the bar, with the reason recorded |
+| 11 | Layer 5 — job tagging | **done** — lexicon 36, relevance 96.2%, no false rejection, leadership containment 14/14 |
 | 12 | Layer 6 — the board | **done** — card grid, facet rail, deadlines |
 | 13 | Layer 2C — board discovery | **done** — 23 boards, 989 postings, roster 16→49 |
 | 13b | Platsbanken is not a census | **done** — 0 of 55 Stockholm employers are in it |
@@ -1119,7 +1119,7 @@ Twenty-one more hand-labelled rows took the sheet to 80. Scored against
 lexicon 31 they read **relevance 73.8%, seniority 39.5%** — down from 86.4%,
 because the new rows were drawn from the part of the corpus the tagger had
 never been measured on. **Relevance is 96.2% on the hand sheet at
-lexicon 35**, and no hand-labelled row is a false rejection at any version.
+lexicon 36**, and no hand-labelled row is a false rejection at any version.
 
 **One cause explained ten of the twenty relevance misses, and it is the
 boilerplate bug one level up from where this file kept finding it.**
@@ -1808,3 +1808,44 @@ when torn, so its own "false rejections" contradict the reader's hand labels
 rather than the lexicon. Diagnostic, not criterion.
 
 `python -m quantscraper labels` exits 0.
+
+
+### Seniority went back on the bar, and asking for it found a bug
+
+The reader asked for it back: *"It is especially relevant for filtering out
+leadership positions, which I am not interested in."* That is a different
+question from the one the criterion had been asking, and it was the right one.
+
+**A years figure was *demoting* titles that stated a grade.** `Senior Software
+Engineer` whose body mentions "3+ years" came out `mid_3_5` and cleared
+`out_of_reach`. The carve-out was written for a title under-selling itself --
+`Quantitative Trading Associate` says associate and demands three years -- and a
+body's smallest number is routinely the *entry* bar on a senior posting. It
+promotes only now.
+
+| | before | after |
+|---|---|---|
+| leadership kept off the board, hand sheet | 13/14 | **14/14** |
+| leadership kept off the board, machine sheet | 46.1% | **92.8%** |
+| machine-sheet rung agreement | 46.6% | 53.5% |
+| newly gated `out_of_reach` | -- | 3,517 |
+| of those, rated positively | -- | 38, all "Senior" titles |
+| board | 3,983 | 3,844 |
+| **worth reading** | **76** | **75** |
+
+The last row is the check that mattered: 3,517 postings left the board and the
+shortlist moved by one, so what went was noise the rank gate should always have
+caught. `senior_6_10` was already in `_OUT_OF_REACH`; those postings were
+escaping a rung that already contained them.
+
+**Seniority is now scored as containment, not rung agreement**, because the
+reader's own sheet disagrees with the tagger about the word while agreeing
+about the decision -- `Senior X` with four years is `mid_3_5` to them and
+`senior_6_10` here, and both mean "not reachable". `labels.containment` reports
+how much labelled leadership the board withholds and how many postings rated
+worth reading the rank gate removed, separately, because netting them off would
+hide both.
+
+If senior-but-relevant postings are wanted back, the lever is removing
+`senior_6_10` from `_OUT_OF_REACH` -- a different decision from this fix, and
+one line.

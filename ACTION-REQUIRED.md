@@ -15,41 +15,42 @@ from scratch.
 
 ---
 
-## 0. Seniority — decided, and here is what I picked
+## 0. Seniority -- back on the bar, as you asked
 
-**Closed, and you can reopen it in one line if you disagree.** You asked me to
-finish what was left, so I took the option I had recommended: **`seniority` no
-longer gates the exit criterion.** `relevance` does, on your hand sheet, plus
-no false rejection.
+You overruled my call to drop it, and you were right to: asking for it found a
+real bug. **A years figure was demoting titles that said "Senior"** -- a body
+mentioning "3+ years" turned `Senior Software Engineer` into `mid_3_5`, which
+cleared the rank gate. A body's smallest number is usually the *entry* bar on a
+senior posting. It promotes only now, and leadership containment went from 13/14
+to **14/14** on your sheet and 46.1% to 92.8% on the machine sheet.
 
-Why that and not the others: about a third of your seniority labels are on
-titles that state no grade at all, where the tagger answers `unknown` on
-purpose. That rule exists because a stray *partner* in a diversity paragraph
-made a Schonfeld internship a managing director. Reaching 90% means letting a
-body set rank again, and buying a percentage with a known-bad rule is a bad
-trade. Seniority is a ranking input anyway — the thing that actually removes a
-posting for being too senior is `out_of_reach`, which reads the management list
-and was right on every row you labelled.
+**It is scored by what you said it is for.** Rung agreement is 55.8% and is not
+the bar, because most of that gap is you and the tagger disagreeing about a
+word while agreeing about the decision: a `Senior X` posting demanding four
+years is `mid_3_5` to you and `senior_6_10` here, and both mean "not
+reachable". What gates now is containment -- how much of the leadership you
+flagged the board actually withholds -- plus a separate count of openings the
+rank gate removed, because those two errors are not interchangeable.
 
-It is still reported on every run, now split into *wrong* and *unanswered*, so
-a real regression is still visible: **62.8%, and 6 wrong against 13
-unanswered.** Three of the six are calls you already made about `Director` and
-`Partner`.
+    seniority: 14/14 leadership postings kept off the board (100.0%),
+               2 opening(s) lost to the rank gate
 
-The bar is your sheet rather than the combined number. `auto_labels.csv` is
-scored beside it and it earned its keep — it caught a rule that was rejecting
-1,834 postings on the word *underwriting*, which in capital markets means
-securities issuance. But its 31 "false rejections" mark `Slack Administrator`
-and `Director, GTM AI Enablement` as `adjacent`, which contradicts your own
-hand labels, so it reports and does not gate.
+The two lost are `Senior quantitative analyst within credit risk` and `Senior
+Trading Associate`, both `adjacent`, and both your own notes dismiss.
 
-**`python -m quantscraper labels` now exits 0.** Stage 11 is closed.
+**One consequence worth a look.** 3,517 postings newly gate, 38 of them rated
+positively -- every one a "Senior" title, including `Senior Quantitative
+Researcher - Delta One` and `Cubist Senior Data Scientist`. Those are genuinely
+senior seats and they were escaping a rung that already gated them. The
+shortlist went 76 to 75, so nothing much was lost. If you want senior-but-
+relevant roles visible after all, the lever is taking `senior_6_10` out of
+`_OUT_OF_REACH` -- say so and it is one line.
 
 ---
 
-## 1. The labelling sheet — done its job for relevance
+## 1. The labelling sheet — done its job
 
-**Relevance is 96.2% on the hand sheet at lexicon 35, with no false
+**Relevance is 96.2% on the hand sheet at lexicon 36, with no false
 rejection at any version.** The criterion is 90%, so this half is met. The
 remaining work is item 0 above, which is a decision rather than more labelling.
 

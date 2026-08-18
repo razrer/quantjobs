@@ -1259,3 +1259,93 @@ class PruneTest(unittest.TestCase):
 
         self.assertEqual(tagging.prune(connection), 0)
         self.assertEqual(tagging.stale_taggers(connection), [])
+
+
+class YearsFigurePromotesOnly(unittest.TestCase):
+    """A number in a body is the posting's own bar when the title under-sells
+    itself, and noise when it contradicts a grade word the title carries.
+
+    Read in the demoting direction it was a leadership escape: `Senior Software
+    Engineer` whose body mentions three years came out `mid_3_5` and cleared
+    `out_of_reach`. A body's smallest number is routinely the *entry* bar on a
+    senior posting -- "3+ years required, 8+ preferred" floors at three."""
+
+    BODY = "You will need {n}+ years of relevant experience. " * 12
+
+    def test_a_years_figure_still_raises_a_title_that_undersells(self):
+        """The case the carve-out was written for: `Quantitative Trading
+        Associate` says associate and demands three years."""
+        tags = _tags(title="Quantitative Trading Associate",
+                     description=self.BODY.format(n=3))
+        self.assertEqual(tags["seniority"], {"mid_3_5"})
+
+    def test_a_years_figure_cannot_demote_a_stated_grade(self):
+        for title, floor in (("Senior Software Engineer", 3),
+                             ("Senior Quantitative Researcher", 4),
+                             ("Senior Trading Associate", 4)):
+            with self.subTest(title=title):
+                tags = _tags(title=title, description=self.BODY.format(n=floor))
+                self.assertEqual(tags["seniority"], {"senior_6_10"})
+
+    def test_the_demoted_posting_is_gated_again(self):
+        """The point of the fix, not a side effect of it."""
+        tags = _tags(title="Senior Software Engineer",
+                     description=self.BODY.format(n=3))
+        self.assertIn("out_of_reach", tags["exclusion_reason"])
+
+    def test_a_title_with_no_grade_still_takes_the_floor(self):
+        tags = _tags(title="Quantitative Researcher",
+                     description=self.BODY.format(n=7))
+        self.assertEqual(tags["seniority"], {"senior_6_10"})
+
+
+class LeadershipContainmentTest(unittest.TestCase):
+    """Seniority is scored by what the reader said it is for -- keeping
+    leadership off the board -- rather than by agreement on a rung."""
+
+    def _connection(self):
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        connection.executescript(db.SCHEMA)
+        connection.executemany(
+            "INSERT INTO jobs (ats, token, job_id, title, description, location,"
+            " first_seen, last_seen) VALUES (?, ?, ?, ?, '', 'Stockholm', 't', 't')",
+            [("gh", "f", "1", "Head of Quantitative Research"),
+             ("gh", "f", "2", "Quantitative Researcher")],
+        )
+        connection.commit()
+        return connection
+
+    def test_a_leadership_row_the_board_withholds_counts_as_contained(self):
+        from quantscraper import labels as labels_module
+        connection = self._connection()
+        rows = [labels_module.Label("gh", "f", "1", "relevant", "head_or_md", "")]
+
+        kept, graded, lost = labels_module.containment(
+            connection, rows, tagging.GATES, tagging.tag_posting)
+
+        self.assertEqual((kept, graded, lost), (1, 1, 0))
+
+    def test_an_opening_removed_by_the_rank_gate_is_counted_separately(self):
+        """The two errors are not interchangeable, so they are never netted
+        off against each other."""
+        from quantscraper import labels as labels_module
+        connection = self._connection()
+        rows = [labels_module.Label("gh", "f", "1", "relevant", "junior_0_2", "")]
+
+        kept, graded, lost = labels_module.containment(
+            connection, rows, tagging.GATES, tagging.tag_posting)
+
+        self.assertEqual(graded, 0)   # not a leadership row
+        self.assertEqual(lost, 1)     # but the rank gate took it
+
+    def test_a_row_with_no_seniority_label_is_not_scored(self):
+        from quantscraper import labels as labels_module
+        connection = self._connection()
+        rows = [labels_module.Label("gh", "f", "2", "relevant", "", "")]
+
+        self.assertEqual(
+            labels_module.containment(
+                connection, rows, tagging.GATES, tagging.tag_posting),
+            (0, 0, 0),
+        )

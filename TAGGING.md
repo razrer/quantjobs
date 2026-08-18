@@ -131,12 +131,15 @@ named rules rather than a feeling:
   asset management, wealth. `investment analyst` and `portfolio analyst` had
   been filed as weak *positives*; nine consecutive hand-labelled rows said
   otherwise.
-- **Trading is fine, and it splits.** Confirmed rather than assumed, then made
-  more specific by a later sheet: a *quant* trading seat is `relevant`, and a
-  pure one is `adjacent`. Both stay readable. The lexicon had called all
-  trading `less_relevant` while `trading_style` was already drawing the line —
-  108 pure seats against 14 quant — and the relevance ladder was not reading
-  it.
+- **Trading is fine.** Confirmed rather than assumed: it sits at
+  `less_relevant`, one step out from research, and stays readable. Splitting it
+  by `trading_style` — quant seats up, pure seats down — was tried and
+  measured at **one row out of eighty**, because the sheet contradicts itself
+  on that axis twice: `Algorithmic Trader` is `less_relevant` and
+  `Quantitative Trader` is `relevant`, and at one firm `Graduate Trader` is
+  `less_relevant` while `Digital Assets Trader` is `adjacent`. `trading_style`
+  still records the fact and is filterable; it does not imply a rank the
+  evidence will not carry.
 
 **2b. `desk`** — `front_office` · `middle_office` · `back_office` · `unstated`
 
@@ -399,20 +402,22 @@ accuracy claim is a feeling.
   asymmetry this whole project is built on — a missed posting is the expensive
   failure, a false positive costs a few seconds of reading.
 
-  **Met at lexicon 35: relevance 96.2% (77/80), no false rejection, 1,079
+  **Met at lexicon 36: relevance 96.2% (77/80), no false rejection, 1,079
   labelled rows scored.**
 
-  `seniority` was on the bar and has been taken off it, which is a change to
-  this document rather than a result. **It cannot reach 90% and the reason is
-  the scale, not the lexicon**: about a third of the labelled rows are titles
+  `seniority` is on the bar, at the reader's request -- it is what keeps
+  leadership off the board, which is the thing they most want filtered.
+  **Measured as containment rather than as rung agreement: 14/14 of the
+  hand-labelled leadership postings are withheld, at a cost of 2 `adjacent`
+  rows.** Rung agreement is reported too and is 55.8%, and that number is not
+  the bar, because: about a third of the labelled rows are titles
   stating no grade at all, where the tagger answers `unknown` deliberately —
   the rule adopted after a stray *partner* in a diversity paragraph made an
-  internship a managing director, and a body saying "you will report to the
-  Head of Trading" did the same to a graduate. Closing that gap means letting a
-  body set rank again. It is reported instead, split into *wrong* and
-  *unanswered*, because only the first is evidence of a bug; and the thing that
-  actually removes a posting for being too senior is `out_of_reach`, which
-  reads `_MANAGEMENT` and was right on every hand-labelled row.
+  internship a managing director. A `Senior X` posting the reader grades
+  `mid_3_5` and the tagger grades `senior_6_10` is a disagreement about a word
+  and an agreement about the decision, and only the decision has consequences.
+  Both numbers are printed, and the rung number is split into *wrong* and
+  *unanswered*, because only the first is evidence of a bug.
 
   **The bar is the hand sheet, and the machine sheet is scored beside it.**
   `auto_labels.csv` earns its place as a diagnostic — it found a body-matched

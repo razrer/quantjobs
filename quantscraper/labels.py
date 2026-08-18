@@ -542,3 +542,54 @@ def score(connection: sqlite3.Connection, labels: list[Label]):
         for dimension, (hits, total) in agreed.items()
     }
     return rates, found
+
+
+# The ranks the reader asked not to be shown. `lead` and `head_or_md` are
+# obvious; `senior_6_10` is here because a posting demanding six years is out
+# of reach from under one, which is the same fact stated as a number.
+LEADERSHIP = frozenset({"senior_6_10", "lead", "head_or_md"})
+
+
+def containment(connection, labels: list[Label], gates, tag_posting):
+    """(leadership kept off the board, total, openings lost to the rank gate).
+
+    **Seniority is scored by what it is for, not by rung agreement.** The
+    reader's own words: it matters "for filtering out leadership positions,
+    which I am not interested in". Rung agreement measures something else and
+    measures it badly -- a third of the labelled rows are titles stating no
+    grade, where the tagger answers `unknown` on purpose, and a `Senior X`
+    posting the reader calls `mid_3_5` and the tagger calls `senior_6_10` is a
+    disagreement about a word and an agreement about the decision.
+
+    So this asks the two questions that have consequences:
+
+    - **containment** -- of the postings the reader graded as leadership, how
+      many does the board actually withhold? Any other answer means a posting
+      they asked not to see is on the page.
+    - **cost** -- of the postings they rated worth reading, how many did the
+      *rank* gate remove? That is the expensive direction, and it is counted
+      separately rather than netted off, because the two errors are not
+      interchangeable.
+    """
+    kept = shown = lost = 0
+    for label in labels:
+        if not label.seniority:
+            continue
+        row = connection.execute(
+            "SELECT * FROM jobs WHERE ats = ? AND token = ? AND job_id = ?",
+            (label.ats, label.token, label.job_id),
+        ).fetchone()
+        if row is None:
+            continue
+        tags = tag_posting(row)
+        excluded = {t.value for t in tags if t.dimension == "exclusion_reason"}
+        relevance = next(
+            (t.value for t in tags if t.dimension == "relevance"), "unknown")
+        on_board = not (excluded & set(gates)) and relevance != "rejected"
+        if label.seniority in LEADERSHIP:
+            shown += on_board
+            kept += not on_board
+        elif (label.relevance in ("relevant", "less_relevant", "adjacent")
+              and not on_board and "out_of_reach" in excluded):
+            lost += 1
+    return kept, kept + shown, lost

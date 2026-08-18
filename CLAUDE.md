@@ -981,3 +981,27 @@ dropped at write time cannot be recovered without re-scraping. The legitimate
 version of the idea is to filter the *work* rather than the *data*, which
 `bodies.py` already does — it fetches a description only for postings whose
 verdict a body could change.
+
+
+**A years figure may raise a rank and must never lower one the title stated.**
+The carve-out from "the rank is in the title" was written for a title that
+*under-sells* itself -- `Quantitative Trading Associate` says associate and
+demands "3+ years", so the bar is the fact. Read in the other direction it is a
+leadership escape: `Senior Software Engineer` whose body mentions three years
+came out `mid_3_5` and cleared `out_of_reach`, because a body's smallest number
+is routinely the *entry* bar on a senior posting ("3+ required, 8+ preferred"
+floors at three). Measured on the machine sheet, leadership containment was
+46.1% and every miss was this shape. It promotes only now, and 3,517 postings
+newly gate -- 38 of them rated positively, all "Senior" titles that had been
+escaping a rung `_OUT_OF_REACH` already contained.
+
+**Seniority is scored by what it is for, not by agreement on a rung.** The
+reader wants it "for filtering out leadership positions", and rung agreement
+answers a different question badly: a third of the labelled rows are titles
+stating no grade, where the tagger answers `unknown` on purpose, and a
+`Senior X` posting the reader calls `mid_3_5` and the tagger calls
+`senior_6_10` is a disagreement about a word and an agreement about the
+decision. `labels.containment` asks the two questions with consequences --
+how much labelled leadership the board withholds, and how many postings rated
+worth reading the rank gate removed -- and reports them separately, because the
+two errors are not interchangeable and netting them off would hide both.

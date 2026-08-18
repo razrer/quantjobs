@@ -35,7 +35,7 @@ from . import db, lexicon
 # Bump on every lexicon change: the diff between two versions over the same
 # corpus is a free regression test, and it is the only way to tell "the
 # classifier improved" from "the market moved".
-TAGGER = 35
+TAGGER = 36
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS job_tags (
@@ -680,6 +680,22 @@ _FLOOR_RANK = ((6, "senior_6_10"), (3, "mid_3_5"), (0, "junior_0_2"))
 # points one way: preserving it costs a few seconds of reading, overriding it
 # to `senior_6_10` drops the posting out of the shortlist entirely.
 _FLOOR_DECIDES = frozenset({"junior_0_2", "mid_3_5", "senior_6_10", "unknown"})
+
+# **A years figure may raise a rank and must never lower one the title stated.**
+# The rule it carves out of "the rank is in the title" was always about a title
+# under-selling itself -- `Quantitative Trading Associate` says associate and
+# demands "3+ years", so the bar is the fact. Read in the other direction it
+# does real damage: `Senior Software Engineer` whose body mentions three years
+# came out `mid_3_5`, and a body's smallest number is routinely the *entry* bar
+# on a senior posting ("3+ years required, 8+ preferred" floors at three).
+#
+# Measured on the machine sheet, which is where the volume is: leadership
+# recall was 46.1%, and the misses were `Senior Software Engineer`, `Senior
+# Maintenance Technician` and five `Experienced ... Trader` postings -- every
+# one a title that says senior and a body that demoted it out of
+# `out_of_reach`. That is a leadership posting reaching a board whose reader
+# asked not to see them, which is the direction that costs something.
+_LADDER = ("junior_0_2", "mid_3_5", "senior_6_10")
 
 # The ladder the user actually cares about. 4 and 5 down-rank, never drop:
 # `CLAUDE.md` is explicit that many quant-dev roles list C++ second and fit.
@@ -1871,11 +1887,19 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
     named = rank[0] if rank else "unknown"
     if floor is not None and named in _FLOOR_DECIDES:
         by_floor = next(value for lower, value in _FLOOR_RANK if floor >= lower)
-        evidence = f"{floor} years demanded"
-        if by_floor != named and rank:
-            evidence += f", over title {rank[1]!r}"
-        seniority_value = by_floor
-        add("seniority", seniority_value, evidence)
+        # Promote only. See `_LADDER`: a number in a body is the posting's own
+        # bar when the title under-sells itself, and is noise when it
+        # contradicts a grade word the title actually carries.
+        if named in _LADDER and _LADDER.index(by_floor) <= _LADDER.index(named):
+            seniority_value = named
+            add("seniority", seniority_value,
+                f"{rank[1]!r}, over a floor of {floor} years")
+        else:
+            evidence = f"{floor} years demanded"
+            if by_floor != named and rank:
+                evidence += f", over title {rank[1]!r}"
+            seniority_value = by_floor
+            add("seniority", seniority_value, evidence)
     else:
         seniority_value = named
         add("seniority", seniority_value, f"{rank[1]!r}" if rank else None)

@@ -544,9 +544,19 @@ def _labels(database: str, files: list[str] | None) -> int:
     hand_missed = [d for d in hand_disagreements if d.false_rejection]
     hand_relevance = hand_rates["relevance"]
 
+    # Seniority is back on the bar, at the reader's request and measured by
+    # what they said it is for: keeping leadership postings off the board. See
+    # `labels.containment` for why rung agreement is the wrong number.
+    kept, graded, lost = labels.containment(
+        connection, [l for l in usable if l in set(hand)] if hand else usable,
+        tagging.GATES, tagging.tag_posting,
+    )
+    contained = kept / graded if graded else 1.0
+
     passed = (
         not hand_missed
         and hand_relevance[2] >= 0.90
+        and contained >= 0.90
         and rates["relevance"][1] >= 100
     )
     print(
@@ -558,7 +568,8 @@ def _labels(database: str, files: list[str] | None) -> int:
     if missed and not hand_missed:
         print(f"  {len(missed)} false rejection(s) on the machine sheet are"
               " reported above and do not gate -- read them, do not trust them")
-    print("seniority is reported, not gated: see `_labels` for why")
+    print(f"seniority: {kept}/{graded} leadership postings kept off the board"
+          f" ({contained:.1%}), {lost} opening(s) lost to the rank gate")
     print("\n" + ("exit criterion met" if passed else "exit criterion not met"))
     return 0 if passed else 1
 
