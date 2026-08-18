@@ -435,6 +435,66 @@ def load(path: Path = PATH) -> list[Label]:
     return labels
 
 
+def upsert(path: Path, key: tuple[str, str, str], dimension: str, value: str,
+           context: dict[str, str]) -> None:
+    """Write one FILL column for one posting, in place if the row already exists.
+
+    The board's reclassify control calls this (through `web/serve.py`) so a
+    correction lands straight in the file `labels` already scores against --
+    no download, no manual merge. Only `dimension` is touched: the sibling FILL
+    column and `note` are left exactly as a person left them, so a live
+    one-field correction can never clobber a hand-typed cell it was not asked
+    to change. Context columns are written only when the row is brand new; an
+    existing row keeps whatever a person already put there, same as `draw`
+    never overwriting a filled-in label.
+    """
+    header = list(HEADER)
+    rows: list[list[str]] = []
+    if path.exists():
+        with path.open(encoding="utf-8-sig", newline="") as handle:
+            reader = csv.reader(handle)
+            first = next(reader, None)
+            if first:
+                header = first
+            rows = list(reader)
+
+    idx = {_column(name): i for i, name in enumerate(header)}
+
+    def cell(row: list[str], name: str) -> str:
+        i = idx.get(name)
+        return row[i] if i is not None and i < len(row) else ""
+
+    target = None
+    for row in rows:
+        if len(row) < len(header):
+            row.extend([""] * (len(header) - len(row)))
+        if (cell(row, "ats"), cell(row, "token"), cell(row, "job_id")) == key:
+            target = row
+            break
+
+    if target is None:
+        target = [""] * len(header)
+        for name, part in zip(KEYS, key):
+            if name in idx:
+                target[idx[name]] = part
+        for name, text in context.items():
+            if name in idx and text:
+                target[idx[name]] = text
+        if "note" in idx:
+            target[idx["note"]] = "from the board"
+        if "n" in idx:
+            target[idx["n"]] = str(len(rows) + 1)
+        rows.append(target)
+
+    if dimension in idx:
+        target[idx[dimension]] = value
+
+    with path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(header)
+        writer.writerows(rows)
+
+
 def nearest(value: str, allowed: tuple[str, ...]) -> str | None:
     """The one allowed value `value` is obviously a typo for, if any.
 

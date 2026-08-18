@@ -4,7 +4,7 @@
     {
       "name": "board",
       "runtimeExecutable": "C:/Users/razre/AppData/Local/Programs/Python/Python313/python.exe",
-      "runtimeArgs": ["-m", "http.server", "8731", "--directory", "web"],
+      "runtimeArgs": ["web/serve.py"],
       "port": 8731
     }
   ]

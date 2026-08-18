@@ -114,8 +114,15 @@ The board is a static page. Dump the data, then serve `web/` — it reads
 `data.js` with a script tag so `file://` works too, but a server is tidier:
 
 ```bash
-python web/build_data.py && python -m http.server 8731 --directory web
+python web/build_data.py && python web/serve.py
 ```
+
+`serve.py` is `http.server` plus one write route: the board's reclassify
+dropdowns POST a correction there, and it upserts straight into
+`quantscraper/labels.csv` — no download, no manual merge. Opening `index.html`
+via `file://` or a bare `http.server` still works for reading the board; a
+correction made that way only lives in the browser until you export it by
+hand.
 
 `data.js` is ~33 MB, so `build_data.py` omits every dimension sitting on its
 "nothing known" default rather than writing `unknown` seventy thousand times.

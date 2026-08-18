@@ -869,17 +869,21 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
       that set it; the rows stay in the database, and
       <code>list --exclude off_industry</code> shows exactly what it ate. Every
       build prints the count.</p>
-      <p><b>Saved, hidden and reclassified</b> live in this browser only, keyed
-      on the posting id. Hidden postings stay in the counts and come back with
-      the <em>hidden</em> preset. The two dropdowns under each card's actions
-      correct <b>relevance</b> and <b>seniority</b> by hand when the tagger got
-      one wrong or left it <code>unknown</code> -- the override sorts, filters
-      and displays as the corrected value from then on. Setting relevance to
-      <b>rejected</b> takes the posting off the board immediately, the same as
-      a gate would. <em>Export corrections</em> in the filter rail downloads
-      every hand correction as a CSV shaped like
-      <code>quantscraper/labels.csv</code>, ready to fold into the
-      hand-labelled sheet that trains the lexicon.</p>
+      <p><b>Saved and hidden</b> live in this browser only, keyed on the
+      posting id, and come back with their preset. The two dropdowns under
+      each card's actions correct <b>relevance</b> and <b>seniority</b> by
+      hand when the tagger got one wrong or left it <code>unknown</code> --
+      the override sorts, filters and displays as the corrected value from
+      then on, in this browser, immediately. Setting relevance to
+      <b>rejected</b> takes the posting off the board, the same as a gate
+      would. <b>Run the board through <code>web/serve.py</code></b> (see
+      <code>CLAUDE.md</code>) and every correction is also upserted straight
+      into <code>quantscraper/labels.csv</code> as you make it -- no download,
+      no manual merge, and it is there the next time
+      <code>python -m quantscraper labels</code> runs. Opened via
+      <code>file://</code> or a bare <code>http.server</code> instead, a
+      correction still works on the page but only <em>export corrections</em>
+      in the filter rail gets it into that file.</p>
     </div>
   </main>
 </div>
@@ -988,6 +992,22 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     persistCorrections();
     job.v = FACETS.map((f) => f.get(job));
     commit();
+
+    // `web/serve.py` upserts this straight into `quantscraper/labels.csv` --
+    // no download, no manual merge. A bare `http.server` or `file://` has no
+    // route to answer this, so a failed request is expected there and the
+    // export button is the fallback for that case.
+    const [ats, token, ...rest] = job.id.split(":");
+    fetch("/correction", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ats, token, job_id: rest.join(":"), dim, value,
+        title: job.title, firm: job.firmDomain || job.firm,
+        location: job.loc || "", department: job.team || "",
+        url: job.url || "", description: job.about || "",
+      }),
+    }).catch(() => {});
   }
 
   // A CSV shaped exactly like `quantscraper/labels.csv`'s own header, so the
