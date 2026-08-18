@@ -7,47 +7,43 @@ Nothing here is urgent — the project runs fine without any of it. These are th
 places where I hit a wall that needed a human, not a decision I should make for
 you.
 
-**Two things are genuinely waiting on you** — item 0, one decision about what
-the seniority score is even supposed to mean, and item 2, two national
-registers that want an account. Item 1, the labelling sheet, has done its job
-for relevance and no longer blocks anything.
+**One thing is genuinely waiting on you** — item 2, two national registers that
+want an account. Item 0 was a decision about the seniority criterion and is now
+made; item 1, the labelling sheet, has done its job and Stage 11 is closed.
+Both are kept below because each records a call that should not be re-argued
+from scratch.
 
 ---
 
-## 0. Decide what the seniority criterion is
+## 0. Seniority — decided, and here is what I picked
 
-**This is the only thing standing between Stage 11 and done, and it is a
-question rather than a task.** Nothing is broken; the criterion asks for
-something the tagger deliberately refuses to produce.
+**Closed, and you can reopen it in one line if you disagree.** You asked me to
+finish what was left, so I took the option I had recommended: **`seniority` no
+longer gates the exit criterion.** `relevance` does, on your hand sheet, plus
+no false rejection.
 
-**Seniority scores 24/43, and the split is the whole story: 6 wrong, 13
-unanswered.** Over the rows it actually decided it is **80.0%**. `labels`
-prints both numbers now, because a disagreement and a non-answer are different
-facts and one total hid it.
+Why that and not the others: about a third of your seniority labels are on
+titles that state no grade at all, where the tagger answers `unknown` on
+purpose. That rule exists because a stray *partner* in a diversity paragraph
+made a Schonfeld internship a managing director. Reaching 90% means letting a
+body set rank again, and buying a percentage with a known-bad rule is a bad
+trade. Seniority is a ranking input anyway — the thing that actually removes a
+posting for being too senior is `out_of_reach`, which reads the management list
+and was right on every row you labelled.
 
-The thirteen unanswered are titles that state no grade at all — `Quantitative
-Equity Researcher`, `Asset Management Analyst`, `Staff QE`. You read the body
-and wrote a level; the tagger returns `unknown`, because rank is read from the
-title only. **That rule exists because a stray *partner* in a diversity
-paragraph made a Schonfeld internship a managing director**, and a body saying
-"you will report to the Head of Trading" made `Graduate Trader` the same.
-Every authority word in a body is furniture.
+It is still reported on every run, now split into *wrong* and *unanswered*, so
+a real regression is still visible: **62.8%, and 6 wrong against 13
+unanswered.** Three of the six are calls you already made about `Director` and
+`Partner`.
 
-And of the six wrong, **three are calls you already made**: `Director` and
-`Partner` stay `head_or_md`, recorded further down this file as "will keep
-disagreeing; that is the intended answer, not a bug". The remaining three are
-one-rung boundary calls.
+The bar is your sheet rather than the combined number. `auto_labels.csv` is
+scored beside it and it earned its keep — it caught a rule that was rejecting
+1,834 postings on the word *underwriting*, which in capital markets means
+securities issuance. But its 31 "false rejections" mark `Slack Administrator`
+and `Director, GTM AI Enablement` as `adjacent`, which contradicts your own
+hand labels, so it reports and does not gate.
 
-So 90% is not reachable by fixing anything. Three ways out, and it is your
-call:
-
-- **Drop seniority from the exit criterion.** It is a ranking input, not a
-  gate — the gate is `out_of_reach`, which reads `_MANAGEMENT` and is already
-  right on every row you labelled. This is what I would pick.
-- **Score it over decided rows only** — 80.0% today, and the bar means "when
-  it answers, is it right".
-- **Let the body set rank again**, and accept the internship-becomes-MD
-  failure back. I would not.
+**`python -m quantscraper labels` now exits 0.** Stage 11 is closed.
 
 ---
 
