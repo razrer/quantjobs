@@ -273,6 +273,28 @@ def _best(values: list[str | None]) -> str | None:
     return min(counts, key=lambda value: (-counts[value], len(value), value))
 
 
+def _best_website(values: list[str | None]) -> str | None:
+    """`_best`, but a platform page loses to any real one the group holds.
+
+    **The fourth place this leaks into.** Over 4,000 Form ADV filers publish a
+    LinkedIn page as their website, and a merged firm inherits whichever URL
+    won a popularity contest among its rows -- so Two Sigma's firm website came
+    out `https://x.com/twosigma` even though the seed registry carries
+    `twosigma.com` for the same firm. Everything downstream reads that one
+    field: `harvest_registry_domains` seeds `domain_lookups` from it,
+    `discover._domain_for` reads that, and the board ends up attached to a host
+    thousands of unrelated firms also claim -- or, once the platform guard
+    rejects it, to nothing at all.
+
+    A platform URL is still returned when it is *all* the group has, because a
+    social page is better than no record of where the firm publishes; it simply
+    never wins over a real domain.
+    """
+    present = [value for value in values if value]
+    real = [value for value in present if not is_platform_domain(domain_of(value) or "")]
+    return _best(real or present)
+
+
 def _firm_id(keys: set[str]) -> str:
     """The strongest key in a group, so the id is stable and meaningful."""
     for prefix in ("group:", "lei:", "crd:", "domain:", "name:"):
@@ -315,7 +337,7 @@ def build_firms(connection: sqlite3.Connection) -> tuple[int, int]:
                 canonical or _best([row["name"] for row in grouped]),
                 _best([row["city"] for row in grouped]),
                 _best([row["country"] for row in grouped]),
-                _best([row["website"] for row in grouped]),
+                _best_website([row["website"] for row in grouped]),
                 len({row["source"] for row in grouped}),
                 len(grouped),
             )

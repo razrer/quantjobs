@@ -37,6 +37,23 @@ Akuna Capital,Chicago,US,Prop trading firm,https://akunacapital.com
 Belvedere Trading,Chicago,US,Prop trading firm,https://belvederetrading.com
 Quadrature Capital,London,GB,Systematic hedge fund,https://quadraturecapital.com
 Voleon Group,Berkeley,US,Systematic hedge fund,https://voleon.com
+# Firms the fuzzy name match sent to the wrong host, or to none at all.
+# `Marshall Wace` resolved to `lumyna.com` and `Millennium` to `mnh.vc`
+# (Millennium New Horizons, a venture firm) -- both are the documented
+# hazard of matching a short trading name across 70,000 firms. Two Sigma
+# and Balyasny had no domain at all.
+#
+# Verified the way `domains.py` verifies one, and one candidate was thrown
+# out on the same test: `athoscap.com` names 'Athos Capital' on the page
+# but is Athos Capital *Partners*, a real-estate private equity firm, not
+# the Hong Kong hedge fund Athos Capital Limited. Naming the firm is
+# necessary and not sufficient -- the same trap as `citadel.com` matching
+# Citadel Securities.
+Two Sigma Investments,New York,US,Systematic hedge fund,https://www.twosigma.com
+Balyasny Asset Management,Chicago,US,Multi-strategy hedge fund,https://www.bamfunds.com
+Marshall Wace,London,GB,Systematic hedge fund,https://www.mwam.com
+Millennium Management,New York,US,Multi-strategy hedge fund,https://www.mlp.com
+Oasis Management,Hong Kong,HK,Hedge fund,https://www.oasiscm.com
 # ── Sovereign wealth funds ───────────────────────────────────────────────────
 # State-owned investors are not licensed financial firms, so they appear in no
 # regulator's register anywhere -- not DFSA, not MAS, not the SEC. All five run

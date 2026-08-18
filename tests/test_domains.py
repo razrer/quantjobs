@@ -135,3 +135,43 @@ class CorroborationTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BestWebsiteTest(unittest.TestCase):
+    """A merged firm must not inherit a social page over its own domain.
+
+    Two Sigma's firm website came out `https://x.com/twosigma` because the
+    platform URL simply outnumbered the real one among its rows, and every
+    layer downstream reads that one field: `harvest_registry_domains` seeds
+    `domain_lookups` from it, `discover._domain_for` reads that, and the board
+    ends up on a host thousands of firms claim -- or, once the platform guard
+    rejects it, on nothing.
+    """
+
+    def test_a_real_domain_beats_a_more_common_platform_page(self):
+        from quantscraper.resolve import _best_website
+
+        self.assertEqual(
+            _best_website(
+                [
+                    "https://x.com/twosigma",
+                    "https://x.com/twosigma",
+                    "https://www.twosigma.com",
+                ]
+            ),
+            "https://www.twosigma.com",
+        )
+
+    def test_a_platform_page_is_still_kept_when_it_is_all_there_is(self):
+        """Better a record of where the firm publishes than none at all."""
+        from quantscraper.resolve import _best_website
+
+        self.assertEqual(
+            _best_website(["https://uk.linkedin.com/company/acme"]),
+            "https://uk.linkedin.com/company/acme",
+        )
+
+    def test_no_website_stays_none(self):
+        from quantscraper.resolve import _best_website
+
+        self.assertIsNone(_best_website([None, None]))
