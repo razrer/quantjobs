@@ -117,6 +117,12 @@ ATS_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("teamtailor", re.compile(_HOST_LABEL + r"\.teamtailor\.com", re.I)),
     ("varbi", re.compile(_HOST_LABEL + r"\.varbi\.com", re.I)),
     ("jobylon", re.compile(_HOST_LABEL + r"\.jobylon\.com|jobylon\.com/jobs/([a-z0-9-]+)", re.I)),
+    # Emply serves each customer from `{board}.career.emply.com`, so the label
+    # immediately before the vendor's own `career` host is the board -- not the
+    # one adjacent to `emply`, which is `career` itself and is on
+    # `_NOT_A_TOKEN`. Every Emply row resolved with a NULL token because of it.
+    # Same shape as Greenhouse's `/v1/` and Teamtailor's `www`.
+    ("emply", re.compile(_HOST_LABEL + r"\.career\.emply\.(?:com|net)", re.I)),
     ("emply", re.compile(_HOST_LABEL + r"\.emply\.(?:com|net)", re.I)),
     ("recruitee", re.compile(_HOST_LABEL + r"\.recruitee\.com", re.I)),
     ("personio", re.compile(_HOST_LABEL + r"\.jobs\.personio\.(?:de|com)", re.I)),

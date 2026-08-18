@@ -415,8 +415,11 @@ class EveryFingerprintHasAReaderTest(unittest.TestCase):
         "eightfold": "the jobs path is inside a JS bundle; /api/apply/v2/jobs returns page config",
         "join": "every page/pageSize value tried returns HTTP 422",
         "successfactors": "career site is a 206 KB shell with no job id, RSS path 404s",
-        "jobylon": "board token is a CDN host on every row sampled",
-        "emply": "career.emply.com is shared by every tenant; no per-board token",
+        "jobylon": "boards embed via cdn.jobylon.com/embedder.js; 4 of 5 rows "
+                   "carry no token and the fifth is `emp`, the vendor's own host",
+        "emply": "board is {token}.career.emply.com and the token resolves, but "
+                 "the page is client-side: 247 KB with no job id, and every RSS "
+                 "path serves the same SPA shell",
     }
 
     def test_every_pattern_is_read_or_named_as_investigated(self):
@@ -430,3 +433,15 @@ class EveryFingerprintHasAReaderTest(unittest.TestCase):
                     f"{name} is fingerprinted, unread, and undocumented -- "
                     "either write a reader or record why there is none",
                 )
+
+
+class EmplyTokenTest(unittest.TestCase):
+    """The board is the label before the vendor's `career` host, not after it."""
+
+    def test_the_customer_label_is_the_token(self):
+        hit = ats.fingerprint("https://urbanpartners.career.emply.com/open-positions")
+        self.assertEqual(hit[:2], ("emply", "urbanpartners"))
+
+    def test_the_bare_vendor_host_yields_no_token(self):
+        """`career` is infrastructure, and five firms resolved to it."""
+        self.assertEqual(ats.fingerprint("https://career.emply.com/x")[1], None)

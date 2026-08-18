@@ -26,6 +26,17 @@ AP3 (Tredje AP-fonden),Stockholm,SE,Pension fund,https://www.ap3.se
 AP4 (Fjärde AP-fonden),Stockholm,SE,Pension fund,https://www.ap4.se
 AP6 (Sjätte AP-fonden),Gothenburg,SE,Pension fund,https://www.ap6.se
 AP7 (Sjunde AP-fonden),Stockholm,SE,Pension fund,https://www.ap7.se
+# Firms whose board `discover` proved but whose website no register carries.
+# Voleon and Quadrature both publish a LinkedIn page as their Form ADV
+# website, which `resolve.is_platform_domain` refuses -- correctly, since
+# thousands of firms claim it -- and Akuna matched only `Hakuna GmbH`.
+# Without a domain there is nothing for `discover.record` to key the board
+# on, so 113 proved postings polled nowhere. Each domain below was verified
+# the way `domains.py` verifies one: the page names the firm, spaced.
+Akuna Capital,Chicago,US,Prop trading firm,https://akunacapital.com
+Belvedere Trading,Chicago,US,Prop trading firm,https://belvederetrading.com
+Quadrature Capital,London,GB,Systematic hedge fund,https://quadraturecapital.com
+Voleon Group,Berkeley,US,Systematic hedge fund,https://voleon.com
 # ── Sovereign wealth funds ───────────────────────────────────────────────────
 # State-owned investors are not licensed financial firms, so they appear in no
 # regulator's register anywhere -- not DFSA, not MAS, not the SEC. All five run
