@@ -545,6 +545,30 @@ Each of these silently produced wrong results before being caught:
   page links there and nowhere else; the `careers.handelsbanken.co.uk` API its
   own bundle names is the **UK** board (46 jobs, all UK). A structural limit,
   not a gap -- LinkedIn is deliberately out of scope.
+- **Which ATS to build next is a measurable question, not a guess.** 1,400
+  tier-B careers pages were swept for third-party *hiring* hosts we do not
+  recognise, ranked by how many distinct firms each would rescue: ADP 19,
+  Paylocity 18, Radancy 12, Rippling 11, Phenom 7, UKG 5, HiBob 5, Talentsoft
+  4, Avature 3, JazzHR 3, Dayforce 3, Zoho 3, Cornerstone 2. Build down that
+  list, not down a list of vendors you have heard of.
+- **ADP's `meta.links` looks like a location map and is a filter facet.** It
+  pairs an id with a readable place — "Hong Kong - Wanchai, HK" — and joining
+  it to the requisition's `itemID` yields a confident location for every
+  posting while matching nothing: those are *location* ids, the places you may
+  search by. The real location is on the requisition and is coarse, often just
+  a country. A wrong location is worse than none because the board gates on
+  geography; `unknown` survives the gate and a wrong city does not.
+- **Paylocity, Rippling and Phenom render their lists client-side** — Paylocity
+  ships a `public-site-react-list` bundle and the 41 "job ids" a naive count
+  finds in its HTML are analytics and CSS. Recorded as investigated. ADP and
+  UKG (formerly UltiPro) both answer with clean JSON and are read; UKG's token
+  is `code|boardGuid`, the same both-halves-required shape as Oracle.
+- **`tests/test_oracle_hcm.EveryFingerprintHasAReaderTest` is the exhaustiveness
+  guard.** Every name in `ATS_PATTERNS` must be in `extract.EXTRACTORS` or
+  listed in that test's `INVESTIGATED` map with the reason there is no reader.
+  Adding a pattern without a reader now fails the suite instead of quietly
+  parking boards in tier A, which is how 88 of them once sat resolved and
+  polling nothing.
 - **A few large firms simply refuse us**, and it is not our trust store this
   time: ABN AMRO answers 503, Nasdaq times out, Citadel Securities and Jyske
   Bank answer 403. `curl` with a browser UA reaches all four. Recorded as a

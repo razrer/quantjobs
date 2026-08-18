@@ -144,6 +144,29 @@ ATS_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     # tier C with eight openings behind it -- the careers link on its homepage
     # points at `coeli.careers.haileyhr.app`, which nothing recognised.
     ("hailey", re.compile(_HOST_LABEL + r"\.careers\.haileyhr\.app", re.I)),
+    # ADP Workforce Now. The board is addressed by the `cid` GUID alone -- the
+    # `ccId` beside it in the careers URL is the client id and the API ignores
+    # it. 19 domains in a 1,400-page tier-B sample carried this, the largest
+    # single unrecognised vendor in that sample.
+    (
+        "adp",
+        re.compile(
+            r"workforcenow\.adp\.com/[^\"'\s]{0,120}?[?&]cid="
+            r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
+            re.I,
+        ),
+    ),
+    # UKG Pro Recruiting, formerly UltiPro. Two parts, neither usable alone --
+    # the customer's short code in the path and a GUID naming one job board on
+    # it, the same shape as Oracle's `podhost|siteNumber`.
+    (
+        "ukg",
+        re.compile(
+            r"recruiting\d?\.ultipro\.com/(?P<code>[A-Za-z0-9_]{2,40})/JobBoard/"
+            r"(?P<board>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
+            re.I,
+        ),
+    ),
     # Oracle Fusion Recruiting, which nothing here recognised until Danske Bank
     # -- a Copenhagen roster firm -- was found sitting in tier B with 139 live
     # postings behind it. The board is addressed by two parts that are not
@@ -374,9 +397,19 @@ def _oracle_hcm_token(match: re.Match[str]) -> str | None:
 # hosts invert tenant and `wdN`, Oracle because the pod host and the site
 # number are separated by a fixed path segment. Everything else takes the first
 # non-empty group.
+def _ukg_token(match: re.Match[str]) -> str | None:
+    """`code|boardGuid`. The code is the customer, the GUID one board on it."""
+    parts = match.groupdict()
+    code, board = parts.get("code"), parts.get("board")
+    if not (code and board):
+        return None
+    return f"{code}|{board}"
+
+
 _TOKEN_BUILDERS = {
     "workday": _workday_token,
     "oracle_hcm": _oracle_hcm_token,
+    "ukg": _ukg_token,
 }
 
 

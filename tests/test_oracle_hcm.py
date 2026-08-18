@@ -272,3 +272,161 @@ class ReprobeTest(unittest.TestCase):
             "acme.com", "https://acme.com/jobs", None, None, "B", "no fingerprint"
         )
         self.assertFalse(ats._improves(found, self._stored("https://acme.com/careers")))
+
+
+class AdpTest(unittest.TestCase):
+    """ADP Workforce Now -- the largest unrecognised vendor in a tier-B sample."""
+
+    def _payload(self, total, *reqs):
+        return json.dumps({"jobRequisitions": list(reqs), "meta": {"totalNumber": total}})
+
+    def _req(self, item_id, title="Quantitative Analyst", **loc):
+        return {
+            "itemID": item_id,
+            "requisitionTitle": title,
+            "postDate": "2026-08-12T11:48:00.000-04:00",
+            "requisitionLocations": [
+                {
+                    "address": {
+                        "cityName": loc.get("city", ""),
+                        "countrySubdivisionLevel1": {"codeValue": loc.get("region", "")},
+                    },
+                    "nameCode": {"shortName": loc.get("country", " US")},
+                }
+            ],
+        }
+
+    def test_the_cid_guid_is_the_whole_token(self):
+        hit = ats.fingerprint(
+            "https://workforcenow.adp.com/mascsr/default/mdf/recruitment/"
+            "recruitment.html?cid=7120c628-221c-4769-b7e7-8ab11b78b67f&ccId=9200879253113_2"
+        )
+        self.assertEqual(hit[0], "adp")
+        self.assertEqual(hit[1], "7120c628-221c-4769-b7e7-8ab11b78b67f")
+
+    def test_the_location_facet_is_not_read_as_a_posting_location(self):
+        """`meta.links` pairs *location* ids with places, not requisition ids.
+
+        Joining it to `itemID` produces a confident location for every posting
+        and matches nothing. The board gates on geography, so a wrong location
+        is worse than none.
+        """
+        payload = json.loads(self._payload(1, self._req("9205211298133_1")))
+        payload["meta"]["links"] = [
+            {
+                "schema": "LOCATION",
+                "payLoadArguments": [
+                    {"argumentPath": "9200391134514_1",
+                     "argumentValue": "Hong Kong - Wanchai, HK"}
+                ],
+            }
+        ]
+        with mock.patch.object(
+            extract.http, "get_text", return_value=json.dumps(payload)
+        ):
+            job = extract.adp("cid")[0]
+        self.assertEqual(job.location, "US")
+
+    def test_a_filled_in_address_is_preferred(self):
+        with mock.patch.object(
+            extract.http,
+            "get_text",
+            return_value=self._payload(
+                1, self._req("1", city="Wanchai", region="HK", country=" Hong Kong")
+            ),
+        ):
+            self.assertEqual(extract.adp("cid")[0].location, "Wanchai, HK, Hong Kong")
+
+    def test_a_shortfall_against_the_advertised_total_is_loud(self):
+        with mock.patch.object(
+            extract.http, "get_text", return_value=self._payload(9, self._req("1"))
+        ):
+            with self.assertRaises(ValueError):
+                extract.adp("cid")
+
+
+class UkgTest(unittest.TestCase):
+    """UKG Pro Recruiting, formerly UltiPro. `code|boardGuid`, both required."""
+
+    GUID = "c0ae7303-ee90-41c6-b44a-abf63303ceb4"
+
+    def _payload(self, total, *opps):
+        return json.dumps({"opportunities": list(opps), "totalCount": total})
+
+    def _opp(self, job_id, title="Quant Researcher", places=("Tampa, FL",)):
+        return {
+            "Id": job_id,
+            "Title": title,
+            "JobCategoryName": "Data",
+            "PostedDate": "2026-08-13T20:15:11.282Z",
+            "Locations": [{"LocalizedDescription": p} for p in places],
+        }
+
+    def test_the_token_carries_customer_code_and_board(self):
+        hit = ats.fingerprint(
+            f"https://recruiting.ultipro.com/FIN1008FICT/JobBoard/{self.GUID}/?q="
+        )
+        self.assertEqual(hit[0], "ukg")
+        self.assertEqual(hit[1], f"FIN1008FICT|{self.GUID}")
+
+    def test_a_half_token_is_refused(self):
+        with self.assertRaises(ValueError):
+            extract.ukg("FIN1008FICT")
+
+    def test_it_pages_and_stops_on_a_short_page(self):
+        full = [self._opp(str(n)) for n in range(extract._UKG_PAGE)]
+        pages = [
+            self._payload(extract._UKG_PAGE + 1, *full),
+            self._payload(extract._UKG_PAGE + 1, self._opp("x")),
+        ]
+        with mock.patch.object(extract.http, "post_json",
+                               side_effect=[p.encode() for p in pages]) as post:
+            jobs = extract.ukg(f"code|{self.GUID}")
+        self.assertEqual(len(jobs), extract._UKG_PAGE + 1)
+        self.assertEqual(post.call_count, 2)
+
+    def test_two_sites_are_both_named(self):
+        with mock.patch.object(
+            extract.http,
+            "post_json",
+            return_value=self._payload(1, self._opp("1", places=("Tampa, FL", "Hong Kong"))).encode(),
+        ):
+            self.assertEqual(extract.ukg(f"code|{self.GUID}")[0].location, "Tampa, FL, Hong Kong")
+
+    def test_a_shortfall_against_the_advertised_total_is_loud(self):
+        with mock.patch.object(
+            extract.http, "post_json", return_value=self._payload(50, self._opp("1")).encode()
+        ):
+            with self.assertRaises(ValueError):
+                extract.ukg(f"code|{self.GUID}")
+
+
+class EveryFingerprintHasAReaderTest(unittest.TestCase):
+    """The gap Stage 14 exists to close, pinned for the whole table.
+
+    `ats.py` once recognised 22 systems while `extract.py` read 11, so 88
+    boards sat tier A with a token, counted as resolved everywhere and polling
+    nothing. Anything deliberately unread is named here with its reason, so
+    adding a pattern without a reader fails rather than going quiet.
+    """
+
+    INVESTIGATED = {
+        "taleo": "needs a per-board portal id it does not publish; tokens collide on tbe.taleo.net",
+        "eightfold": "the jobs path is inside a JS bundle; /api/apply/v2/jobs returns page config",
+        "join": "every page/pageSize value tried returns HTTP 422",
+        "successfactors": "career site is a 206 KB shell with no job id, RSS path 404s",
+        "jobylon": "board token is a CDN host on every row sampled",
+        "emply": "career.emply.com is shared by every tenant; no per-board token",
+    }
+
+    def test_every_pattern_is_read_or_named_as_investigated(self):
+        for name, _ in ats.ATS_PATTERNS:
+            with self.subTest(ats=name):
+                if name in extract.EXTRACTORS:
+                    continue
+                self.assertIn(
+                    name,
+                    self.INVESTIGATED,
+                    f"{name} is fingerprinted, unread, and undocumented -- "
+                    "either write a reader or record why there is none",
+                )

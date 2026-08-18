@@ -101,6 +101,55 @@ Hong Kong,focus,Point72,Point72 Asset Management,active,
 Hong Kong,focus,HSBC,,active,
 Hong Kong,focus,Goldman Sachs,,active,
 Hong Kong,focus,Citadel Securities,,active,
+# Hong Kong, widened. The nine lines above are the marquee international
+# desks; everything below is smaller or HK-headquartered, and every one
+# was verified against a register row before being written -- most carry
+# an `sfc_hk` licensed-corporation entry, the enumeration that is complete
+# by law. Names are deliberately long: a bare Sun Hung Kai is a property
+# developer and a bare Income Partners matches two unrelated US funds, and
+# a false hit hides a miss.
+Hong Kong,focus,Susquehanna,Susquehanna Hong Kong|SIG,active,
+Hong Kong,focus,Two Sigma,Two Sigma Asia Pacific,active,
+Hong Kong,focus,Balyasny,Balyasny Asset Management,active,
+Hong Kong,focus,Qube Research & Technologies,Qube Research,active,
+Hong Kong,focus,Flow Traders,,active,
+Hong Kong,focus,IMC,IMC Asia Pacific,active,SFC lists IMC Asia Pacific Limited; the Amsterdam line is the same group.
+Hong Kong,focus,DRW,DRW Hong Kong,active,SFC lists DRW (Hong Kong) Limited.
+Hong Kong,focus,Capula Investment Management,Capula Investment Management Asia,active,
+Hong Kong,focus,Marshall Wace,Marshall Wace Asia,active,
+Hong Kong,focus,Eclipse Trading,,active,HK-headquartered prop shop; carried by the seed registry.
+Hong Kong,focus,Liquid Capital Group,Liquid Capital Markets,active,
+Hong Kong,focus,Quantbot Technologies,,active,
+Hong Kong,focus,Quantek Capital Research,,active,
+Hong Kong,focus,Pandtong Quantitative Research,,active,
+Hong Kong,focus,CASH Algo Finance Group,CASH Algo,active,
+Hong Kong,focus,Segantii Capital Management,Segantii,active,
+Hong Kong,focus,Oasis Management,,active,
+Hong Kong,focus,Pinpoint Asset Management,,active,No relation to the Pinpoint ATS in ats.py.
+Hong Kong,focus,Ortus Capital Management,Ortus Capital,active,
+Hong Kong,focus,Dymon Asia Capital,Dymon Asia,active,
+Hong Kong,focus,Nine Masts Capital,,active,
+Hong Kong,focus,Athos Capital,,active,
+Hong Kong,focus,Infini Capital Management,Infini Capital,active,
+Hong Kong,focus,Polymer Capital Management,Polymer Capital,active,
+Hong Kong,focus,Tairen Capital,,active,
+Hong Kong,focus,Aspex Management,Aspex,active,
+Hong Kong,focus,Triata Capital,,active,
+Hong Kong,focus,Anatole Investment Management,Anatole Investment,active,
+Hong Kong,focus,Overlook Investments,,active,
+Hong Kong,focus,LIM Advisors,,active,
+Hong Kong,focus,Gaoteng Global Asset Management,GaoTeng Global,active,
+Hong Kong,focus,Greenwoods Asset Management Hong Kong,Greenwoods Asset Management,active,
+Hong Kong,focus,Sun Hung Kai Capital Partners,,active,Specific: a bare "Sun Hung Kai" is the property developer.
+Hong Kong,focus,First Seafront Asset Management,,active,
+Hong Kong,focus,Trivest Advisors,,active,
+Hong Kong,focus,Panview Capital,,active,
+Hong Kong,focus,Ovata Capital Management,Ovata Capital,active,
+Hong Kong,focus,Yunqi Capital,,active,
+Hong Kong,focus,Keywise Capital Management,Keywise Capital,active,
+Hong Kong,focus,Blue Pool Capital,,active,
+Hong Kong,focus,Janchor Partners,,active,
+Hong Kong,focus,Income Partners Asset Management,,active,Specific: a bare "Income Partners" matches Energy Income Partners and Tetragon Credit Income Partners.
 # ── Singapore ────────────────────────────────────────────────────────────────
 Singapore,focus,Optiver,,active,
 Singapore,focus,Jane Street,,active,

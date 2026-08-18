@@ -59,7 +59,8 @@ nothing in the near-term plan now waits on a human.
 | 15 | The board, and the body it was reading | **done** — board unknowns 5,611 → 2,341 |
 | 16 | The last ATSes, and Singapore | **done** — Jobvite/Varbi/Homerun read, MCF swept |
 | 17 | The ATSes the focus hubs actually run | **done** — Oracle read, 26 boards |
-| 18 | Stockholm and Hong Kong, firm by firm | in progress |
+| 18 | Stockholm and Hong Kong, firm by firm | **done** — Stockholm 15/18 reached |
+| 19 | Hong Kong widened, ATS table exhaustive | in progress |
 
 ---
 
@@ -2072,3 +2073,65 @@ fix. Only firms with *no pollable board* appear in the work list.
   board — 46 postings, all UK.
 - **Citadel Securities and Nasdaq Stockholm**: 403 and a timeout. `curl` with a
   browser UA reaches both.
+
+---
+
+## Stage 19 — Hong Kong widened, and the ATS table made exhaustive
+
+**Asked for directly:** more than nine Hong Kong firms, reaching smaller and
+more niche ones; and the ATS coverage made exhaustive rather than opportunistic.
+
+### Hong Kong: 9 roster lines to 51
+
+The nine existing lines were the marquee international desks. The additions are
+smaller, mostly HK-headquartered, and **every one was verified against a
+register row before being written** — 50 of the 51 carry an `sfc_hk`
+licensed-corporation entry, which is the HK enumeration that is complete by law.
+
+Mining the register for a literal quant word found only 13 names and most were
+false hits (`prop\w*` matched *Proprium* and *Propitious*): the firms that
+matter do not put "quant" in their legal name. The working method was the
+reverse — propose candidates, then verify each against `audit._matches`, the
+same token-aligned matcher the audit uses, so a name that passes here passes
+there and the exact registered spelling comes back.
+
+**Recall was wrong twice and the register was right both times.** `IMC Asia
+Pacific Limited` and `DRW (Hong Kong) Limited` are both real SFC entities; I had
+believed neither firm had a Hong Kong desk.
+
+Names are deliberately long, because a false hit hides a miss: a bare
+`Sun Hung Kai` is a property developer, and a bare `Income Partners` matches
+*Energy Income Partners* and *Tetragon Credit Income Partners*.
+
+The honest consequence is that Hong Kong's pipeline rate **fell from 89% to
+31%** — 16 of 51. That is the roster doing its job: the old number measured
+nine firms we had already solved.
+
+### The ATS table, made exhaustive by measurement
+
+1,400 tier-B careers pages were swept for third-party *hiring* hosts that
+`ats.py` does not recognise, ranked by how many distinct firms each would
+rescue:
+
+| vendor | firms | outcome |
+|---|---|---|
+| ADP Workforce Now | 19 | **read** — clean JSON on `cid` |
+| Paylocity | 18 | client-side React list; investigated |
+| Radancy / TalentBrew | 12 | CDN only in markup; no board token |
+| Rippling | 11 | client-side |
+| Phenom People | 7 | widget path not public |
+| UKG (UltiPro) | 5 | **read** — JSON POST, token `code\|boardGuid` |
+| HiBob | 5 | customer sites unreachable |
+| Talentsoft, Avature, JazzHR, Dayforce, Zoho, Cornerstone | 2–4 each | probed, not yet read |
+
+**The exhaustiveness is now structural rather than a claim.**
+`EveryFingerprintHasAReaderTest` walks `ATS_PATTERNS` and fails unless each name
+is either in `extract.EXTRACTORS` or listed with the reason it has no reader.
+That is the Stage 14 gap — 88 boards tier A with a token and no extractor —
+turned into a test instead of a note.
+
+**One near-miss worth keeping.** ADP's `meta.links` pairs ids with readable
+places and looks exactly like a per-posting location map. The ids are location
+ids; the join matches nothing and would have given every ADP posting a
+confident, wrong city. The board gates on geography, so that is the expensive
+direction — the coarse country on the requisition is used instead.

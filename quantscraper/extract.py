@@ -744,6 +744,160 @@ def oracle_hcm(token: str) -> list[Job]:
     return jobs
 
 
+# ADP asks for the board by its `cid` GUID and answers with the whole thing --
+# no paging parameter is honoured and `meta.totalNumber` states the size, so
+# that is the check rather than the stop condition, as everywhere else here.
+def _adp_place(requisition: dict) -> str | None:
+    """The most specific location ADP's list endpoint states for a posting.
+
+    City, region and country where they are filled in; on most boards only
+    `nameCode.shortName` is, and it arrives space-padded (" US").
+    """
+    for place in requisition.get("requisitionLocations") or []:
+        if not isinstance(place, dict):
+            continue
+        address = place.get("address") or {}
+        region = (address.get("countrySubdivisionLevel1") or {}).get("codeValue")
+        parts = [
+            (address.get("cityName") or "").strip(),
+            (region or "").strip(),
+            ((place.get("nameCode") or {}).get("shortName") or "").strip(),
+        ]
+        readable = ", ".join(dict.fromkeys(p for p in parts if p))
+        if readable:
+            return readable
+    return None
+
+
+def adp(token: str) -> list[Job]:
+    """ADP Workforce Now recruitment. 19 domains in a tier-B sample carried it.
+
+    The public endpoint is
+    `/mascsr/default/careercenter/public/events/staffing/v1/job-requisitions?cid={guid}`
+    and the `cid` is the whole token -- it is what the careers page embeds and
+    the only identifier the API accepts.
+
+    **`meta.links` looks like a location map and is not one.** It carries a
+    `LOCATION` schema whose `payLoadArguments` pair an id with a readable place
+    -- "Hong Kong - Hong Kong, Wanchai, Hong Kong Island, HK" -- and joining it
+    to `itemID` produces a location for every posting. The ids are *location*
+    ids and the join matches nothing: it is the board's filter facet, the list
+    of places you may search by, not where any particular job is. A wrong
+    location is worse than none here, because the board gates on geography.
+
+    So the location is read from the requisition, where it is real but coarse:
+    `nameCode.shortName` is often just a country, and `address.cityName` is
+    empty on every board sampled. A country is enough for the gate to place a
+    posting in the semi-target US or reject it as off-location; `unknown`
+    survives the gate anyway, so the failure direction is safe.
+    """
+    payload = _json(
+        "https://workforcenow.adp.com/mascsr/default/careercenter/public/events"
+        f"/staffing/v1/job-requisitions?cid={urllib.parse.quote(token)}"
+    )
+    requisitions = payload.get("jobRequisitions") or []
+    meta = payload.get("meta") or {}
+    jobs: list[Job] = []
+    for requisition in requisitions:
+        job_id = str(requisition.get("itemID") or "")
+        if not job_id:
+            continue
+        jobs.append(
+            Job(
+                ats="adp",
+                token=token,
+                job_id=job_id,
+                title=_text(requisition.get("requisitionTitle")) or "",
+                url=(
+                    "https://workforcenow.adp.com/mascsr/default/mdf/recruitment"
+                    f"/recruitment.html?cid={token}&jobId={job_id}"
+                ),
+                location=_adp_place(requisition),
+                posted_at=requisition.get("postDate"),
+                description=_text(requisition.get("requisitionDescription")),
+            )
+        )
+    advertised = meta.get("totalNumber")
+    if isinstance(advertised, int) and advertised > len(jobs):
+        raise ValueError(
+            f"adp/{token}: board advertises {advertised} postings, read {len(jobs)}"
+        )
+    return jobs
+
+
+_UKG_PAGE = 100
+_UKG_PAGES = 200
+
+
+def ukg(token: str) -> list[Job]:
+    """UKG Pro Recruiting, formerly UltiPro. `token` is `code|boardGuid`.
+
+    Both halves are needed and neither works alone: the code is the customer's
+    short name in the path (`FIN1008FICT`) and the GUID names one job board on
+    it, the same shape as Oracle's `podhost|siteNumber`.
+
+    A JSON POST to `JobBoardView/LoadSearchResults`, which is the only public
+    surface -- the board page itself is 443 KB of Knockout templates carrying
+    no posting. `totalCount` is honest and is used as the check.
+    """
+    code, _, board = token.partition("|")
+    if not code or not board:
+        raise ValueError(f"ukg token {token!r} is not code|boardGuid -- re-run `ats`")
+    origin = f"https://recruiting.ultipro.com/{code}/JobBoard/{board}"
+    jobs: list[Job] = []
+    advertised: int | None = None
+    for page in range(_UKG_PAGES):
+        body = json.dumps(
+            {
+                "opportunitySearch": {
+                    "Top": _UKG_PAGE,
+                    "Skip": page * _UKG_PAGE,
+                    "QueryString": "",
+                    "OrderBy": [],
+                }
+            }
+        ).encode()
+        payload = json.loads(
+            http.post_json(
+                f"{origin}/JobBoardView/LoadSearchResults", body, timeout=25, retries=2
+            ).decode("utf-8")
+        )
+        if advertised is None:
+            advertised = payload.get("totalCount")
+        opportunities = payload.get("opportunities") or []
+        for opportunity in opportunities:
+            job_id = str(opportunity.get("Id") or "")
+            if not job_id:
+                continue
+            # `Locations` is a list of objects and the readable form is
+            # `LocalizedDescription`; a board with two sites lists both.
+            places = [
+                place.get("LocalizedDescription")
+                for place in (opportunity.get("Locations") or [])
+                if isinstance(place, dict) and place.get("LocalizedDescription")
+            ]
+            jobs.append(
+                Job(
+                    ats="ukg",
+                    token=token,
+                    job_id=job_id,
+                    title=_text(opportunity.get("Title")) or "",
+                    url=f"{origin}/OpportunityDetail?opportunityId={job_id}",
+                    location=", ".join(dict.fromkeys(places)) or None,
+                    department=_text(opportunity.get("JobCategoryName")),
+                    posted_at=opportunity.get("PostedDate"),
+                    description=_text(opportunity.get("BriefDescription")),
+                )
+            )
+        if len(opportunities) < _UKG_PAGE:
+            break
+    if isinstance(advertised, int) and advertised > len(jobs):
+        raise ValueError(
+            f"ukg/{token}: board advertises {advertised} postings, read {len(jobs)}"
+        )
+    return jobs
+
+
 # Teamtailor's own RSS extension. The plain JSON feed at `/jobs.json` is
 # tidier, but it carries no location and no department, and this project ranks
 # on geography -- so the feed with the extra fields is the one worth parsing.
@@ -891,6 +1045,8 @@ EXTRACTORS: dict[str, Callable[[str], list[Job]]] = {
     "teamtailor": teamtailor,
     "workday": workday,
     "oracle_hcm": oracle_hcm,
+    "adp": adp,
+    "ukg": ukg,
     # Layer 3C: firms with no ATS at all, read from their own website. One
     # entry here, dispatched by token -- see `sites.py` for why the list is
     # deliberately short.
