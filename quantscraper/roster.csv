@@ -83,14 +83,14 @@ Switzerland,focus,Systematica,Systematica Investments,active,
 Switzerland,focus,GAM,GAM Holding|GAM Investments,active,Systematic arm effectively wound down 2024-2025. Keep but rank low.
 Switzerland,focus,Swiss Re,,active,Markets side only.
 Switzerland,focus,Zurich Insurance,Zurich Insurance Group,active,Markets side only. Reached through Zurich Insurance Europe AG in the Danish register; still no Swiss register of our own.
-# ── Dubai ────────────────────────────────────────────────────────────────────
-Dubai,deprioritized,DRW,DRW Trading|DRW Investments,active,
-Dubai,deprioritized,Millennium,Millennium Management,active,
-Dubai,deprioritized,Balyasny,Balyasny Asset Management,active,
-Dubai,deprioritized,ADIA,Abu Dhabi Investment Authority,active,Sovereign wealth fund; appears in no financial register anywhere. Carried by the seed registry.
-Dubai,deprioritized,ADQ,,active,Sovereign wealth fund; appears in no financial register anywhere. Carried by the seed registry.
-Dubai,deprioritized,Mubadala,Mubadala Investment Company,active,Sovereign wealth fund; appears in no financial register anywhere. Carried by the seed registry.
-Dubai,deprioritized,Emirates NBD,,active,Present only through its Singapore banking licence -- hence not local. No Gulf register is ingested; DFSA puts its public register behind a CAPTCHA.
+# ── Middle East ────────────────────────────────────────────────────────────────────
+Middle East,deprioritized,DRW,DRW Trading|DRW Investments,active,
+Middle East,deprioritized,Millennium,Millennium Management,active,
+Middle East,deprioritized,Balyasny,Balyasny Asset Management,active,
+Middle East,deprioritized,ADIA,Abu Dhabi Investment Authority,active,Sovereign wealth fund; appears in no financial register anywhere. Carried by the seed registry.
+Middle East,deprioritized,ADQ,,active,Sovereign wealth fund; appears in no financial register anywhere. Carried by the seed registry.
+Middle East,deprioritized,Mubadala,Mubadala Investment Company,active,Sovereign wealth fund; appears in no financial register anywhere. Carried by the seed registry.
+Middle East,deprioritized,Emirates NBD,,active,Present only through its Singapore banking licence -- hence not local. No Gulf register is ingested; DFSA puts its public register behind a CAPTCHA.
 # ── Hong Kong ────────────────────────────────────────────────────────────────
 Hong Kong,focus,Optiver,,active,
 Hong Kong,focus,Jump Trading,Jump Trading Europe,active,
@@ -210,42 +210,166 @@ Shanghai,deprioritized,Mingshi,明汯|Minghong,active,Domestic; needs AMAC, whic
 Shanghai,deprioritized,Lingjun,灵均|Lingjun Investment,active,Domestic; needs AMAC, which is deferred.
 Shanghai,deprioritized,Zhicheng,致诚,active,MISS: domestic-only; needs AMAC, which is deferred with the deprioritized regions.
 Shanghai,deprioritized,Tianyan,天演|Tianyan Capital,active,Domestic; needs AMAC, which is deferred.
-# ── US centers ───────────────────────────────────────────────────────────────
-US centers,deprioritized,Jane Street,,active,
-US centers,deprioritized,Citadel,Citadel Advisors,active,
-US centers,deprioritized,Citadel Securities,,active,
-US centers,deprioritized,Hudson River Trading,HRT Financial|HRT,active,
-US centers,deprioritized,Two Sigma,,active,
-US centers,deprioritized,DE Shaw,D. E. Shaw|D E Shaw,active,
-US centers,deprioritized,Renaissance Technologies,Renaissance Technologies LLC,active,
-US centers,deprioritized,Jump Trading,Jump Trading Europe,active,
-US centers,deprioritized,DRW,DRW Trading|DRW Holdings,active,
-US centers,deprioritized,IMC,IMC Chicago|IMC Financial Markets,active,
-US centers,deprioritized,Optiver,,active,
-US centers,deprioritized,Susquehanna,SIG|Susquehanna International Group,active,
-US centers,deprioritized,Old Mission,Old Mission Capital,active,
-US centers,deprioritized,Belvedere,Belvedere Trading,active,
-US centers,deprioritized,Peak6,PEAK6 Investments,active,
-US centers,deprioritized,Akuna,Akuna Capital,active,
-US centers,deprioritized,Wolverine,Wolverine Trading,active,
-US centers,deprioritized,Group One,Group One Trading,active,
-US centers,deprioritized,CTC,Chicago Trading Company,active,
-US centers,deprioritized,Transmarket,TransMarket Group,active,MISS: US hub is deprioritized; not chased.
-US centers,deprioritized,XR Trading,,active,
-US centers,deprioritized,Tower Research Capital,Tower Research|Latour Trading,active,
-US centers,deprioritized,Virtu Financial,Virtu,active,
-US centers,deprioritized,Millennium,Millennium Management,active,
-US centers,deprioritized,Point72,Point72 Asset Management,active,
-US centers,deprioritized,Balyasny,Balyasny Asset Management,active,
-US centers,deprioritized,ExodusPoint,ExodusPoint Capital,active,
-US centers,deprioritized,Schonfeld,Schonfeld Strategic Advisors,active,
-US centers,deprioritized,Verition,Verition Fund Management,active,
-US centers,deprioritized,Squarepoint,Squarepoint Capital|Squarepoint Ops,active,
-US centers,deprioritized,PDT,PDT Partners,active,
-US centers,deprioritized,Voleon,The Voleon Group|Voleon Capital,active,
-US centers,deprioritized,Qube,Qube Research & Technologies,active,
-US centers,deprioritized,Goldman Sachs,,active,Bulge bracket.
-US centers,deprioritized,Morgan Stanley,,active,Bulge bracket.
-US centers,deprioritized,JPMorgan,J.P. Morgan|JP Morgan|JPMorgan Chase,active,Bulge bracket.
-US centers,deprioritized,Bank of America,BofA Securities|Merrill Lynch,active,Bulge bracket.
-US centers,deprioritized,Citigroup,Citibank|Citigroup Global Markets,active,Bulge bracket.
+# ── US ───────────────────────────────────────────────────────────────
+US,deprioritized,Jane Street,,active,
+US,deprioritized,Citadel,Citadel Advisors,active,
+US,deprioritized,Citadel Securities,,active,
+US,deprioritized,Hudson River Trading,HRT Financial|HRT,active,
+US,deprioritized,Two Sigma,,active,
+US,deprioritized,DE Shaw,D. E. Shaw|D E Shaw,active,
+US,deprioritized,Renaissance Technologies,Renaissance Technologies LLC,active,
+US,deprioritized,Jump Trading,Jump Trading Europe,active,
+US,deprioritized,DRW,DRW Trading|DRW Holdings,active,
+US,deprioritized,IMC,IMC Chicago|IMC Financial Markets,active,
+US,deprioritized,Optiver,,active,
+US,deprioritized,Susquehanna,SIG|Susquehanna International Group,active,
+US,deprioritized,Old Mission,Old Mission Capital,active,
+US,deprioritized,Belvedere,Belvedere Trading,active,
+US,deprioritized,Peak6,PEAK6 Investments,active,
+US,deprioritized,Akuna,Akuna Capital,active,
+US,deprioritized,Wolverine,Wolverine Trading,active,
+US,deprioritized,Group One,Group One Trading,active,
+US,deprioritized,CTC,Chicago Trading Company,active,
+US,deprioritized,Transmarket,TransMarket Group,active,MISS: US hub is deprioritized; not chased.
+US,deprioritized,XR Trading,,active,
+US,deprioritized,Tower Research Capital,Tower Research|Latour Trading,active,
+US,deprioritized,Virtu Financial,Virtu,active,
+US,deprioritized,Millennium,Millennium Management,active,
+US,deprioritized,Point72,Point72 Asset Management,active,
+US,deprioritized,Balyasny,Balyasny Asset Management,active,
+US,deprioritized,ExodusPoint,ExodusPoint Capital,active,
+US,deprioritized,Schonfeld,Schonfeld Strategic Advisors,active,
+US,deprioritized,Verition,Verition Fund Management,active,
+US,deprioritized,Squarepoint,Squarepoint Capital|Squarepoint Ops,active,
+US,deprioritized,PDT,PDT Partners,active,
+US,deprioritized,Voleon,The Voleon Group|Voleon Capital,active,
+US,deprioritized,Qube,Qube Research & Technologies,active,
+US,deprioritized,Goldman Sachs,,active,Bulge bracket.
+US,deprioritized,Morgan Stanley,,active,Bulge bracket.
+US,deprioritized,JPMorgan,J.P. Morgan|JP Morgan|JPMorgan Chase,active,Bulge bracket.
+US,deprioritized,Bank of America,BofA Securities|Merrill Lynch,active,Bulge bracket.
+US,deprioritized,Citigroup,Citibank|Citigroup Global Markets,active,Bulge bracket.
+# Switzerland, widened. Private banks, cantonal banks, insurers and the
+# two Swiss systematic managers (Quantica, RAM). Every name was checked
+# against the registers first, and one was thrown out on that check:
+# `Swiss National Bank` matched a FINMA *prose* row -- the sentence
+# beginning "In the case of SIX Repo AG Zurich, FINMA's supervision is
+# limited" -- rather than any firm.
+Switzerland,focus,Partners Group,,active,
+Switzerland,focus,LGT Capital Partners,,active,
+Switzerland,focus,Quantica Capital,,active,Zurich systematic CTA.
+Switzerland,focus,RAM Active Investments,,active,Geneva systematic equity.
+Switzerland,focus,Union Bancaire Privee,UBP,active,
+Switzerland,focus,Banque Syz,Syz Group,active,
+Switzerland,focus,Mirabaud,,active,
+Switzerland,focus,J. Safra Sarasin,Bank J. Safra Sarasin,active,
+Switzerland,focus,Edmond de Rothschild,,active,
+Switzerland,focus,Banque Cantonale Vaudoise,BCV,active,
+Switzerland,focus,Basler Kantonalbank,,active,
+Switzerland,focus,Luzerner Kantonalbank,,active,
+Switzerland,focus,Zuger Kantonalbank,,active,
+Switzerland,focus,Raiffeisen Schweiz,,active,
+Switzerland,focus,PostFinance,,active,
+Switzerland,focus,Swiss Life,,active,
+Switzerland,focus,Baloise,,active,
+Switzerland,focus,Helvetia,,active,
+Switzerland,focus,Fisch Asset Management,,active,
+Switzerland,focus,VP Bank,,active,
+Switzerland,focus,Reyl,REYL Intesa Sanpaolo,active,
+Switzerland,focus,Bordier,Bordier & Cie,active,
+Switzerland,focus,Swisscanto,,active,
+Switzerland,focus,BlueOrchard,BlueOrchard Finance,active,
+Switzerland,focus,Schroder Investment Management Switzerland,,active,
+Switzerland,focus,Vitol,,active,Geneva commodity trader; runs a quantitative desk.
+Switzerland,focus,EFG International,,active,"Not in any register we hold -- a real gap, not a dead firm."
+Switzerland,focus,Bellevue Group,,active,Not in any register we hold.
+Switzerland,focus,SIX Group,SIX Swiss Exchange,active,"Not in any register we hold; it is the exchange operator, not a licensee."
+Switzerland,focus,Corner Bank,Corner Banca,active,Not in any register we hold.
+# London, widened. The macro and systematic funds, the large UK asset
+# managers, the remaining UK banks, and the London desks of firms already
+# on other hubs. Two names were tightened after seeing what they matched:
+# a bare `M&G` hits 120 fund rows and a bare `Insight Investment` also
+# matches Insight Investment Counsel, an unrelated firm.
+London,deprioritized,Brevan Howard,,active,
+London,deprioritized,Rokos Capital Management,,active,
+London,deprioritized,Capula Investment Management,Capula,active,
+London,deprioritized,Cheyne Capital,,active,
+London,deprioritized,CQS,,active,
+London,deprioritized,Eisler Capital,,active,
+London,deprioritized,Caxton Associates,,active,
+London,deprioritized,Egerton Capital,,active,
+London,deprioritized,Lansdowne Partners,,active,
+London,deprioritized,Florin Court Capital,,active,
+London,deprioritized,Systematica Investments,,active,The UK LLP; the Switzerland line is the same group.
+London,deprioritized,Record Currency Management,,active,
+London,deprioritized,Mako,Mako Global|Mako Financial Markets,active,Same firm as the Amsterdam line.
+London,deprioritized,OSTC,,active,
+London,deprioritized,Schroders,,active,
+London,deprioritized,Legal & General,LGIM|Legal & General Investment Management,active,
+London,deprioritized,M&G Investments,,active,Specific: a bare M&G matches 120 fund rows.
+London,deprioritized,Abrdn,Aberdeen,active,
+London,deprioritized,Baillie Gifford,,active,
+London,deprioritized,BlackRock,,active,
+London,deprioritized,Insight Investment Management,,active,Specific: a bare Insight Investment also matches Insight Investment Counsel.
+London,deprioritized,Aviva Investors,,active,
+London,deprioritized,Janus Henderson,,active,
+London,deprioritized,Ninety One,,active,
+London,deprioritized,Standard Chartered,,active,
+London,deprioritized,NatWest,NatWest Markets,active,
+London,deprioritized,Lloyds,Lloyds Bank,active,
+London,deprioritized,Nomura International,,active,
+London,deprioritized,Glencore,Glencore Energy,active,Commodity trader; runs a quantitative desk.
+London,deprioritized,Hudson River Trading,HRT Financial,active,
+London,deprioritized,Five Rings,Five Rings Capital,active,
+London,deprioritized,Flow Traders,,active,
+London,deprioritized,IMC,IMC Trading|IMC Financial Markets,active,
+London,deprioritized,Virtu Financial,,active,
+London,deprioritized,Tower Research Capital,Tower Research,active,
+London,deprioritized,LSEG,London Stock Exchange Group,active,
+London,deprioritized,BlueCrest Capital Management,BlueCrest,active,Not in any register we hold.
+London,deprioritized,Maven Securities,Maven Derivatives,active,Not in any register we hold.
+# US, widened. The Chicago and New York prop shops, the quantitative
+# asset managers, the custodians and the fund complexes. `Fidelity` is
+# written as `Fidelity Management & Research` because the bare name spans
+# three unrelated groups.
+US,deprioritized,Bridgewater Associates,,active,
+US,deprioritized,AQR Capital Management,AQR,active,
+US,deprioritized,Acadian Asset Management,,active,
+US,deprioritized,Numeric Investors,Man Numeric,active,
+US,deprioritized,Dimensional Fund Advisors,,active,
+US,deprioritized,Vatic Investments,,active,
+US,deprioritized,Walleye Capital,,active,
+US,deprioritized,Hudson Bay Capital,,active,
+US,deprioritized,Element Capital Management,,active,
+US,deprioritized,Garda Capital,Garda Capital Partners,active,
+US,deprioritized,Lighthouse Investment Partners,,active,
+US,deprioritized,Freestone Grove Partners,,active,
+US,deprioritized,Brevan Howard,,active,
+US,deprioritized,Quantlab,Quantlab Financial,active,
+US,deprioritized,Allston Trading,,active,
+US,deprioritized,Tradebot Systems,,active,
+US,deprioritized,DV Trading,,active,
+US,deprioritized,Marquette Partners,,active,
+US,deprioritized,Sumo Capital,,active,
+US,deprioritized,Valkyrie Trading,,active,
+US,deprioritized,Volant Trading,,active,
+US,deprioritized,Simplex Trading,,active,
+US,deprioritized,Consolidated Trading,,active,
+US,deprioritized,Headlands Technologies,,active,
+US,deprioritized,Eagle Seven,,active,
+US,deprioritized,Radix Trading,,active,
+US,deprioritized,Five Rings,Five Rings Capital,active,
+US,deprioritized,Wells Fargo,,active,
+US,deprioritized,Jefferies,,active,
+US,deprioritized,BNY Mellon,,active,
+US,deprioritized,State Street,,active,
+US,deprioritized,Northern Trust,,active,
+US,deprioritized,Fidelity Management & Research,FMR,active,Specific: a bare Fidelity matches funds across three groups.
+US,deprioritized,Vanguard,,active,
+US,deprioritized,PIMCO,,active,
+US,deprioritized,Invesco,,active,
+US,deprioritized,Franklin Templeton,,active,
+US,deprioritized,Neuberger Berman,,active,
+US,deprioritized,Magnetar Capital,,active,Not in any register we hold.
+US,deprioritized,Teza Technologies,,active,Not in any register we hold.
+US,deprioritized,Gelber Group,,active,Not in any register we hold.

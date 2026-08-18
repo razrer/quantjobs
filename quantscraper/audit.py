@@ -47,13 +47,18 @@ HUB_COUNTRY = {
     "Copenhagen": "DK",
     "Amsterdam": "NL",
     "Switzerland": "CH",
-    "Dubai": "AE",
     "Hong Kong": "HK",
     "Singapore": "SG",
     "London": "GB",
     "Frankfurt": "DE",
     "Shanghai": "CN",
-    "US centers": "US",
+    # "US" rather than "US centers", and "Middle East" rather than "Dubai":
+    # the labels name what the lines actually are. The Middle East group was
+    # never only Dubai -- ADIA, ADQ and Mubadala are all Abu Dhabi -- and the
+    # US group spans New York, Chicago, Austin and the Bay Area. `local` still
+    # asks one country per hub, which is what these registries are organised by.
+    "Middle East": "AE",
+    "US": "US",
 }
 
 
