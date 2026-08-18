@@ -60,7 +60,7 @@ nothing in the near-term plan now waits on a human.
 | 16 | The last ATSes, and Singapore | **done** — Jobvite/Varbi/Homerun read, MCF swept |
 | 17 | The ATSes the focus hubs actually run | **done** — Oracle read, 26 boards |
 | 18 | Stockholm and Hong Kong, firm by firm | **done** — Stockholm 15/18 reached |
-| 19 | Hong Kong widened, ATS table exhaustive | in progress |
+| 19 | Hong Kong widened, ATS table exhaustive | **done** — 51 HK firms, 26 ATSes, 20 read |
 
 ---
 
