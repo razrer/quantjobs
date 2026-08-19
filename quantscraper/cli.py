@@ -9,7 +9,8 @@ from datetime import datetime, timezone
 
 from . import (
     alerts, ats, audit, bodies, coverage, db, discover, domains, extract,
-    fca, jobstream, labels, mycareersfuture, pages, resolve, sites, tagging,
+    fca, jobindex, jobstream, labels, mycareersfuture, pages, resolve, sites,
+    tagging,
 )
 from .registries import REGISTRIES
 
@@ -195,6 +196,43 @@ def _singapore(database: str, since: str | None) -> int:
         print(f"  the portal advertised {swept.advertised:,d}")
     # The sweep audits its own arithmetic: a round number in the output is
     # what a cap looks like from the outside, and nothing else would say so.
+    if swept.problem:
+        print(f"  FAIL {swept.problem}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _denmark(database: str, since: str | None, only: list[int] | None) -> int:
+    connection = db.connect(database)
+    swept = jobindex.run(connection, since=since, only=only)
+    print(
+        f"swept {swept.slices:,d} slice(s) over {swept.pages:,d} pages: "
+        f"{swept.seen:,d} postings, {swept.written:,d} written, "
+        f"{swept.repeats:,d} seen already"
+    )
+    if not swept.partial:
+        print(f"  the board advertised {swept.advertised:,d}")
+    row = connection.execute(
+        "SELECT COUNT(*) AS n, SUM(domain IS NOT NULL) AS resolved,"
+        " SUM(deadline IS NOT NULL) AS dated"
+        " FROM jobs WHERE ats = ?", (jobindex.NAME,)
+    ).fetchone()
+    print(
+        f"  {row['n']:,d} Danish ads held, {row['resolved'] or 0:,d} attributed"
+        f" to an employer domain, {row['dated'] or 0:,d} with a stated deadline"
+    )
+    # A category the board grew since `SUBCATEGORIES` was written is swept
+    # anyway -- the partition is read live -- but the read-time gate in
+    # `tagging.py` has never been asked about it, so it is named here.
+    if swept.unknown_subcategories:
+        named = ", ".join(
+            f"{label!r} ({subid})"
+            for subid, label in sorted(swept.unknown_subcategories.items())
+        )
+        print(f"  {len(swept.unknown_subcategories)} new subcategor(ies): {named}")
+    # A slice bigger than the board's own result window, or a sweep that came
+    # back short of what the board said it held. Either is a silent truncation
+    # everywhere else; here it is the one thing the caller has to read.
     if swept.problem:
         print(f"  FAIL {swept.problem}", file=sys.stderr)
         return 1
@@ -734,6 +772,23 @@ def main(argv: list[str] | None = None) -> int:
         " which are cheap enough (~850 requests) to just do",
     )
 
+    denmark_command = commands.add_parser(
+        "denmark", help="sweep Jobindex, Denmark's largest job board"
+    )
+    denmark_command.add_argument(
+        "--since",
+        help="top up from the unfiltered board back to this ISO date instead of"
+        " sweeping every category. One query reaches 1,000 postings and the"
+        " board publishes roughly 600 a day, so this is a daily poll and it"
+        " says so if the window ran out before the date did",
+    )
+    denmark_command.add_argument(
+        "--only",
+        help="sweep just these subcategory ids, comma separated -- 35 is"
+        " Finans og forsikring, 45 Forskning, 1 Systemudvikling. For probing a"
+        " reader change without walking all eighty",
+    )
+
     bodies_command = commands.add_parser(
         "bodies", help="fetch descriptions a list endpoint omitted (Layer 3C)"
     )
@@ -861,6 +916,9 @@ def main(argv: list[str] | None = None) -> int:
         return _bodies(args.db, args.limit, args.workers)
     if args.command == "singapore":
         return _singapore(args.db, args.since)
+    if args.command == "denmark":
+        only = [int(part) for part in args.only.split(",")] if args.only else None
+        return _denmark(args.db, args.since, only)
     if args.command == "jobs":
         return _jobs(args.db, args.limit, args.workers)
     if args.command == "ats":
