@@ -354,34 +354,59 @@ and never overwrites a row you have filled in.
 
 ---
 
-## 2. Two national job registers want an account, and I don't make accounts
+## 2. Two national job registers — **both resolved, nothing waiting on you**
+
+**Switzerland is built and polling; Denmark falls back to Jobindex.** Neither
+needs an account after all, and the Swiss one never did — see below. Kept in
+full because the reasoning is worth not re-deriving.
 
 Sweden's JobStream is the single best source in the pipeline: a national feed,
 complete by law, 4,582 postings, delta-polled. Two of the five remaining focus
-hubs publish the same kind of thing, and both stop at a login.
+hubs publish the same kind of thing, and both looked like they stopped at a
+login. One of them did not.
 
-**Switzerland — `job-room.ch`.** SECO's public employment service, and it is
-better than a normal job board: under the *Stellenmeldepflicht*, employers must
-report vacancies in high-unemployment occupations to it, so parts of it are
-mandatory rather than voluntary. The search endpoint
-(`/api/jobadservice/api/jobAdvertisements/_search`) returns **HTTP 401
-Unauthorized** to an anonymous POST — verified, not assumed. There is a
-registered API programme for it.
+**Switzerland — `job-room.ch`. Resolved: no account needed, the earlier 401 was
+our own path bug.** The 401 recorded here previously was against
+`/api/jobadservice/api/jobAdvertisements/_search` — an extra, wrong `/api/`
+segment. The real path, read straight off the public site's own network
+traffic while it ran an anonymous search, is
+`https://www.job-room.ch/jobadservice/api/jobAdvertisements/_search`, and it
+answers **200 with full postings to a plain unauthenticated POST** — no
+cookie, no session, no key. Confirmed twice: once watching the live site
+search anonymously (full job records came back, including company name,
+address, phone, email and description), and once independently with a bare
+`curl -X POST` carrying an empty `{}` body and no auth header at all, which
+returned the same shape. The employer-facing API discussed below is a
+different, narrower thing — see the "what this API access is (and is not)"
+note.
 
-**Denmark — `jobnet.dk`.** STAR's national job register. `job.jobnet.dk/CV/
-FindWork/Search` redirects to **NemLog-in**, the Danish national identity
-service, which needs a Danish MitID. Verified.
+**Denmark — `jobnet.dk`.** **Resolved: falling back to Jobindex.** STAR's
+national job register redirects to NemLog-in, the Danish national identity
+service, which needs a Danish MitID — verified, and you don't have one. Build
+against Jobindex instead: private rather than complete-by-law, but open, no
+login needed.
 
-**What I need:** for Switzerland, either register for the job-room API and put
-the credentials in `.env` as `JOBROOM_KEY` (same pattern as `FCA_KEY`), or tell
-me to drop it. For Denmark, MitID is not something you can hand me, so unless
-you have one, say so and I will fall back to Jobindex, which is private but
-open.
+**What I need:** nothing — both are unblocked now. This whole item can come
+off once a `jobroom_ch` module lands; kept here until then as the record of
+what was verified and why.
 
-**What I build once it is there:** a `jobroom_ch` module in the `jobstream.py`
-shape — cursor in `feed_state`, delta polling, `MIN_EXPECTED` floor. Switzerland
-is one of six focus hubs and currently produces postings from **2 of its 11**
-roster firms.
+**What I build:** `jobroom_ch`, a module in the `jobstream.py` shape — cursor
+in `feed_state`, delta polling, `MIN_EXPECTED` floor — against the public
+search endpoint above, no `.env` entry required. Switzerland is one of six
+focus hubs and currently produces postings from **2 of its 11** roster firms.
+Denmark's Jobindex module is the other one now unblocked and buildable
+whenever it's next in line.
+
+**What the registered "Job-Room API" access (the email-request one) actually
+is, since it was nearly requested for the wrong reason:** it is documented at
+https://test-api.job-room.ch/api-docs/jobAdvertisements/v1/index.html as a
+channel for *employers* to submit and manage their *own* postings — `POST
+/jobAdvertisements/v1` to create one, `GET .../v1?page=…` and the authenticated
+`_search` to list only ads *you* submitted, `PATCH .../{id}/cancel` to
+withdraw one. None of its read endpoints return the whole register, so it
+would not have served this project's purpose even with a key. Requesting it
+is unnecessary — the public search endpoint above already gives the read
+access we needed.
 
 Singapore's equivalent needs nothing from you — see the note below.
 

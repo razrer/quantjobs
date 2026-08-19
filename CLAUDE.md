@@ -99,6 +99,10 @@ python -m quantscraper jobstream              # poll Sweden's delta feed
 ```
 
 ```bash
+python -m quantscraper switzerland            # poll job-room.ch (Layer 4)
+```
+
+```bash
 python -m quantscraper jobstream --since 2026-08-12   # replay a polled window
 ```
 
@@ -167,6 +171,8 @@ registries/*.py  ->  employers table  ->  resolve.py  ->  firms table
 - `discover.py` — Layer 2C: firm name -> board token, guessed then proven
 - `extract.py` — Layer 3: one function per ATS format; postings land in `jobs`
 - `jobstream.py` — Layer 4: Sweden's national delta feed, cursor in `feed_state`
+- `jobroom_ch.py` — Layer 4: Switzerland's public employment service; shares
+  `feed_state`, walks from both ends around a 10,000-result window
 - `alerts.py` — per-source volume anomaly detection over the `runs` history
 - `registries/` — one module per source
 - `web/build_data.py` — Layer 6: dumps `jobs` + `job_tags` to `data.js`
@@ -623,6 +629,57 @@ Each of these silently produced wrong results before being caught:
   platform hosting other managers' strategies. Marshall Wace landed on the same
   host for the same reason. When adding an alias, check what it matches before
   trusting it.
+- **A 401 can be our own URL, and it cost this project a source for months.**
+  job-room.ch was recorded as blocked on a registered API programme on the
+  strength of a 401 from `/api/jobadservice/api/jobAdvertisements/_search` --
+  one `/api/` too many. The real path is `/jobadservice/api/...`, it is what
+  the public site itself calls, and it answers a bare unauthenticated POST with
+  full postings. Read the site's own network traffic before believing an auth
+  wall. The registered API that wants an email is real and is a *different*
+  thing: it lets an employer manage its **own** postings and no read endpoint
+  on it returns the register, so the key would not have helped.
+- **`X-Total-Count` is not `x-total-count`, and the guard it feeds went silent.**
+  HTTP/2 normalises header names to lowercase and HTTP/1.1 sends whatever the
+  server typed, so a case-sensitive lookup found nothing, the advertised total
+  read as **0**, and `jobroom_ch`'s truncation check -- whose entire job is
+  comparing collected against advertised -- passed a walk that had stopped dead
+  on the result window at a suspiciously round 10,000. `http._send` lowercases
+  header names for this reason. The deeper lesson is the guard's, not the
+  header's: **a check whose evidence is missing must fail, not pass.** A
+  missing total is now a problem in its own right.
+- **job-room.ch's `Link` header advertises a last page that 412s.** With
+  `size=1` it offers `rel="last"` at page 80,459; any request whose
+  `page * size` reaches **10,000** returns HTTP 412. Elasticsearch's
+  `max_result_window`, and the same trap as MyCareersFuture's 418 one country
+  over. The fix that works without a partition is a **two-ended walk**:
+  `sort=date_asc` is the exact reverse of `date_desc` (verified over a whole
+  canton -- same set, precisely reversed), so reading the first 10,000 forwards
+  and the last `T - 10,000` backwards covers any slice up to 20,000. Proved on
+  a live poll: 12,033 advertised, 12,033 collected, 967 overlapping in the
+  middle, where a single-ended walk returns exactly 10,000 and reports success.
+- **Swiss cantons are not a partition, and two separate things break it.** They
+  sum to 78,355 against a total of 80,460: `FL` (Liechtenstein) is a 27th code
+  no list of Swiss cantons contains, and ~2,100 postings carry **no canton at
+  all**, which no value of the filter can reach. Same shape as MCF's missing
+  `Telecommunications` except the gap is somewhere a better-spelled list cannot
+  close. Measure a partition against the unfiltered total before trusting it.
+- **A publication window is not an application deadline.** job-room.ch sets
+  `publication.endDate` on every ad and it is tempting, because the board pins
+  an approaching deadline above everything else. Measured: **81% sit exactly 30
+  days after the start date and 12.8% exactly 60** -- two round defaults, which
+  is a "how long should this run?" dropdown, not a date an employer chose. It
+  is when the *advertisement* stops being displayed. Writing it would hand
+  ~80,000 Swiss postings a fabricated deadline that outranks every posting
+  publishing a real one. JobStream remains the only source with a true one.
+- **A published "company website" is often the recruiter's, and one flag tells
+  them apart.** On job-room.ch the field is present on 19% of ads and the top
+  six domains are all staffing agencies -- MediPersonal, fachkraft.ch,
+  stellentreff.ch. `company.surrogate` marks an agency standing in for an
+  employer it does not name, and **372 of 379 websites in a 2,000-ad sample
+  came from surrogate rows**; the seven that did not are `post.ch` and
+  `pfister.ch`, the real employers. Record a domain only from a non-surrogate
+  company: 0.3% of rows, every one correct, against 19% that would file
+  postings under firms that never advertised them.
 - **A few large firms simply refuse us**, and it is not our trust store this
   time: ABN AMRO answers 503, Nasdaq times out, Citadel Securities and Jyske
   Bank answer 403. `curl` with a browser UA reaches all four. Recorded as a

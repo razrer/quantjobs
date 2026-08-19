@@ -61,6 +61,7 @@ nothing in the near-term plan now waits on a human.
 | 17 | The ATSes the focus hubs actually run | **done** — Oracle read, 26 boards |
 | 18 | Stockholm and Hong Kong, firm by firm | **done** — Stockholm 15/18 reached |
 | 19 | Hong Kong widened, ATS table exhaustive | **done** — 51 HK firms, 26 ATSes, 20 read |
+| 20 | Switzerland's national feed | **done** — job-room.ch polling, 12,033 postings |
 
 ---
 
@@ -2157,3 +2158,111 @@ making that visible rather than hiding it behind nine already-solved firms.
 - `resolve._best` let a social page win a merged firm's `website` field, which
   is what `harvest_registry_domains` seeds `domain_lookups` from;
 - `athoscap.com` passes the spaced-phrase test and is the wrong Athos.
+
+---
+
+## Stage 20 — Switzerland's national feed *(done)*
+
+`jobroom_ch.py`. Switzerland is a focus hub and was the second worst covered:
+two of its eleven roster firms produce postings. job-room.ch is SECO's own
+portal, and under the **Stellenmeldepflicht** an employer must report a vacancy
+in a high-unemployment occupation to it before advertising elsewhere — so for
+those occupations it is a register complete *by law*, the property that makes
+`fi_se` and the SEC bulk files worth more than any search box. For everything
+else it is a wide net, exactly as Platsbanken turned out to be.
+
+**Exit criterion — met.** A poll lands Swiss postings with location, employer
+and description, and the walk audits its own arithmetic against the total the
+portal advertises. Live run: **12,033 advertised, 12,033 collected.**
+
+### The blocker was our own URL
+
+`ACTION-REQUIRED.md` had recorded this source as blocked on a registered API
+programme, on the strength of an HTTP 401. The 401 was real and the path was
+not: `/api/jobadservice/api/jobAdvertisements/_search` carries one `/api/` too
+many. The path the public site itself calls answers a **bare unauthenticated
+POST with full postings** — no cookie, no session, no key. Confirmed twice,
+once by reading the live site's own network traffic and once with a bare `curl`
+carrying an empty body and no headers.
+
+The registered API that wants an email is real and is a *different thing*: it
+lets an employer submit and manage its **own** postings (`POST
+/jobAdvertisements/v1`, a `_search` scoped to the caller's ads, `PATCH
+.../cancel`). No read endpoint on it returns the register, so the key would not
+have served this project even if it had arrived. The draft email was written
+and then not sent, which is the right outcome and the reason to check what an
+API *is* before requesting access to it.
+
+### The advertised last page does not exist
+
+With `size=1` the response offers `rel="last"` at page 80,459. Any request
+whose `page * size` reaches **10,000** returns HTTP 412 — Elasticsearch's
+`max_result_window`. Believing the `Link` header builds a walk that dies 88%
+short. This is MyCareersFuture's 418 one country over, and loud for the same
+lucky reason.
+
+**The obvious partition is not a cover, and measuring said so.** The 26 cantons
+sum to 78,355 against 80,460: `FL` is a 27th code (Liechtenstein) that no list
+of Swiss cantons contains, and ~2,100 postings carry **no canton at all**,
+which no value of the filter can reach. Same shape as MCF's missing
+`Telecommunications`, except the gap sits somewhere a better-spelled list
+cannot close.
+
+**What works instead is a two-ended walk.** `sort=date_asc` is the exact
+reverse of `date_desc` — verified over a whole canton, 938 postings, same set
+and precisely reversed — so reading the first 10,000 forwards and the last
+`T - 10,000` backwards covers any slice up to 20,000. Fifteen lines, and no
+extra request on the common path. It earned itself immediately: the first live
+poll was a two-day window of 12,033, where a single-ended walk returns exactly
+10,000 and reports success.
+
+### Three traps in the data, each caught by measuring rather than reading
+
+- **`publication.endDate` is not a deadline.** Every ad carries one and the
+  board pins an approaching deadline above everything else. Measured over 2,000
+  ads: **81% sit exactly 30 days after the start date, 12.8% exactly 60** — two
+  round defaults, a "how long should this run?" dropdown rather than a date an
+  employer chose. It is when the *advertisement* stops being displayed. Writing
+  it would hand ~80,000 Swiss postings a fabricated deadline outranking every
+  posting that publishes a real one. JobStream stays the only true source.
+- **`company.website` is usually the recruiter's.** Present on 19% of ads, and
+  the top six domains are all staffing agencies. `company.surrogate` is the
+  tell: **372 of 379 websites in a 2,000-ad sample came from surrogate rows**,
+  and the seven that did not are `post.ch` and `pfister.ch`. A domain is
+  recorded only from a non-surrogate company — 0.3% of rows, every one right,
+  against 19% that would file postings under firms that never advertised them.
+- **The occupation taxonomy has codes and no labels.** `avamOccupationCode` is
+  stored because it is the source's own taxonomy and re-deriving it would cost
+  a re-poll, but the reference service that would name the codes is not open,
+  so it gates nothing yet. Recorded rather than dropped or smuggled.
+
+### A bug the live run found in the guard itself
+
+The first live poll printed **"the portal advertised 0"** beside a
+suspiciously round **10,000 postings** — a walk stopped dead on the result
+window, reporting success. The count lives only in `X-Total-Count`, HTTP/2
+normalises header names to lowercase, and the lookup was case-sensitive.
+
+The header fix is one line. The lesson is the guard's: **a check whose evidence
+goes missing must fail, not pass.** The truncation audit is that one number, so
+a missing total silently disabled the only safety this module has. It is now a
+problem in its own right, and `http._send` lowercases header names so no other
+caller repeats it.
+
+**Five protections, all mutation-tested** — writing `endDate` as the deadline
+fails 2 tests, dropping the surrogate guard 1, removing the far-end leg 1,
+saving the cursor after a truncated poll 1, and treating a missing total as
+sound 1. 22 tests, suite at 481.
+
+### What it does not do, said plainly
+
+A cold start reaches the **last two days, not the whole board**. `onlineSince`
+is nested — 9,401 at one day, 12,028 at two, 27,403 at a week, past what any
+walk can read — and the board is a rolling 60-day window, so daily polling
+converges on all of it within 60 days and then holds. That is the source's
+shape rather than a shortfall, and the cursor moves only on a sound poll, so a
+truncated window stays in front of the next one rather than behind it.
+
+Removal is not observable: the search returns only `PUBLISHED_PUBLIC` ads and
+there is no withdrawal channel of the kind JobStream publishes, so postings go
+stale the ordinary way — the row stays and `last_seen` stops moving.

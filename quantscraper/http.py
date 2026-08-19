@@ -74,6 +74,7 @@ def _send(
     timeout: int,
     retries: int,
     final_url: list[str] | None = None,
+    headers_out: dict[str, str] | None = None,
 ) -> bytes:
     """Send `request`, retrying transient failures.
 
@@ -90,6 +91,18 @@ def _send(
                     body = gzip.decompress(body)
                 if final_url is not None:
                     final_url.append(response.geturl())
+                if headers_out is not None:
+                    # Lowercased, because header names are case-insensitive by
+                    # spec and the wire does not agree with itself: HTTP/2
+                    # normalises them down, HTTP/1.1 sends whatever the server
+                    # typed. Looking up `X-Total-Count` against an HTTP/2
+                    # response found nothing, the count read as zero, and the
+                    # truncation guard that count exists to feed went quiet --
+                    # a walk stopped dead on the result window and reported
+                    # success. One predictable form is the fix.
+                    headers_out.update(
+                        (name.lower(), value) for name, value in response.headers.items()
+                    )
                 return body
         except urllib.error.HTTPError as exc:
             retryable = exc.code == 429 or exc.code >= 500
@@ -148,6 +161,23 @@ def post_json(
     url: str, body: bytes, *, timeout: int = 60, retries: int = 3
 ) -> bytes:
     """POST a JSON body. Workday's CXS endpoint is the reason this exists."""
+    return post_json_with_headers(url, body, timeout=timeout, retries=retries)[0]
+
+
+def post_json_with_headers(
+    url: str, body: bytes, *, timeout: int = 60, retries: int = 3
+) -> tuple[bytes, dict[str, str]]:
+    """POST a JSON body, returning the response and its headers.
+
+    The headers are the point for exactly one caller: job-room.ch reports how
+    many postings a query matched in `x-total-count` and nowhere in the body,
+    and that number is the only way `jobroom_ch` can tell a complete slice from
+    a truncated one. Reading a count out of the body would be the simpler
+    signature and there is no count in the body to read.
+
+    **Header names come back lowercased.** See `_send` -- the casing on the
+    wire is not stable and a case-sensitive lookup silently found nothing.
+    """
     request = urllib.request.Request(
         url,
         data=body,
@@ -157,7 +187,8 @@ def post_json(
             "Content-Type": "application/json",
         },
     )
-    return _send(request, timeout, retries)
+    received: dict[str, str] = {}
+    return _send(request, timeout, retries, headers_out=received), received
 
 
 def post_form(

@@ -9,8 +9,8 @@ from datetime import datetime, timezone
 
 from . import (
     alerts, ats, audit, bodies, coverage, db, discover, domains, extract,
-    fca, jobindex, jobstream, labels, mycareersfuture, pages, resolve, sites,
-    tagging,
+    fca, jobindex, jobroom_ch, jobstream, labels, mycareersfuture, pages,
+    resolve, sites, tagging,
 )
 from .registries import REGISTRIES
 
@@ -233,6 +233,34 @@ def _denmark(database: str, since: str | None, only: list[int] | None) -> int:
     # A slice bigger than the board's own result window, or a sweep that came
     # back short of what the board said it held. Either is a silent truncation
     # everywhere else; here it is the one thing the caller has to read.
+    if swept.problem:
+        print(f"  FAIL {swept.problem}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _switzerland(database: str, days: int | None) -> int:
+    connection = db.connect(database)
+    swept = jobroom_ch.run(connection, days)
+    print(
+        f"polled job-room.ch back {swept.days} day(s) over {swept.pages:,d} pages: "
+        f"{swept.seen:,d} postings, {swept.written:,d} written, "
+        f"{swept.repeats:,d} served twice"
+    )
+    print(f"  the portal advertised {swept.advertised:,d}")
+    row = connection.execute(
+        "SELECT COUNT(*) AS n, SUM(domain IS NOT NULL) AS resolved"
+        " FROM jobs WHERE ats = ?", (jobroom_ch.NAME,)
+    ).fetchone()
+    print(
+        f"  {row['n']:,d} Swiss ads held, {row['resolved'] or 0:,d} attributed"
+        " to an employer domain"
+    )
+    # A slice bigger than a two-ended walk can read, or a walk that came back
+    # short of what the portal said it held. Either way the cursor did not move,
+    # so the unread window is still in front of the next poll rather than behind
+    # it -- but it has to be said out loud, because a truncated walk otherwise
+    # looks exactly like a quiet day.
     if swept.problem:
         print(f"  FAIL {swept.problem}", file=sys.stderr)
         return 1
@@ -789,6 +817,17 @@ def main(argv: list[str] | None = None) -> int:
         " reader change without walking all eighty",
     )
 
+    switzerland_command = commands.add_parser(
+        "switzerland", help="poll job-room.ch, Switzerland's public employment service"
+    )
+    switzerland_command.add_argument(
+        "--days",
+        type=int,
+        help="read back this many days instead of using the stored cursor."
+        " The portal holds a rolling 60-day window and a single query can only"
+        " reach 20,000 postings, which is roughly two days",
+    )
+
     bodies_command = commands.add_parser(
         "bodies", help="fetch descriptions a list endpoint omitted (Layer 3C)"
     )
@@ -919,6 +958,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "denmark":
         only = [int(part) for part in args.only.split(",")] if args.only else None
         return _denmark(args.db, args.since, only)
+    if args.command == "switzerland":
+        return _switzerland(args.db, args.days)
     if args.command == "jobs":
         return _jobs(args.db, args.limit, args.workers)
     if args.command == "ats":
