@@ -815,6 +815,377 @@ class GeographyGatesTest(unittest.TestCase):
         self.assertEqual(self._hub("One Island East"), "hong_kong")
 
 
+class HeavySystemsDownRanksTest(unittest.TestCase):
+    """`CLAUDE.md`'s role scope: heavy systems engineering **down-ranks rather
+    than hard-drops**, because a quant-dev posting listing C++ as secondary
+    still fits. A body match was hard-dropping 295 postings.
+
+    The filter that says so governed one branch; a second branch read the
+    unfiltered list and put both soft categories straight back. Found by a
+    machine review of 720 rejected postings, which flagged exactly one false
+    rejection: `Low Latency Engineer` at Da Vinci Derivatives.
+
+    **The split is title against body**, which is the rule this file makes
+    everywhere else. Excluding `heavy_systems` outright cost `Junior FPGA
+    Engineer` at Eagle Seven, a hand-labelled rejection whose note reads
+    "electronics work" -- and that title says what the job is.
+    """
+
+    def _read(self, title, body="", location="Amsterdam"):
+        tags = tagging.tag_posting(
+            _posting(title=title, description=body, location=location))
+        return {t.dimension: t.value for t in tags
+                if t.dimension in ("relevance", "role_class")}
+
+    def test_fpga_in_a_body_no_longer_removes_a_posting(self):
+        body = ("You will work with traders and quant researchers on our "
+                "trading algorithms. Experience with FPGA is a plus. ") * 8
+        self.assertNotEqual(self._read("Low Latency Engineer", body)["relevance"],
+                            "rejected")
+        self.assertNotEqual(
+            self._read("Senior Software Engineer, C++", body)["relevance"],
+            "rejected")
+
+    def test_but_fpga_in_the_title_still_does(self):
+        """The reader rejected this one by hand: "electronics work"."""
+        body = "Eagle Seven is seeking a Junior FPGA Design Engineer. " * 10
+        self.assertEqual(self._read("Junior FPGA Engineer", body)["relevance"],
+                         "rejected")
+
+    def test_but_crypto_still_rejects(self):
+        """The asymmetry is deliberate: crypto is on the exclude list outright
+        and heavy systems is explicitly not."""
+        body = "We are building the leading crypto exchange. " * 20
+        self.assertEqual(self._read("Staff Security Architect", body)["relevance"],
+                         "rejected")
+
+    def test_heavy_systems_still_ranks(self):
+        """Down-ranked, not deleted -- the tag and its evidence stay."""
+        tags = tagging.tag_posting(_posting(
+            title="Low Latency Engineer",
+            description="Our stack is FPGA and kernel bypass. " * 20))
+        self.assertIn("heavy_systems",
+                      [t.value for t in tags if t.dimension == "exclusion_reason"])
+        self.assertNotIn("heavy_systems", tagging.GATES)
+
+    def test_a_latency_budget_is_a_markets_fact(self):
+        """23 titles in the corpus carry `low latency` and all 23 are markets
+        firms -- LSEG, Tudor, Citi, Da Vinci, Tower Research, Jane Street."""
+        read = self._read("Low-Latency Engineer")
+        self.assertEqual(read["role_class"], "quant_dev")
+        self.assertEqual(read["relevance"], "less_relevant")
+
+
+class NordicOccupationTest(unittest.TestCase):
+    """Sweden arrived as 48,173 postings on a board with no taxonomy.
+
+    Jobindex and MyCareersFuture both publish an enumeration the advertiser
+    picked from, and `_OFF_INDUSTRY_FIELDS` gates on it. Jobbsafari publishes
+    none, so for Sweden the occupation words are the whole gate.
+    """
+
+    def _read(self, title, location="Stockholm"):
+        tags = tagging.tag_posting(_posting(title=title, location=location))
+        return {
+            "relevance": next(t.value for t in tags if t.dimension == "relevance"),
+            "gated": "off_industry" in
+                     [t.value for t in tags if t.dimension == "exclusion_reason"],
+        }
+
+    def test_the_plural_is_a_different_string(self):
+        """Token matching is exact, so `underskoterska` never saw
+        `Undersköterskor` -- 269 of them, on the board."""
+        for title in ("Undersköterskor till Korttidsenheten",
+                      "Sjuksköterskor till Neuroenheten",
+                      "Maskinoperatörer till Gnosjö",
+                      "Taxichaufförer sökes",
+                      "Däckmontörer till Däckia i Uppsala"):
+            with self.subTest(title=title):
+                self.assertTrue(self._read(title)["gated"])
+
+    def test_the_workplace_names_the_profession(self):
+        """"Timvikarier till Sjövägens barn och ungdomsboende" says what the
+        work is only through the place it happens in."""
+        for title in ("Timvikarier till Sjövägens barn och ungdomsboende",
+                      "Sommarvikarier till hemtjänsten",
+                      "Vikarier sökes till förskolor på Ekerö"):
+            with self.subTest(title=title):
+                self.assertTrue(self._read(title)["gated"])
+
+    def test_the_assignment_names_it_when_nothing_else_does(self):
+        """33 postings headed *Veteraner till städuppdrag!* -- no occupation
+        word in the title at all."""
+        self.assertTrue(self._read("Veteraner till städuppdrag!")["gated"])
+        self.assertTrue(self._read("Veteraner till trädgårdsuppdrag!")["gated"])
+
+    def test_danish_trades_are_read(self):
+        for title in ("Sygeplejerske til Rigshospitalet",
+                      "Pædagogmedhjælper til Børnehuset",
+                      "Klejnsmed søges til daghold i Vojens",
+                      "Musiklærer søges", "Tjener til restaurant"):
+            with self.subTest(title=title):
+                self.assertTrue(self._read(title, location="København")["gated"])
+
+    def test_a_temporary_contract_is_not_another_profession(self):
+        """`vikarie` is a contract length. Gating on it would delete a
+        temporary quant seat on evidence about its duration."""
+        read = self._read("Vikarierande Kvantitativ Analytiker")
+        self.assertFalse(read["gated"])
+        self.assertEqual(read["relevance"], "relevant")
+        contract = tagging.tag_posting(
+            _posting(title="Vikarierande analytiker",
+                     description="Detta är ett vikariat på ett år. " * 12))
+        self.assertIn("fixed_term",
+                      [t.value for t in contract if t.dimension == "contract"])
+
+    def test_the_dropped_heads_stay_dropped(self):
+        """`-arbejder` is *medarbejder*, `-medhjaelper` is
+        *studentermedhjælper* and half of those are IT work, `-vagt` is
+        *aftenvagt*. Same shape as `-arbetare` catching *medarbetare*."""
+        for head in tagging._NOT_A_TRADE_HEAD:
+            with self.subTest(head=head):
+                self.assertNotIn(head, tagging._TRADE_HEADS)
+        self.assertFalse(
+            self._read("Studentermedhjælper til udvikling af dataløsninger")["gated"])
+
+    def test_no_nordic_needle_gates_a_quant_title(self):
+        for title in ("Kvantitativ Analytiker", "Quantitative Researcher",
+                      "Riskanalytiker inom kapitalförvaltning",
+                      "Forskningsassistent"):
+            with self.subTest(title=title):
+                self.assertFalse(self._read(title)["gated"])
+
+
+class SwissTradesTest(unittest.TestCase):
+    """22,903 Swiss postings arrived and fifty reached the board.
+
+    job-room.ch publishes its own taxonomy as bare AVAM codes with no labels
+    and no open reference service, so Switzerland is gated by words where
+    Denmark and Singapore are gated by an enumeration.
+    """
+
+    def _gated(self, title):
+        tags = tagging.tag_posting(_posting(title=title, location="Zürich"))
+        return "off_industry" in [
+            t.value for t in tags if t.dimension == "exclusion_reason"]
+
+    def test_the_fifty_that_leaked(self):
+        for title in ("Zimmerreinigung 100%", "Masseurin", "Kosmetikerin",
+                      "Dachdecker", "Verkäuferin Tankstellenshop 25-45%",
+                      "Maçon coffreur", "Pflegefachfrau HF",
+                      "Schlosser / Metallbauer 100%", "Polymechaniker"):
+            with self.subTest(title=title):
+                self.assertTrue(self._gated(title))
+
+    def test_gartner_is_not_a_gardener_here(self):
+        """Clean dry-run and dropped anyway: all 155 Danish gardeners are
+        already gated by Jobindex's taxonomy, so the needle buys nothing --
+        and `Gartner Research Analyst` is a title that exists."""
+        self.assertNotIn("gartner", tagging._OFF_INDUSTRY)
+        self.assertFalse(self._gated("Gartner Research Analyst"))
+
+    def test_a_canton_code_is_switzerland(self):
+        """job-room.ch writes the town and the canton, never the city, so
+        **18,562 postings in a focus hub read `other`** and were gated off the
+        board for being somewhere they are not."""
+        for place in ("Meisterschwanden, AG", "Wallisellen, ZH", "Luzern, LU",
+                      "Biel/Bienne, BE", "Solothurn, SO", "Chur, GR"):
+            with self.subTest(place=place):
+                tags = tagging.tag_posting(_posting(title="Analyst", location=place))
+                self.assertEqual(
+                    [t.value for t in tags if t.dimension == "hub"], ["switzerland"])
+
+    def test_a_canton_code_is_never_read_from_a_title(self):
+        """`SO`, `BE`, `AG`, `UR` and `GE` are all ordinary words. Same reason
+        `_US_STATE` is matched against the location alone."""
+        tags = tagging.tag_posting(
+            _posting(title="Analyst, SO and GE reporting", location="Bangalore, India"))
+        self.assertNotIn("switzerland", [t.value for t in tags if t.dimension == "hub"])
+
+    def test_the_three_colliding_codes_stay_american(self):
+        """`AR`, `NE` and `FL` are also Arkansas, Nebraska and Florida, and both
+        readings are live here. Both labels keep the posting on the board, so
+        the only question is which one is wrong -- and a false hit in a focus
+        hub is worse than a false miss."""
+        for place in ("Omaha, NE", "Hot Springs, AR", "Orlando, FL"):
+            with self.subTest(place=place):
+                tags = tagging.tag_posting(_posting(title="Analyst", location=place))
+                self.assertEqual(
+                    [t.value for t in tags if t.dimension == "hub"], ["deprioritized"])
+
+    def test_no_swiss_needle_gates_a_quant_title(self):
+        for title in ("Quantitative Analyst", "Quantitative Researcher",
+                      "Analyste Commercial pour le Trading et la Trésorerie"):
+            with self.subTest(title=title):
+                self.assertFalse(self._gated(title))
+
+
+class NordicGeographyTest(unittest.TestCase):
+    def test_a_swedish_town_is_sweden_and_not_elsewhere(self):
+        """16,153 Swedish postings read `other`, which under a gate means
+        deleted for being somewhere they are not."""
+        for town in ("Ludvika", "Örnsköldsvik", "Trollhättan", "Gällivare",
+                     "Katrineholm", "Västra Götalands län"):
+            with self.subTest(town=town):
+                tags = tagging.tag_posting(_posting(title="Analyst", location=town))
+                self.assertEqual(
+                    [t.value for t in tags if t.dimension == "hub"], ["sweden_other"])
+
+    def test_the_commuting_belt_is_stockholm(self):
+        for town in ("Södertälje", "Vallentuna", "Värmdö", "Ekerö", "Vaxholm"):
+            with self.subTest(town=town):
+                tags = tagging.tag_posting(_posting(title="Analyst", location=town))
+                self.assertIn("stockholm", [t.value for t in tags if t.dimension == "hub"])
+
+    def test_the_seven_dangerous_names_are_not_needles(self):
+        """`Åre` folds to `are`, the ISO code for the United Arab Emirates, and
+        reaches 83 Workday postings in Dubai."""
+        for place, elsewhere in (
+            ("Dubai, ARE", "sweden_other"),
+            ("Salem, OR", "sweden_other"),
+            ("VENEZIA, VENETO, Italy", "sweden_other"),   # Commis di Sala
+        ):
+            with self.subTest(place=place):
+                tags = tagging.tag_posting(_posting(title="Analyst", location=place))
+                self.assertNotIn(elsewhere,
+                                 [t.value for t in tags if t.dimension == "hub"])
+
+    def test_a_multi_country_region_is_unknown_and_stays(self):
+        """1,392 postings say *De nordiska länderna*, which contains two focus
+        hubs. `other` would delete them."""
+        tags = tagging.tag_posting(
+            _posting(title="Analyst", location="De nordiska länderna"))
+        self.assertEqual([t.value for t in tags if t.dimension == "hub"], ["unknown"])
+        self.assertNotIn("off_location",
+                         [t.value for t in tags if t.dimension == "exclusion_reason"])
+
+
+class ValuationAdjustmentTest(unittest.TestCase):
+    """XVA and counterparty credit risk, added at the reader's request.
+
+    `lexicon.py` had carried these words since it was written and
+    `tagging.py` never did, so two modules disagreed about the same phrase.
+    """
+
+    def _read(self, title, body=""):
+        row = _posting(title=title, description=body, location="Amsterdam")
+        tags = tagging.tag_posting(row)
+        return {t.dimension: t.value for t in tags if t.dimension in
+                ("relevance", "role_class")}
+
+    def test_xva_alone_names_the_work(self):
+        """`XVA Analyst` came back `unknown` -- nothing in the lexicon read it."""
+        self.assertEqual(self._read("XVA Analyst"),
+                         {"relevance": "relevant", "role_class": "quant_research"})
+
+    def test_counterparty_credit_risk_is_modelling_not_a_generic_risk_seat(self):
+        """Bare `credit risk` is a domain that covers debt collections, which
+        is why it grades weakly. *Counterparty* credit risk has no such
+        reading: all 16 titles carrying it are bank quant seats."""
+        self.assertEqual(self._read("Counterparty Credit Risk Analyst"),
+                         {"relevance": "relevant", "role_class": "quant_research"})
+
+    def test_a_build_seat_on_that_desk_is_no_longer_rejected(self):
+        """`CCR Model Developer` was rejected outright as pure engineering."""
+        self.assertNotEqual(self._read("CCR Model Developer")["relevance"], "rejected")
+        self.assertEqual(
+            self._read("Counterparty Credit Risk Python Developer")["relevance"],
+            "relevant")
+
+    def test_the_abbreviations_are_title_only(self):
+        """`ccr` matches 15 bodies and most are "Channel and Customer
+        Research"; `cva` matches 14 and the head of those is deal advisory;
+        `dva` matched a Köksmästare. In a title they are the desk."""
+        for word in ("ccr", "cva"):
+            with self.subTest(word=word):
+                self.assertIn(word, tagging._QUANT_CORE_TITLE)
+                self.assertNotIn(word, tagging._QUANT_CORE)
+        self.assertEqual(
+            self._read("Channel and Customer Research Associate",
+                       body="We track CCR and NPS across every channel and "
+                            "report CVA to the board. " * 20)
+            ["relevance"], "unknown")
+
+    def test_the_qualifier_still_decides_for_bare_credit_risk(self):
+        self.assertEqual(
+            self._read("Credit Risk Operations (Debt Collections)")["role_class"],
+            "risk")
+
+
+class MultiLocationTest(unittest.TestCase):
+    """A posting open in two cities is one row and two chances for the reader.
+
+    `hub` was `_first`, so a seat advertised for Amsterdam *and* London was
+    filed under whichever of them the lexicon happened to list earliest --
+    which is a fact about the lexicon's ordering, not about the job.
+    """
+
+    def _hubs(self, location, title="Quantitative Analyst"):
+        tags = tagging.tag_posting(_posting(title=title, location=location))
+        return [t.value for t in tags if t.dimension == "hub"]
+
+    def _gated(self, location, title="Quantitative Analyst"):
+        tags = tagging.tag_posting(_posting(title=title, location=location))
+        return "off_location" in [
+            t.value for t in tags if t.dimension == "exclusion_reason"]
+
+    def test_both_cities_are_recorded(self):
+        self.assertEqual(
+            self._hubs("Amsterdam, London"), ["amsterdam", "deprioritized"])
+
+    def test_three_places_are_all_recorded(self):
+        self.assertEqual(
+            self._hubs("Hong Kong, Singapore, New York"),
+            ["hong_kong", "singapore", "deprioritized"])
+
+    def test_one_place_on_the_board_is_enough_to_stay(self):
+        """The gate must fire on "nowhere the reader would go", never on
+        "somewhere they would not" -- a Zurich-and-Milan posting is a Zurich
+        posting, and gating it uses a fact that argues for keeping it."""
+        self.assertFalse(self._gated("Zurich, Milan"))
+        self.assertTrue(self._gated("Milan, Rome"))
+
+    def test_the_lexicons_own_order_is_kept(self):
+        """`build_data.py` leads a card with `hub[0]`, so the order carries
+        meaning: a Stockholm-and-Frankfurt posting must not lead with
+        Frankfurt."""
+        self.assertEqual(self._hubs("Frankfurt, Stockholm")[0], "stockholm")
+
+    def test_a_country_bucket_does_not_contradict_its_own_hub(self):
+        """`sweden_other` means "in Sweden and *not* Stockholm", so emitting it
+        beside `stockholm` is one posting asserting both. Jobbsafari writes
+        exactly this string for a regional Stockholm advertisement."""
+        self.assertEqual(self._hubs("Stockholm, Sverige"), ["stockholm"])
+        self.assertEqual(self._hubs("Amsterdam, Netherlands"), ["amsterdam"])
+
+    def test_but_a_real_second_city_survives_that_rule(self):
+        """Collapsing on the bucket rather than on the country's own name would
+        throw Aarhus away -- the multi-location bug arriving by the back door."""
+        self.assertEqual(
+            self._hubs("Copenhagen, Aarhus"), ["copenhagen", "denmark_other"])
+        self.assertEqual(
+            self._hubs("Stockholm, Goteborg, Sverige"), ["stockholm", "sweden_other"])
+
+    def test_the_evidence_names_the_town_and_not_the_country(self):
+        tags = tagging.tag_posting(
+            _posting(title="Quant", location="Stockholm, Goteborg, Sverige"))
+        residual = next(
+            t for t in tags if t.dimension == "hub" and t.value == "sweden_other")
+        self.assertIn("goteborg", residual.evidence)
+
+    def test_one_place_still_yields_one_hub(self):
+        self.assertEqual(self._hubs("Stockholm, Sweden"), ["stockholm"])
+        self.assertEqual(self._hubs("2 Locations"), ["unknown"])
+        self.assertEqual(self._hubs("Cincinnati, OH"), ["deprioritized"])
+
+    def test_a_focus_hub_among_several_keeps_the_fit_notch_off(self):
+        """`_fit` reads the set: an Amsterdam-and-Milan posting is not
+        "outside the focus hubs"."""
+        both = _tags(title="Quantitative Researcher", location="Amsterdam, Milan")
+        away = _tags(title="Quantitative Researcher", location="Milan, Rome")
+        self.assertNotEqual(both["fit"], away["fit"])
+
+
 class OutOfReachTest(unittest.TestCase):
     """Management and senior titles gate rather than rank, at the reader's
     request: under a year of experience there is no reading of `Director` that

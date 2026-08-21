@@ -94,7 +94,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-VERSION = 3
+VERSION = 5
 
 # Everything that is not a letter, digit, `+` or `#` is a separator. Those two
 # are kept because `c++` and `c#` name things a posting is graded on, and
@@ -344,6 +344,31 @@ UNRELATED = _terms(
     "lärare", "förskollärare", "barnskötare", "fritidspedagog", "rektor",
     "butikssäljare", "butikschef", "frisör", "florist", "hantverkare",
     "sygeplejerske", "pædagog", "tømrer", "rengøring", "kokk",
+    # Widened with Sweden, which arrived as 48,173 postings on a board that
+    # publishes no taxonomy at all -- so unlike Jobindex and MyCareersFuture
+    # there is nothing to gate on but the words. The plural is half of it:
+    # matching is exact, so `undersköterska` never saw `Undersköterskor`.
+    # Every needle here was dry-run over all 236,077 live titles and none of
+    # them touches a posting the tagger rates positively.
+    "undersköterskor", "sjuksköterskor", "tandsköterskor", "tandhygienist",
+    "personliga assistenter", "elevassistenter", "stödassistenter",
+    "behandlingsassistenter", "vårdpersonal", "hemtjänst", "hemtjänsten",
+    "äldreboende", "ungdomsboende", "gruppboende", "förskola", "förskolor",
+    "hemstädning", "städuppdrag", "trädgårdsuppdrag", "barberare",
+    "däckskiftare", "mötesbokare", "taxiförare", "ordningsvakt",
+    "parkeringsvakt", "optiker", "kalkylator", "besiktningsman",
+    "fastighetsskötare", "plattsättare", "golvläggare", "takläggare",
+    "murare", "lackerare", "plåtslagare", "rivare", "konditor", "kallskänka",
+    "maskinoperatörer", "montörer", "chaufförer", "lagermedarbetare",
+    # Danish. `jobindex` is gated by its own taxonomy and leaks almost nothing,
+    # but a `--since` top-up writes a NULL category and a NULL category passes
+    # that gate -- these are what stands behind it.
+    "sygeplejersker", "social- og sundhedsassistent", "sosu", "pædagoger",
+    "pædagogmedhjælper", "lærer", "lærere", "tandlæge", "tandplejer",
+    "rengøringsassistent", "kok", "tjener", "opvasker", "murer", "smed",
+    "lagermedarbejder", "salgsassistent", "butiksassistent",
+    "butiksmedarbejder", "plejehjem", "hjemmeplejen", "håndværker",
+    "vægter",
     # Dutch, German, French
     "verpleegkundige", "verzorgende", "monteur", "schoonmaak", "docent",
     "magazijn", "verkoopmedewerker", "beveiliger",
@@ -543,6 +568,13 @@ SWEDISH_HEADS = (
     "terapeut", "arbetare", "biträde", "säljare", "montör", "mekaniker",
     "tekniker", "vaktmästare", "städare", "snickare", "målare", "bagare",
     "brevbärare", "assistent", "handläggare", "sekreterare", "vårdare",
+    # The plurals, and the Danish heads. Swedish inflects the head itself, so
+    # `underskötersk*or*` ends in nothing the singular list can see, and
+    # `däckmontörer`, `taxichaufförer` and `maskinoperatörer` were all reaching
+    # the board. Danish compounds the same way: `musiklærer`, `timelærere`,
+    # `konsultationssygeplejerske`, `klejnsmed`.
+    "sköterskor", "montörer", "chaufförer", "operatörer", "väktare",
+    "lærer", "lærere", "sygeplejerske", "sygeplejersker", "smed",
 )
 MIN_COMPOUND = 9  # shorter than this and a suffix is a coincidence
 

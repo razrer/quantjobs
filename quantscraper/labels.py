@@ -219,7 +219,9 @@ def _candidates(connection: sqlite3.Connection) -> list[dict]:
                (SELECT value FROM job_tags l
                  WHERE l.ats = j.ats AND l.token = j.token AND l.job_id = j.job_id
                    AND l.dimension = 'posting_language' AND l.tagger = ?) AS lang,
-               (SELECT value FROM job_tags h
+               -- Multi-valued: a posting open in two cities carries a row
+               -- per city, and a scalar read would pick one of them at random.
+               (SELECT group_concat(value, '/') FROM job_tags h
                  WHERE h.ats = j.ats AND h.token = j.token AND h.job_id = j.job_id
                    AND h.dimension = 'hub' AND h.tagger = ?) AS hub
         FROM jobs j
@@ -253,7 +255,9 @@ def _candidates(connection: sqlite3.Connection) -> list[dict]:
             # relevance and seniority are what the sheet measures, neither of
             # which depends on where the desk is. It only stops an afternoon
             # going on postings in Cyprus and Bulgaria.
-            "near": int((row["hub"] or "other") in _NEARBY),
+            "near": int(
+                bool(set((row["hub"] or "other").split("/")) & _NEARBY)
+            ),
         })
     return frame
 

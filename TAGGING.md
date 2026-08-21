@@ -278,11 +278,22 @@ international desk.
 **12. `work_mode`** — `onsite` · `hybrid` · `remote` · `unstated`
 
 **13. `hub`** — `stockholm` · `copenhagen` · `amsterdam` · `switzerland` ·
-`hong_kong` · `singapore` · `deprioritized` · `other` · `unknown`
+`hong_kong` · `singapore` · `deprioritized` · `sweden_other` ·
+`denmark_other` · `netherlands_other` · `other` · `unknown`
 
-Normalized from `location`, which is free text and often several cities in one
-string. Reuses `resolve.py`'s country normalizer rather than inventing a second
-one.
+**Multi-valued.** `location` is free text and often several cities in one
+string, and taking the first of them answered a question nobody asked: which of
+a posting's cities the lexicon happens to list earliest. A seat open in
+Amsterdam *and* London carries a row for each, the board counts it under both,
+and the geography gate fires only when **none** of them is somewhere the reader
+would go.
+
+The three `*_other` values are the complement of a focus hub inside its own
+country, so they are never emitted beside the hub they are the complement of —
+`Stockholm, Sverige` is one job, and `sweden_other` beside `stockholm` would be
+one posting asserting "in Sweden" and "in Sweden but not Stockholm" at once.
+The collapse is on the country's own *name* and nothing else, so
+`Copenhagen, Aarhus` keeps both.
 
 **14. `compensation`** — `disclosed_band` (with the numbers) · `disclosed_vague`
 · `undisclosed`
