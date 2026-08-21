@@ -169,8 +169,8 @@ hand.
 `data.js` omits every dimension sitting on its "nothing known" default rather
 than writing `unknown` a hundred thousand times. The board reads a missing key
 as exactly that — do not "fix" it by writing the defaults back in. It was ~33 MB
-when that mattered most; the four gates have since taken the board from about
-45,000 postings to **9,431 out of a 236,077-row corpus**, so the file is 4.4 MB
+when that mattered most; the five gates have since taken the board from about
+45,000 postings to **5,211 out of a 259,083-row corpus**, so the file is 3.1 MB
 and the omission is now worth roughly a third of it rather than a half. If it
 ever looks *too* small, the number to read is the per-gate breakdown every
 build prints, not the file size.
@@ -192,17 +192,32 @@ reason: `data.js` is overwritten whole on every publish and is rebuilt from the
 database on demand, so keeping every prior copy would buy snapshots nobody
 would read.
 
-**The data does not go on `master`.** Spawned's bucket source is a git ref, so
-the file has to reach the repository somehow — and `web/data.js` is gitignored
-precisely because it is derived, several megabytes, and regenerated whenever
-the tagger changes. `publish.py` writes an *orphan* commit with git plumbing
-instead: hash the two files, `mktree`, `commit-tree` with no parent,
-force-push that to `board`. The branch is always exactly one commit holding
-exactly two files, each publish replaces it rather than adding to it, the CI
-clone is two files rather than a repository, and the working tree is never
-touched. `hash-object -w` is what makes it work at all — plumbing does not
-consult the ignore rules, so nothing has to be force-added and the ignore rule
-stays true.
+**The data never passes through git.** `spawned upload` puts a file straight
+into the bucket, so `web/data.js` stays gitignored — it is derived, several
+megabytes, and regenerated whenever the tagger changes, and committing it daily
+would grow the history forever to record something no reader would check out.
+`spawned apply` is then only needed when *infrastructure* changes, which after
+the first run is approximately never. A publish is three uploads.
+
+The first version of this pushed an orphan commit to a `board` branch instead,
+because the other way to fill a bucket is a git ref. It cost an afternoon, and
+the lesson is the error message:
+
+- **A repo the Spawned GitHub App cannot see reports as `deployment with id
+  '<project-uuid>' not found`.** That reads like a broken project — it is not,
+  it is a bucket `source.git` pointing at a repository the App was never
+  granted. `spawned repos` lists what it can actually see, and `razrer/
+  quantjobs` is not on it. The seed config applied cleanly the whole time,
+  which is what finally located it: **bisect the config before doubting the
+  platform.** Two hypotheses were wrong first — a stale CLI, then a
+  half-created project.
+- **The Spawned CLI prints `Error:` and still exits 0.** `publish.py` greps the
+  output as well as the exit code, because a publish that silently did not
+  happen looks exactly like one that did.
+- **CloudFront revalidates, so a publish is visible immediately.** No
+  `Cache-Control` is set on the objects and a re-upload comes back as
+  `RefreshHit` with the new bytes, measured rather than assumed. Nothing has to
+  invalidate the distribution, and no cache-busting query string is needed.
 
 `fca` needs `FCA_EMAIL` and `FCA_KEY` in `.env` (gitignored, never committed).
 
@@ -1230,12 +1245,13 @@ are the whole method. `posting_language` keeps diacritics, and returns
 `unknown` below four stopword hits rather than guessing, because 81% of the
 corpus is a six-word title.
 
-**The board has four gates now, not one, and they are the whole list.** They
+**The board has five gates now, not one, and they are the whole list.** They
 live in `web/build_data.py`'s `GATES`: `off_industry` (another profession),
 `off_location` (outside the target and semi-target geography), `out_of_reach`
 (director, VP, manager, project leader, product owner — a rank nobody reaches
-from under a year of experience) and `rejected` (the tagger read it and it is
-not this line of work). Each is counted separately on every build, because one
+from under a year of experience), `phd_required` (a doctorate stated as
+compulsory, which is an eligibility fact rather than a verdict — 21 postings)
+and `rejected` (the tagger read it and it is not this line of work). Each is counted separately on every build, because one
 total would hide which of the four ate a hub.
 
 **`rejected` is the widest gate and the one to be most careful with.** It

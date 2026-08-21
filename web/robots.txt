@@ -1,0 +1,6 @@
+# The board is one person's job hunt on a public hostname. Nothing here is
+# private -- every posting is a public advertisement -- but there is no reason
+# for it to be indexed, and a search engine crawling it re-publishes another
+# site's listings under this one's name.
+User-agent: *
+Disallow: /

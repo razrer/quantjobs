@@ -78,7 +78,7 @@ nothing in the near-term plan now waits on a human.
 | 25 | Multi-location postings show in both places | **done** — `hub` is multi-valued end to end |
 | 26 | XVA and counterparty credit risk | **done** — 27 titles, no false positive |
 | 27 | Read what the `rejected` gate removes | **done** — 720 reviewed, 1 false rejection; hand sheet 84.4% → 95.6% |
-| 28 | One command to refresh, one to publish | **built** — bucket + CDN, `daily`, `publish.py`; apply blocked on a CLI update |
+| 28 | One command to refresh, one to publish | **done** — live at quantjobs.spawned.app, 5,211 postings |
 ---
 
 ## Stage 0 — Employer universe, raw collection *(done)*
@@ -3124,13 +3124,33 @@ ignore rules, so nothing is force-added and the ignore rule stays true.
 ### Exit criterion
 
 The board answers on https://quantjobs.spawned.app with the same posting count
-`build_data.py` last printed, and a second `publish.py` moves it.
+`build_data.py` last printed, and a second publish moves it.
 
-**Not met yet, and the reason is not ours.** `infra.json` validates, the branch
-is pushed and the plumbing is proved, but `spawned apply` answers `deployment
-with id 'd03ad163-...' not found` for this project. Two projects in the same
-org deploy fine from the same CLI and both were created before 2026-08-16;
-`quantjobs` was created on the 21st, and the CLI reports 1.3.0 against an
-available 2026.08.18. The reading is a project created after a server-side
-change that this CLI predates. It needs the installer run, which is a download
-and therefore the user's to run — see `ACTION-REQUIRED.md`.
+**Met.** The site serves 5,211 postings from 1,051 firms, which is exactly what
+the rebuild prints, and `window.BOARD.jobs` carries them all with 120 cards
+rendered. A re-upload comes back as `RefreshHit` carrying the new bytes, so a
+publish is visible immediately and nothing has to invalidate the distribution.
+
+**The afternoon it cost is the finding.** `spawned apply` answered `deployment
+with id 'd03ad163-...' not found` and that is not what it means: the bucket's
+`source.git` pointed at a repository the Spawned GitHub App had never been
+granted, and the platform reported a missing repo as a missing deployment.
+Two hypotheses were wrong before that -- a stale CLI (updating it changed
+nothing, though it is what brought `spawned upload` and `spawned repos` into
+existence) and a half-created project. What located it was applying the
+**untouched seed**, which succeeded: the error was content-dependent all along,
+so the config could be bisected a component at a time. Bisect before doubting
+the platform, and read `spawned repos` before pointing anything at a repo.
+
+The design is better for having been forced: `spawned upload` writes the file
+straight to the bucket, so there is no branch to maintain, no CI clone to pay
+for, and `web/data.js` stays gitignored rather than being force-added into a
+history that would grow by 3 MB a day forever.
+
+### One thing the deploy added that the local board never needed
+
+`robots.txt`, disallowing everything. The hostname is public, so it is
+crawlable, and a search engine indexing this would re-publish other sites'
+listings under ours. It doubled as the cache probe -- uploaded twice with
+different content to measure whether CloudFront would serve a stale copy --
+which is why the answer above is measured rather than assumed.

@@ -7,11 +7,10 @@ Nothing here is urgent — the project runs fine without any of it. These are th
 places where I hit a wall that needed a human, not a decision I should make for
 you.
 
-**Item 5 is the one thing actually blocking something.** The board is built,
-the branch is pushed and the estate is described and validated, and the last
-step -- `spawned apply` -- fails on a CLI that is five months behind the
-project it is deploying. Updating it is a download, which is yours to run and
-not mine. It is one command and it is in the item.
+**Nothing here blocks the board any more.** It is live at
+**https://quantjobs.spawned.app** with 5,211 postings. Item 5 records what the
+deploy cost and the one preference left in it -- the site is public and
+unauthenticated, which is a choice you can reverse.
 
 **One thing is a judgement call** — item 3, the reading I took of Jobindex's
 robots.txt, which is yours to overturn. Nothing is blocked on
@@ -536,47 +535,45 @@ infrastructure seats at all, the lever is putting `heavy_systems` back in the
 hard list — but it would take those three firms with it.
 ---
 
-## 5. Update the Spawned CLI -- one command, and the deploy is unblocked
+## 5. The board is live -- one preference left in it
 
-**What to run:**
-
-```bash
-curl -fsSL https://spawned.sh/install.sh | bash
-```
-
-Then, from the repository root:
+**https://quantjobs.spawned.app**, 5,211 postings, rebuilt and republished by:
 
 ```bash
-python web/publish.py --no-build
+python -m quantscraper daily --publish
 ```
 
-**Why I did not run it.** It downloads a script and executes it. That is yours
-to authorise even when the vendor is the one you asked me to use, and the fact
-that the CLI itself prints the same command does not change whose call it is.
+Thank you for running the CLI update -- it was not the fix, but it is what
+brought `spawned upload` into existence, and the design is better for it. The
+real cause was a repository permission: the bucket originally took its content
+from a git ref, and the Spawned GitHub App can see `swedlunch` and
+`classic-movies-stockholm` but has never been granted `quantjobs`. The platform
+reports that as `deployment with id '<uuid>' not found`, which reads like a
+broken project and is not one. Nothing needs granting now -- the file is
+uploaded straight to the bucket and git is out of the path entirely.
 
-**What is broken without it.** `spawned apply quantjobs` answers:
+**The preference, and it is the only thing here I would like an answer to.**
+The site is public and unauthenticated: CloudFront in front of a bucket, no
+login. Every posting on it is a public advertisement, so nothing private is
+exposed, but the board *is* your job hunt -- which firms you are reading, what
+you have shortlisted -- and anyone with the URL can see it. I have put a
+`robots.txt` up disallowing every crawler, so it will not be indexed, but that
+is a request rather than a lock.
 
-    Error: deployment with id 'd03ad163-70d9-43ed-ba43-3998008f8873' not found
+If you would rather it were not open, say so and it is small work: a CloudFront
+function checking a shared secret in a cookie or query string, which costs
+nothing extra and turns the URL into a password. Say nothing and it stays as it
+is.
 
-Everything upstream of that works: `spawned validate` passes, `spawned get`
-reads the project, the `board` branch is on the remote carrying the two files
-the bucket wants. The reading is a version skew rather than a mistake in the
-config -- `swedlunch` and `classic-movies-stockholm` deploy from this same CLI
-and both were created before 2026-08-16, while `quantjobs` was created on the
-21st. The CLI reports 1.3.0 and advertises 2026.08.18 as available. A project
-created after a server-side change, against a client that predates it.
+**One loose end you may want gone.** The first design pushed a `board` branch
+to `razrer/quantjobs` carrying `index.html` and `data.js` as a single orphan
+commit. Nothing uses it now. It is 3 MB of dead weight in the repository and I
+have left it alone rather than deleting a branch on your remote without asking
+-- say the word and it goes:
 
-**If the update does not fix it**, the fallback is the dashboard at
-spawned.ai/dashboard -- the project exists, `infra.json` is valid, and a deploy
-triggered there does the same work. Tell me what it says and I will read it.
-
-**One thing to know before it goes live.** `quantjobs.spawned.app` is public
-and unauthenticated -- CloudFront in front of a bucket, no login. The content
-is scraped public job advertisements, so nothing private is exposed, but the
-board is your job hunt and anyone with the URL can read it. If you would rather
-it were not, say so and the answer is small: the same bucket behind a
-CloudFront function checking a shared secret, or simply not applying and
-reading it at `file://` as before.
+```bash
+git push quantjobs --delete board
+```
 
 ## A. FINMA (Switzerland) — **done, and I was wrong about why it was blocked**
 

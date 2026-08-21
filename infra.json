@@ -26,13 +26,7 @@
     {
       "name": "board",
       "type": "Bucket",
-      "versioning": false,
-      "source": {
-        "git": {
-          "url": "github.com/razrer/quantjobs",
-          "ref": "board"
-        }
-      }
+      "versioning": false
     },
     {
       "name": "board-cdn",
