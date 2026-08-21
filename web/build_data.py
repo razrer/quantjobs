@@ -96,6 +96,9 @@ GATES = {
 
 # Dimensions a posting can hold several of at once -- a multi-asset desk, two
 # languages -- shipped as lists. The rest are one verdict and ship as a scalar.
+# `hub` is multi-valued too and is deliberately not here: these ship sorted,
+# and a hub list carries the lexicon's priority order instead -- see where it
+# is built.
 _MULTI = {
     "asset_class": "asset",
     "language": "lang",
@@ -229,6 +232,11 @@ def _recase(word: str) -> str:
     if len(word) <= 2 or not any(v in lowered for v in "aeiouyäöå"):
         return word.upper()
     return word.title()
+
+
+# The lexicon's own priority order, so a Stockholm-and-Frankfurt posting leads
+# with Stockholm. Sorting the values instead would lead with `deprioritized`.
+_HUB_ORDER = tuple(tagging._HUBS)
 
 
 def hub(location: str | None) -> str | None:
@@ -401,7 +409,6 @@ def main() -> None:
         firms[key]["n"] += 1
 
         when, precision = posted(row["posted_at"], row["first_seen"])
-        tagged_hub = (mine.get("hub") or [None])[0]
 
         job = {
             "id": f"{row['ats']}:{row['token']}:{row['job_id']}",
@@ -421,12 +428,23 @@ def main() -> None:
         if (row["department"] or "").strip():
             job["team"] = row["department"].strip()
 
-        # The tagger's hub, falling back to the local reading only for a
-        # posting it has not seen yet -- an untagged posting must still be
-        # findable.
-        where = tagged_hub if tagged_hub not in (None, "other", "unknown") else hub(row["location"])
+        # **Every place the posting names**, so a seat open in Amsterdam and
+        # London is counted under both and found under either. Ordered by
+        # `tagging._HUBS`, which is the lexicon's own priority: the board leads
+        # a card with `hub[0]` and groups a stack by it, so sorting these
+        # alphabetically would lead with `deprioritized`.
+        #
+        # `_HUB_ORDER` holds only the named places, so filtering through it
+        # drops `other` and `unknown` and sorts the rest in one step. Both of
+        # those are right to drop: everything genuinely elsewhere has already
+        # been gated, so what is left is a posting that named no place, and the
+        # rail says `unstated` for that. The local reading is the fallback for
+        # a posting the tagger has not seen yet -- an untagged posting must
+        # still be findable.
+        tagged = [h for h in _HUB_ORDER if h in (mine.get("hub") or ())]
+        where = tagged or [w for w in (hub(row["location"]),) if w]
         if where:
-            job["hub"] = where.replace("_", " ")
+            job["hub"] = [h.replace("_", " ") for h in where]
 
         for dimension, short in _SINGLE.items():
             value = (mine.get(dimension) or [None])[0]

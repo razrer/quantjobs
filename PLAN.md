@@ -16,6 +16,13 @@ stage below has an explicit exit criterion instead.
 If a stage turns out to be blocked, record it in `ACTION-REQUIRED.md` and stop —
 do not skip ahead to something more interesting.
 
+**Stage 27 is the last one written down.** Every stage above it is closed, so
+the next unit of work is a decision rather than a queue: what to widen, what to
+measure, or what to leave alone. The standing daily run is `sweden`, `denmark`,
+`switzerland`, `jobstream`, `jobs`, `pages`, `bodies`, `tag`, `alerts` and
+`web/build_data.py` — and `alerts` is the thing that says when one of them has
+started lying.
+
 ## Geographic priority
 
 **Focus:** Stockholm, Copenhagen, Amsterdam, Switzerland, Hong Kong, Singapore.
@@ -61,8 +68,14 @@ nothing in the near-term plan now waits on a human.
 | 17 | The ATSes the focus hubs actually run | **done** — Oracle read, 26 boards |
 | 18 | Stockholm and Hong Kong, firm by firm | **done** — Stockholm 15/18 reached |
 | 19 | Hong Kong widened, ATS table exhaustive | **done** — 51 HK firms, 26 ATSes, 20 read |
-| 20 | Switzerland's national feed | **done** — job-room.ch polling, 12,033 postings |
-
+| 20 | Switzerland's national feed | **done** — job-room.ch polling; the database holds 22,903 |
+| 21 | Denmark's job board | **done** — Jobindex enumerated, 17,541 of 17,542 |
+| 22 | Widen Sweden | **done** — Jobbsafari swept, 4,582 → 52,755 postings |
+| 23 | The lexicon in Swedish, Danish and Swiss | **done** — 208 needles, 11 heads, none touching a positive |
+| 24 | Pure trading hides instead of showing | **done** — an `exclude` preset, like credit risk |
+| 25 | Multi-location postings show in both places | **done** — `hub` is multi-valued end to end |
+| 26 | XVA and counterparty credit risk | **done** — 27 titles, no false positive |
+| 27 | Read what the `rejected` gate removes | **done** — 720 reviewed, 1 false rejection; hand sheet 84.4% → 95.6% |
 ---
 
 ## Stage 0 — Employer universe, raw collection *(done)*
@@ -2266,3 +2279,780 @@ truncated window stays in front of the next one rather than behind it.
 Removal is not observable: the search returns only `PUBLISHED_PUBLIC` ads and
 there is no withdrawal channel of the kind JobStream publishes, so postings go
 stale the ordinary way — the row stays and `last_seen` stops moving.
+
+---
+
+### Addendum, found while finishing Stage 22: the database held none of it
+
+The module and its guards were built and proved against a live portal, and the
+**rows were not in `employers.sqlite3`** — `jobs` had 187,960 postings and not
+one of them was Swiss, while `feed_state` carried only JobStream's cursor. The
+stage's own numbers were real; they were measured against a database this one
+is not. Nothing announced it, because every report in the pipeline is per
+source and a source with no rows simply does not appear in one.
+
+Polled properly now, and the walk's own arithmetic is the proof:
+
+    --days 2   10,934 advertised   10,934 collected
+    --days 4   14,345 advertised   14,345 collected
+    --days 5   18,072 advertised   18,072 collected
+    --days 6   22,900 advertised   19,999 collected   FAIL
+
+The last line is the stage's truncation guard firing exactly as designed and
+saying so out loud: *"the last 6 day(s) hold 22,900 postings, more than the
+20,000 a two-ended walk can reach — poll more often, or slice the query
+further."* Six days is past the window; five is inside it. Switzerland holds
+**22,903 postings** and the guard is no longer only a unit test.
+
+**The lesson is about reporting, not about Switzerland.** A source that
+collected nothing looks identical to a source nobody asked about. `alerts`
+reads the `runs` table, and the Layer 4 pollers do not write to it — so the one
+thing in the pipeline whose whole job is noticing silence cannot see the
+national boards at all.
+
+---
+
+## Stage 21 — Denmark's job board *(done)*
+
+`jobindex.py`. Copenhagen is a focus hub and was the thinnest one in the
+pipeline: 41 postings from 12 employers at the Stage 10 coverage run, and not
+one of them rated worth reading.
+
+**The register that would have fixed it is behind a national identity system.**
+STAR's `jobnet.dk` is Denmark's answer to Platsbanken, and it redirects to
+NemLog-in, which needs a Danish MitID. `ACTION-REQUIRED.md` has recorded that as
+verified since Stage 16 — this is not a blocker somebody can lift with an email,
+the way job-room.ch's turned out to be. Jobindex is the open fallback: private,
+and publishing to it is voluntary, so it is a **wide net and never a census**.
+That is the same standing correction `jobstream.py` carries about Platsbanken,
+written into the module's first paragraph so nothing downstream can quietly
+treat Denmark as covered.
+
+**Exit criterion — met.** A sweep lands Danish postings with employer, domain,
+location, published closing date and description; the walk audits its own
+arithmetic against the total the board advertises; and every slice bigger than
+the board's own result window is split rather than truncated. Live full sweep:
+**100 slices over 1,207 pages, 17,541 distinct postings collected against the
+17,542 the board advertised** — one short, which is the index moving under a
+thirty-minute walk. 14,920 carry an employer domain and 8,445 a stated closing
+date.
+
+### The board publishes its own ceiling, which is the whole design problem
+
+Every search page ships `var Stash = {...}`, a JSON island holding the search
+response as structured records — and in it, `hitcount`, `page_size: 20` and
+**`max_page: 50`**. So one query yields at most 1,000 postings and page 51 is a
+404. The board held 17,534.
+
+That is the Workday `total: 0` trap with the volume turned up, except loud: a
+404 is an error, which is the only reason it was cheap to find. The RSS feed
+has the identical ceiling and was rejected for a different reason — it carries
+neither the employer's website nor a closing date, and runs the headline and
+the company name together in one `<title>`.
+
+### So it is enumerated by partition, and the partition is the board's own
+
+81 subcategories, an enumeration the employer picked from rather than a word
+list we would write — the same argument `jobs.category` was added for. Measured
+rather than assumed, which is the habit MyCareersFuture's 43rd category taught:
+**200 of 200 postings sampled from the unfiltered feed carry at least one**, and
+the 81 slices sum to 22,419 against a board of 17,534, the excess being the
+quarter of postings filed under two.
+
+**Four slices are bigger than the window, and shrugging at them would have been
+the mistake.** They are Detailhandel (1,434), Pædagog (1,846), Pleje og omsorg
+(1,239) and Hotel, restaurant og køkken (1,053) — retail, childcare, care and
+hospitality, every one of which the tagger gates as another profession. Letting
+the window cut them is therefore *free*, right up until it is the write-time
+filtering principle 4 forbids: a posting dropped at ingest cannot be recovered
+by re-running a classifier, and the gate that would have caught it is a
+judgement we might revise.
+
+An overflowing slice is split again instead, along three dimensions in a fixed
+order. **Each is a cover only because the site publishes an "unspecified"
+bucket for it** — `workinghours_type` and `employment_type` both carry a `-1`
+meaning *"Vis job uden angivet …"*, and `employment_place` carries *"Vis uden
+denne information"*. Without that bucket a split is a filter, and every ad that
+left the field blank vanishes with nothing to say so. Measured on all four: the
+parts sum to at least the whole every time — 2,105 against 1,846 for Pædagog,
+the excess being ads offered as either full *or* part time — and one further
+split takes the last of them under the window. Live run on Hotel, restaurant og
+køkken: **1,053 advertised, 1,053 collected, in three slices.**
+
+`employment_place` is last precisely because its parts sum *exactly* to the
+whole. It is the narrowest cut, so it is the one to reach for only when the
+wider ones have not been enough.
+
+**The obvious partition is closed and was checked rather than assumed.**
+Slicing by publication date would need no "unspecified" bucket at all, and
+`jobage=archive&mindate=&maxdate=` answers HTTP 401 anonymously.
+
+### Two dates on every posting, and only one of them is a deadline
+
+`apply_deadline` is the closing date the employer stated and sits on about half
+the rows. `lastdate` is when the *advertisement* comes down, Jobindex decides
+it, and it is on all of them. They are separable because the board says so:
+`apply_deadline_asap` marks the other half as *snarest muligt*, and where a real
+deadline exists `lastdate` merely repeats its date.
+
+Reading `lastdate` would have handed a deadline-first board 17,000 confident
+dates nobody promised, pinning Danish cards to the top of the page for weeks.
+Same asymmetry as `GRASSHOPPER ESCAPEMENT, LLC` on the roster and the Swedish
+*"tjänsten kan tillsättas innan sista ansökningsdag"* boilerplate one layer up:
+a wrong answer that looks like data is worse than no answer.
+
+### The first Layer 4 source that names the employer's own host
+
+`company.homeurl` resolved on **486 of 561** postings across a two-category live
+sample. JobStream manages that for about half its ads and MyCareersFuture for
+none, so this is the first national board in the pipeline that bridges into
+`firms` for most of what it carries. It still goes through
+`resolve.is_platform_domain` — the fifth layer that guard has been needed in.
+
+`db.upsert_jobs` takes one domain for a whole batch, because every other
+source's board *is* one firm's; here the rows are grouped by theirs first.
+
+### The category value had to stop being a comma-separated list
+
+Two Danish labels contain commas — `Hotel, restaurant og køkken` and `Landbrug,
+skov og fiskeri` — so MyCareersFuture's comma-joined convention would have cut
+each into halves matching nothing, and the read-time gate would have stopped
+firing on two of the biggest trades on the board without any symptom. They join
+on ` | ` instead, and `_jobindex_off_industry` splits on that.
+
+Sweeping also had to stop skipping a posting outright the second time it
+appeared. A posting is filed under two categories about a quarter of the time,
+so `jobs.category` was holding whichever slice happened to reach it first —
+`Rengøring | Finans og forsikring` would have been a cleaning job or a finance
+job depending on sweep order, and the gate would have dropped it half the time.
+A repeat now widens the stored category and rewrites nothing else.
+
+### Denmark is why the gate has to be the board's taxonomy
+
+The occupation needles in `tagging.py` are English and Swedish, and Danish is
+close enough to look covered and far enough not to be: `Sygeplejerske`,
+`Pædagog`, `Lærer` and `Rengøringsassistent` match nothing in `_OFF_INDUSTRY`.
+Without a source-taxonomy gate the entire Danish care, teaching and cleaning
+workforce reaches the board. Writing Danish needles was the alternative and is
+strictly worse — the same conclusion `_OFF_INDUSTRY_FIELDS` reached for Sweden,
+with more riding on it.
+
+The borderline calls are recorded in the list's own comment rather than argued
+again here: `Salg`, `Forsvar og efterretning` and `Øvrige` all stay, and so do
+engineering, science and pharma.
+
+### What the sweep then showed about the geography gate
+
+The sweep is only half the stage. Tagging its 17,548 postings put **9,449 of
+them — more than half — in hub `other`**, which the board gates as
+`off_location`. Every one was in Denmark.
+
+The cause is that Jobindex writes a *postcode and a town* and never the city:
+`area` is `2650 Hvidovre`, so `kobenhavn` never fired. Split by postcode, the
+unread rows were **1,444 in Greater Copenhagen** and 7,399 in the rest of the
+country. Re-tagged with the belt in place, the Danish hub split moved from
+`other` 9,449 / `copenhagen` 4,230 / `denmark_other` 3,287 to **`copenhagen`
+6,293**, `denmark_other` 7,241 and `other` 3,493 -- and Copenhagen across every
+source in the pipeline is 6,411, of which Jobindex is 6,293. The first group is a real loss — postings in the target hub, deleted
+for being somewhere else — and the second is a lie the board would have told on
+every build, since `other` means "we read it and it was Bangalore".
+
+**The obvious fix is wrong in the expensive direction.** Reading the leading
+four digits as a postcode and mapping 1000–2999 to Copenhagen is one line, and
+measured over all 187,960 postings it claims **225 US and Canadian street
+addresses as Copenhagen** — `2005 Market Street, Philadelphia`, `1966 Yonge
+Street, Toronto`, `1350 Rene-Levesque Blvd, Montreal`. Copenhagen is a focus
+hub, so unlike a wrong `denmark_other` those go *on* the board. Tightening the
+pattern to "four digits, then a town, no commas and no further digits" still
+keeps 26 of them, `2925 VIRTUAL WAY:VANCOUVER` among them. A four-digit number
+at the front of a location is a postcode in Denmark and a house number in North
+America, and nothing in the string says which.
+
+So the names went into the lists instead, which is what the Stockholm and
+Amsterdam belts already did. 43 towns joined `copenhagen` and 53 joined
+`denmark_other`, each ranked by how many postings it actually carries and
+**each dry-run over the whole corpus**: every needle matches Danish rows only,
+and the handful arriving through another source are Nordea's own board and
+Danish Teamtailor and Workday tenants — correct matches that were also reading
+as `other`.
+
+The belt is drawn where the existing list already implied it. Roskilde is 32 km
+from the centre and Hillerød 35, both already in; so Birkerød (24), Farum (25),
+Allerød (30), Ølstykke (35), Køge (39) and Frederikssund (40) belong with them,
+and Helsingør at 45 is `denmark_other`. `nuuk` is deliberately in neither —
+Greenland is not somewhere this reader commutes, and `other` is the honest
+answer for it.
+
+### The gate was checked the way the roster words are checked
+
+A category drop list is the one rule in the pipeline that *removes* rather than
+reorders, so the test is not how many postings each name catches — it is
+whether it touches a posting the tagger rates positively. Over the swept
+corpus: **zero**. Two postings inside a dropped category carried a quant needle
+at all, and both are the joke: a shop assistant at a Kolding venue *called*
+Monte Carlo, and a teaching assistant for a course named "Data Driven Decision
+Making".
+
+**The yield is small and that is the honest answer, not a bug.** 17,548 Danish
+postings produce six the tagger rates positively. The comparison that settles
+it is Sweden: JobStream's 4,582 postings produce **zero**, at a 99.6% rejection
+rate against Denmark's 99.8%. A general national job board is nurses, carers,
+shop staff and tradespeople; the quant roles in it are a handful. That is what
+a wide net is, and it is why `jobstream.py`'s "not a census" warning is
+repeated at the top of this module.
+
+`_JOBINDEX_OFF_INDUSTRY` was deliberately **not** widened to match the
+Singaporean list, which drops Legal, Marketing, HR, Logistics and Purchasing.
+Denmark files those as separate labels where Sweden bundles law with economics,
+so dropping them here would be stricter than either sibling — and relevance
+already rejects 99.8% of the corpus, so it would change the reason shown and
+almost nothing else. A drop list fails towards keeping.
+
+### robots.txt, which is a decision rather than a discovery
+
+`Disallow: /jobsoegning*page=` covers the paging parameter on both the HTML
+search and the RSS feed, and there are matching disallows on `subid=`,
+`geoareaid=`, `jobage=` and `/api/`. Between them they cover every parameter
+this module uses. There is no crawl-delay and no rule naming this tool.
+
+It is used anyway, and **it is written up in `ACTION-REQUIRED.md` as item 3 for
+the user to overturn** rather than buried. The reasoning: the disallowed
+parameters are the standard "do not index the same postings under a thousand
+URLs" set aimed at search engines; Jobindex itself publishes `link_rss` URLs
+carrying `subid=` on every result page; every posting reached is a public
+advertisement whose purpose is to be read by a job seeker; and this is one
+reader, one country, one request per second, once a day.
+
+What reversing it costs is stated there too, because that is the part a decision
+like this needs: without `page`, no query returns more than its newest 20
+postings, and the robots-clean version is the 759 area paths from Jobindex's own
+sitemap with every city truncated — a partial and unmeasurable sample rather
+than an enumeration.
+
+### What actually reached the board
+
+Fifteen Danish postings survive all five gates. The ones at the top are the
+reason the stage exists:
+
+    adjacent       Vil du starte en karriere i Fixed Income Trading   Nykredit
+    less_relevant  Trader for Electronic Trading                      Saxo Bank
+    less_relevant  Trader                                             CM Biomass
+    unknown        Risk Model Developer                               Mind Energy
+    unknown        Student Analyst, Investment Management             Better Energy
+
+and `list --hub copenhagen` now also surfaces Nordea's *IT Analyst, Front
+Office AM e-Trading* and an *Industrial PhD at SuperFly Quants*, both of which
+were already held and both of which were ranked behind an empty hub before.
+
+Stage 10 recorded Copenhagen as 41 postings from 12 employers with **none rated
+worth reading**. That is the number this stage moved.
+
+The rest of the fifteen are `unknown` — two Scandic Hotel shift leaders and a
+fashion-and-social-media role among them. `unknown` is the deliberate "nothing
+decided this" bucket and it stays one click away rather than being gated; the
+alternative is a lexicon that rejects on a title it cannot read, which is the
+one failure this project treats as disqualifying.
+
+### Recorded as investigated, not untried
+
+- **The Google for Jobs sitemap is empty.** `sitemap.gz` names five
+  sub-sitemaps and `googleforjobs.gz` is a 275-byte `<urlset/>` with no URLs in
+  it, so there is no per-advertisement enumeration to harvest. `area.gz` is real
+  and holds 759 postal-area search paths — that is the fallback named above,
+  not a better route.
+- **`jobage` is nested, not a partition.** `0`, `7`, `30` and `9999` are
+  windows anchored to today with no "older than" complement, so they cannot
+  cover a slice between them.
+- **The React bundle names no search API.** `result_app.*.bundle.js` carries
+  only `/api/address/v1/validate`, `/api/cv/v1/`, `/api/suggestions/cv-data`
+  and `/api/user/jobagent/v1/`; the search response is server-rendered into the
+  page, which is why the island is the surface.
+- **`include_html=0` is ignored**, so a page is ~55 KB gzipped whatever is
+  asked for. A full sweep is roughly 1,300 requests and about 70 MB.
+
+---
+
+## Stage 22 — Widen Sweden *(done)*
+
+`jobbsafari.py`. Sweden had one national source and it is a **change** feed:
+JobStream hands back whatever happened to change inside the polled window, so
+after weeks of polling it held **4,582 postings** against a country advertising
+forty thousand. Widening Sweden is two questions and only the second one is
+about coverage — how much of Platsbanken we hold, and how much of Sweden
+Platsbanken is.
+
+**Exit criterion — met.** One walk lands every posting the board advertises,
+audits its own arithmetic against that total, and the geography lexicon was
+re-measured against what arrived before the board was believed. Live sweep:
+**48,173 distinct postings over 99 pages against an advertised 48,552** — 379
+short on a two-minute walk during which 378 rows were served twice, which is
+the index breathing rather than truncation. Sweden goes from 4,582 postings to
+**52,755**.
+
+### Both questions were measured rather than argued
+
+Platsbanken's own search API answers `total.value = 39,636` for the unfiltered
+query. Jobbsafari advertises **48,552**, and **39 of 40 JobStream postings
+drawn at random from our own database are on it under the identical title** —
+the fortieth expired in the five days between the poll and the check. So this
+board is Platsbanken plus roughly nine thousand more.
+
+That settles the obvious alternative. JobTech publishes `/snapshot`, the whole
+current Platsbanken in one response; it streams **over 400 MB in 76 seconds**
+and does not stop there, and what it buys is a *subset* of what 98 requests get
+here. Recorded as investigated rather than untried.
+
+### Jobindex's sibling, and it shares none of Jobindex's problems
+
+Same owner, and the comparison is the whole design:
+
+| | Jobindex (DK) | Jobbsafari (SE) |
+|---|---|---|
+| result window | 1,000 per query | none — page 1,619 serves the tail |
+| enumeration | partitioned over 81 categories | one unfiltered walk |
+| cost | ~1,300 requests, 70 MB | 98 requests |
+| robots.txt | disallows the pager | allows it |
+
+`Disallow:` covers `/api`, `/monitoring`, and `/lediga-jobb` under `yrke=`,
+`ort=`, `kategori=`, `foretag=` or four-plus parameters. This module asks for
+`page` and `page_size` and nothing else, so unlike the Danish sweep there is no
+judgement call here to hand back to the user.
+
+The surface is Next.js's own data route — `__NEXT_DATA__` is a JSON island in
+every search page, and the same payload is served without the 900 KB of markup
+around it at `/_next/data/{buildId}/{locale}/lediga-jobb.json`. The build id
+changes on every deploy, so it is read from the page and a 404 refreshes it
+once before the walk falls back to the rendered page. `page_size` is honoured
+to at least 2,000; 500 is used.
+
+### A short page is not the end of the board, and assuming it was cost 43,000 postings
+
+The first live sweep reported **5,421 postings collected, cleanly, with no
+warning**. Page 11 had come back with 499 rows instead of the 500 asked for —
+an advertisement withdrawn between the count and the render — and the walk read
+that as the last page. Only a page of *zero* means there is nothing after it,
+which is what the board actually serves: at `page_size=500` page 98 carries the
+last 50 and page 99 carries none. The guard that would have caught it did fire
+(`5,421 collected, expected at least 15,000`), which is the argument for
+`MIN_EXPECTED` in one line.
+
+### What is deliberately not read
+
+- **`endDate` is not a deadline.** It is on every row, 11.3% of rows sit
+  exactly 181 days after the start date, and a long tail fall in the year 2650.
+  It is when the advertisement comes down — the same field Jobindex calls
+  `lastdate` and job-room.ch calls `publication.endDate`. JobStream remains the
+  only Swedish source publishing a real one.
+- **No taxonomy, and this is a real limitation.** The *detail* page carries
+  `mainCategories` and `subcategories`, an enumeration the advertiser picked
+  from, which is exactly what gates Denmark and Singapore. The *list* endpoint
+  returns them empty on 1,000 of 1,000 rows and the only route to them is
+  `kategori=`, which robots disallows. Swedish postings are gated by the
+  occupation lexicon instead, which is why Stage 23 follows this one
+  immediately rather than eventually.
+- **No employer domain.** `apply.href` resolves on 1,681 of 2,000 rows across
+  386 hosts, headed by `recruit.visma.com`, `web103.reachmee.com` and
+  `emp.jobylon.com` — ATS vendors — while the tail mixes an employer's own
+  careers host (`career.avanza.se`) with staffing agencies standing in for
+  clients they do not name (`ledigajobb.bravura.se`, `experis.se`). That is
+  job-room.ch's surrogate problem with no `surrogate` flag to read.
+  `company.name` is on every row and the board groups on it.
+- **No cursor and no top-up path.** Jobindex needs one because a full sweep
+  there is 1,300 requests; here it is 98. A second code path that could only
+  ever be less complete is not worth the two minutes it saves.
+
+### The description queue is the second source it has ever had
+
+The list endpoint carries no body. Backfilling all of Sweden from the detail
+route would be 48,173 requests at 161 KB — 7.8 GB — so `bodies.py` takes it
+instead, for the postings whose verdict a description could actually change.
+That needed the fetcher signature to change: **the slug cannot be synthesised
+from the id.** `/jobb/{id}` and `/jobb/x-{id}` both 404, so the address is
+`jobs.url`, and the fetchers take the whole row rather than `(token, job_id)`.
+
+### Sweden arrived and a third of it read `other`
+
+The sweep is half the stage; the other half is the rule `CLAUDE.md` states for
+every new source — bucket its `hub` values before believing the board.
+**16,153 of the 48,173 came back `hub: other`**, which the board gates as
+`off_location`, and every one of them is in Sweden. Twenty-eight names covered
+a country of 290 municipalities.
+
+The list is **Jobbsafari's own area taxonomy** — 22 counties and 315
+municipalities, published in `pageProps.areas` — rather than a word list
+written from memory, and everything in it was dry-run over all 236,077 live
+postings. **Seven names were thrown out**, each because the fold makes it
+somebody else's word:
+
+    Åre    -> "are"    83 Workday postings in Dubai and Abu Dhabi (ARE)
+    Vara   -> "vara"   VARA, Dubai's virtual-asset regulator
+    Eda    -> "eda"    electronic design automation
+    Sala   -> "sala"   Commis di Sala, a Venetian waiter
+    Malå   -> "mala"   Mala, Sichuan food, in Singapore
+    Mark   -> "mark"   Singapore's Green Mark, a Colorado street address
+    Salem  -> "salem"  Salem, Oregon and Winston-Salem, North Carolina
+
+Anything the taxonomy does not carry is not Sweden, which is what kept
+`Island`, `Bangalore` and `Paris` out — all three are places this board
+advertises. The Stockholm belt gained the Stockholms län municipalities within
+about forty kilometres, and **Södertälje moved up into it**: 35 km on the
+commuter rail, and the rule that put Køge (39 km) in the Copenhagen belt says
+so. Norrtälje (70), Nynäshamn (58) and Nykvarn (50) stay out.
+
+One label is neither: **`De nordiska länderna`, 1,392 postings**. It names five
+countries, two of which hold focus hubs, so `other` would delete them for being
+somewhere else. It is `unknown` now — the same call as Workday's
+`2 Locations`, and it fails towards keeping.
+
+---
+
+## Stage 23 — The lexicon in Swedish, Danish and Swiss *(done)*
+
+Stage 22 made this urgent rather than merely desirable. Jobindex and
+MyCareersFuture both publish a taxonomy the advertiser picked from and
+`_OFF_INDUSTRY_FIELDS` gates on it; **Jobbsafari publishes none**, so for
+48,173 Swedish postings the occupation words are the entire gate.
+
+**Exit criterion — met.** Every needle added was dry-run over all 236,077 live
+titles, and **not one of them touches a posting the tagger rates positively**.
+That is the check the roster words and the venue words were held to, and it is
+the check that matters: a gate's head count says nothing about whether it ate
+something.
+
+### Three shapes were leaking, and none of them is a missing word
+
+Reading the 4,449 Swedish postings that reached the board:
+
+- **The plural.** `underskoterska` was a needle and `Undersköterskor` was on
+  the board, 269 of them, because token matching is exact. Swedish inflects the
+  occupational head itself, so `dackmontorer`, `taxichaufforer` and
+  `maskinoperatorer` were invisible to `_TRADE_HEADS` as well. Same shape as
+  `Environmental Inspectors (Field Based)` in English.
+- **The workplace, where it names the profession.** *Timvikarier till Sjövägens
+  barn och ungdomsboende* says what the work is only through the place it
+  happens in: `äldreboende`, `ungdomsboende`, `hemtjänsten`, `förskola`.
+- **The assignment, where nothing else does.** 33 postings headed *Veteraner
+  till städuppdrag!* — no occupation word in the title at all.
+
+132 needles and 11 compound heads went in, plus the Danish half: Jobindex leaks
+only **15 postings** because its taxonomy gate works, but a `--since` top-up
+writes a NULL category and a NULL category passes that gate, so the words are
+what stands behind it.
+
+### Switzerland came with the same problem and a smaller version of it
+
+Restoring the Swiss poll (see the Stage 20 addendum) put 22,903 German, French
+and Italian postings into the corpus, and **fifty of them reached the board** —
+the German, Dutch and French words `lexicon.UNRELATED` already carried did the
+rest. The fifty are `Zimmerreinigung`, `Masseurin`, `Kosmetikerin`,
+`Dachdecker`, `Verkäuferin Tankstellenshop` and `Maçon coffreur`, so the gap is
+a dozen trades rather than a category, and 76 needles closed it.
+
+job-room.ch publishes its **own** taxonomy and it cannot be used: the occupation
+object carries bare AVAM codes with no labels, and the reference service that
+would name them is not open. That is why Switzerland is gated by words where
+Denmark and Singapore are gated by an enumeration, and `jobroom_ch.py` has said
+so since it was written.
+
+**The bigger Swiss problem was geography, and it is the third country in a
+row.** Each national board writes the *administrative* place rather than the
+city, and each picks a different one: Jobindex writes a postcode and a town,
+Jobbsafari a municipality, and job-room.ch a town and a **canton code** —
+`Meisterschwanden, AG`, `Wallisellen, ZH`. **18,562 of 22,946 Swiss postings
+read `other`** and were gated off the board for being somewhere they are not,
+in a *focus* hub.
+
+`_CH_CANTON` is the handle, matched against the location alone for the same
+reason `_US_STATE` is: `SO`, `BE`, `AG`, `UR` and `GE` are ordinary words in a
+title. Twenty-three of the twenty-six cantons are in it. **`AR`, `NE` and `FL`
+are deliberately absent**: they are also Arkansas, Nebraska and Florida, both
+readings are live in this corpus — 174 Appenzell Ausserrhoden against 17
+Arkansas, 219 Neuchâtel against 40 Nebraska, 42 Liechtenstein against 549
+Florida — and no text rule separates them. Both labels keep the posting on the
+board, so the only question is which one is wrong, and a false hit in a focus
+hub is worse than a false miss. The 393 Swiss postings affected stay on the
+board reading `deprioritized`.
+
+**One needle passed its dry-run and was dropped anyway.** `gartner` is a Danish
+gardener 155 times and the research firm zero times — but all 155 arrive
+through Jobindex and are already gated by its taxonomy, so the needle buys
+nothing, while `Gartner Research Analyst` is a title that exists in the world
+and would be removed as a landscaping job. Nothing to gain and something to
+lose is the whole test.
+
+### What was dropped, and why each one is the same mistake
+
+- **`vikarie` is a contract, not a profession.** It reaches 126 titles and
+  `timvikarie`, `sommarvikarie` and `barselsvikariat` another 700; gating on it
+  would delete a temporary quant seat on evidence about its duration. It is in
+  `_CONTRACT` as `fixed_term` instead.
+- **`souschef` is a deputy manager in Danish as often as a sous-chef in
+  Swedish**, and `_MANAGER_HEADS` already reads it as the rank it usually is.
+- **`stad` would have gated Stockholms stad.** *Städ* (cleaning) and *stad*
+  (city) fold to the same four letters.
+- **Five compound heads are the `-arbetare` mistake in a new language.**
+  `-arbejder` matches *medarbejder*, Danish for "employee", 1,711 titles;
+  `-medhjaelper` and `-hjaelper` match *studentermedhjælper*, a student
+  assistantship, and half of those are IT and data work; `-vagt` matches
+  *aftenvagt*, *nattevagt* and *weekendvagt*, which are shifts rather than
+  security guards; `-assistenter` matches *Forskningsassistenter*, which is why
+  the singular was dropped already. They are recorded in `_NOT_A_TRADE_HEAD`.
+- **`-ingenjör` passes the stated test and was still declined**, which is worth
+  writing down because it is the one place the rule and the principle disagree.
+  It reaches 926 Swedish and 46 Danish compounds — *Automationsingenjör*,
+  *Processingenjör*, *Instrumentingenjör*, *Byggingenjör* — and **none of them
+  touches a posting rated positively**, which is the check every other needle
+  here was held to. It is out anyway, because the same suffix reaches
+  *Softwareingeniør* and *mjukvaruingenjör*, and `software engineer` and
+  `developer` are deliberately absent from `_SOFTWARE_SPECIALTY` precisely
+  because a quant-dev posting calls itself one. The 972 postings it would have
+  removed are all `relevance: unknown`, so they rank last rather than
+  misleading anyone: **a gate that could delete a wanted posting is worse than
+  a page with a scroll on it**, and that ordering is the whole design.
+
+### The positive half has almost no signal, and that is the finding
+
+Translating the *quant* vocabulary was the other half of the stage and it
+barely moves anything, because **the Nordic quant postings are written in
+English**. Measured over every live title and every one of the 126,983 bodies:
+`obligationer` 1, `renter` 0, `volatilitet` 0, `aktiehandel` 2, `valutahandel`
+0, `derivater` 0, `algoritmisk handel` 0, `modellvalidering` 0.
+
+One candidate would have been actively wrong. **`råvaror` is the Swedish for
+commodities and also the Swedish for raw ingredients**: it matches 49 bodies
+and every one of them is a kitchen — *Jobba med Pamoja som kock i skolkök*,
+*Köksmästare sökes till Sundby Gård*. It is deliberately absent from
+`_ASSET_CLASS`, and the Nordic markets words that did go in are the compounds,
+which cannot mean anything else. Bare `handel` went the same way: it is
+*commerce* — e-handel, detaljhandel — and names a shop as often as a desk.
+
+The words still went in where they are unambiguous, because a wrong *positive*
+costs a rank notch and a missing one costs a posting: `marknadsrisk`,
+`kreditrisk`, `markedsrisiko`, `kreditrisiko`, `portföljförvaltare`,
+`kapitalforvaltning`, `riskanalytiker`, `udvikler`, plus the Danish management
+pair `leder` (161 titles, 668 compounds) and `direktør` (21 and 30), the
+contract vocabulary, and the Nordic student and doctorate phrasings.
+
+---
+
+## Stage 24 — Pure trading hides instead of showing *(done)*
+
+One preset in `web/index.html`, reversed at the user's instruction. It used to
+*select* `trading_style: pure` — one click to look through `Precious Metals
+Trader`, `Agency MBS Trader`, `Associate Trader, Fixed Income` — and that is
+the wrong way round for how the board is read: those postings are what is *in
+the way* of the quant and systematic seats, not a set worth visiting.
+
+**Exit criterion — met.** `Hide pure trader roles` is an `exclude` preset,
+alongside `Hide credit risk`, and it hides without judging: `tstyle` is still
+`pure` in `job_tags`, the Trading style facet still ticks it, the crumb above
+the grid says what is hidden, and clicking the crumb brings it back. Nothing
+leaves the database and no re-tag is involved. Both hide presets start off,
+which is the same contract the credit-risk button already had — the board never
+removes something silently.
+
+---
+
+## Stage 25 — A posting open in two cities is in both *(done)*
+
+`hub` was `_first(_HUBS, ...)`, so a seat advertised for Amsterdam *and* London
+was filed under whichever of them the lexicon happened to list earliest — a
+fact about the lexicon's ordering, not about the job. It is `_every` now.
+
+**Exit criterion — met.** A multi-city posting carries one `hub` row per city,
+the board counts it under each and finds it under either, and `off_location`
+fires only when **none** of them is somewhere the reader would go: a
+Zurich-and-Milan posting is a Zurich posting, and gating it would be the gate
+firing on a fact that argues for keeping the row.
+
+Four things this touched:
+
+- **Order carries meaning.** The values ship in `tagging._HUBS`'s own order,
+  which is its priority, so a card leads with Stockholm rather than Frankfurt
+  and a stack groups under the place worth leading with. Sorting them instead
+  would have led with `deprioritized`.
+- **A country bucket is a complement, not a second place.** `sweden_other`
+  means "in Sweden and *not* Stockholm", so emitting it beside `stockholm` is
+  one posting asserting both — and Jobbsafari writes exactly that string,
+  `Stockholm, Sverige`, for a regional Stockholm advertisement. The collapse is
+  on **the country's own name and only that word**: `Copenhagen, Aarhus` is two
+  real places and keeps both, because collapsing on the bucket would have
+  thrown Aarhus away — the multi-location bug arriving through the back door.
+- **A scalar subquery picks one row at random.** `tagging.search`,
+  `tagging.shortlist` and `labels._candidates` all read `hub` that way; they
+  join now. `shortlist`'s copy was also unpinned to a lexicon version, which
+  `job_tags` keeping retired taggers makes a second bug in the same line.
+- **`_fit` reads the set.** One focus hub among several keeps the "outside the
+  focus hubs" notch off.
+
+---
+
+## Stage 26 — XVA and counterparty credit risk *(done)*
+
+Requested by name, and the gap was real: `lexicon.py` has carried `xva`, `cva`
+and `counterparty credit risk` since it was written and `tagging.py` never did,
+so two modules disagreed about the same words. `XVA Analyst` came back
+`unknown`, `CCR Model Developer` was **rejected as pure engineering**, and
+`Counterparty Credit Risk Analyst` read as a generic risk seat on the word
+*credit risk* alone.
+
+**Exit criterion — met.** Dry-run over all 236,077 live titles and 126,983
+bodies: `xva` matches 6 titles and 5 bodies, `counterparty credit risk` 16 and
+5, and **every one of the 27 is a bank markets-quant seat** — Citi's cross-asset
+XVA desk, RBC's counterparty credit risk models, Nordea's model-and-Python
+developer on a Copenhagen board. No false positive anywhere in the corpus.
+
+`counterparty credit risk` sits in `quant_research` beside `credit risk quant`
+rather than in the generic `risk` bucket, and the reason is the qualifier
+argument pointing the other way for once: *counterparty* credit risk has no
+retail-collections reading, so modelling it is the work.
+
+**The abbreviations are title-only, and the bodies say why.** `ccr` matches 15
+descriptions and most of them are *Channel and Customer Research*; `cva`
+matches 14 and the head of those is deal-advisory valuations; `dva` matched the
+body of a *Køksmester*. In a title the whole string is the job and the
+abbreviation is the desk — the same asymmetry as `strat` inside
+*administrator*, one list up.
+
+---
+
+## Stage 27 — Read what the `rejected` gate removes *(done)*
+
+`rejected` is the widest of the four board gates and the only one whose
+evidence is a *judgement* rather than a named fact — the other three read a
+place, a rank or an occupation. It went in on a 1,000-posting machine-labelled
+sample that found no false rejection, which `PLAN.md` recorded as "real
+evidence and not proof: a model grading a model shares the grader's blind
+spots". This stage is the second grader.
+
+**Exit criterion — met.** Twelve independent reviews of 60 postings each,
+drawn in two near-disjoint passes from the frame where a false rejection could
+actually hide, plus the fixes for everything they found. **One false rejection
+in 720**, and it was a real bug rather than a missing word.
+
+### The frame is the whole method
+
+30% of this corpus is housekeepers, van drivers and dental nurses, and putting
+those in front of a reviewer measures nothing — the same mistake that wasted
+the first seven rows of the hand-labelling sheet. So the draw is the frame
+`labels._candidates` already uses: live, has a URL, readable language, and
+**not** already gated as another profession or another place. That is 81,295
+postings; 720 were drawn deterministically across it in two passes that
+overlap on ten titles, split into twelve batches, each read by a separate
+reviewer with the role scope and nothing else.
+
+Eleven of the twelve came back with nothing. Their pattern summaries agree
+closely on what the gate is actually removing — construction, healthcare,
+retail, hospitality, sales, HR, accounting and compliance, banking
+relationship work, and generic software engineering with no markets context —
+which is what it is for. Three of the twelve independently named the same
+*secondary* pattern: postings with no description at all, where a title
+carrying no signal is all there is to read.
+
+### The one it found, and the bug behind it
+
+    Low Latency Engineer | davinciderivatives.com | rejected: heavy_systems
+
+Da Vinci Derivatives is on the audit roster. The body opens *"you'll work
+closely with highly skilled traders, quant researchers, and C++ engineers"*.
+The posting was removed because the word **`fpga` appears in it**.
+
+`CLAUDE.md`'s role scope is explicit that heavy systems engineering is a
+**down-rank rather than a hard-drop**, "many quant-dev roles list C++ as
+secondary and still fit" — and `tagging.py` says so too, in the filter that
+builds `rejecting`. A second branch further down read the *unfiltered*
+`exclusions` list instead, which put both soft categories straight back. One
+word, two lists, two answers: the fourth time this file has hit that shape, and
+the first time it was hiding behind a variable name rather than a synonym.
+
+Measured: **295 postings were being hard-dropped on `heavy_systems`**, and the
+head of that list is `Senior Software Engineer, C++` at **Flow Traders**,
+`Junior FPGA Engineer` at **Eagle Seven**, and `Low-Latency Engineer` at **Jane
+Street**. `crypto_web3` stays hard, because crypto is on the exclude list
+outright and Kraken's 306 postings are correctly gone — the two are on the same
+line in the source and they are not the same decision.
+
+**The first fix was too wide, and the hand-labelled sheet caught it in one
+row.** Excluding `heavy_systems` outright put `Junior FPGA Engineer` back on
+the board — and that is a posting the reader rejected by hand, with the note
+*"electronics work"*. So the split is the one this file makes everywhere else:
+**the title decides and a body-only match ranks.** `fpga` in a title is what
+the job is; `fpga` in a paragraph about the stack is furniture. All three rows
+come out right that way, and the sheet went from 84.4% to 95.6% across this
+stage rather than 83.3%.
+
+### And the word the reviewer's pattern pointed at
+
+The reviewer named the shape rather than the word: *"generic engineering title
+at a quant firm, body describes trading algorithms"*. The word is `low
+latency`, which `lexicon.QUANT` has carried as `low latency trading` since it
+was written and `tagging.py` had in neither relevance list — only in
+`_ROLE_CLASS`, which classifies without deciding.
+
+Dry-run over every live title: **23 carry it and all 23 are markets firms** —
+LSEG, Tudor, Citi, Barclays, Da Vinci, Tower Research, Eclipse Trading and Jane
+Street. Outside finance the phrase belongs to networking and gaming, and this
+corpus has none of that. It is a title-only domain word now, so `Low-Latency
+Engineer` reads `less_relevant` on the `quant_dev` classification it already
+had.
+
+### What was considered and not built
+
+- **Wiring `lexicon.board_profile`.** It is implemented, tested, and used by
+  nothing. It measures whether a board is a markets employer from what that
+  board actually publishes, which is precisely the signal the hand-labelled
+  notes keep reaching for — *"nothing to do with finance"*, *"non finance
+  company"*, *"AI job in a non finance field"*. It would need `tag_posting` to
+  take board context, which is a structural change to the one function
+  everything else calls. **The evidence says it is not needed for the gate**:
+  the reviewers found one false rejection in 720, and none of the twelve
+  pattern summaries describes a posting rejected for the wrong industry. If it
+  is built later it should be a *ranking* input, not a gate — and this is
+  written down so the next reader checks whether the rule already exists
+  before writing a new one.
+- **A wider draw still.** 720 of 81,295 is a 0.9% sample and it establishes a
+  ceiling on the false-rejection rate rather than a point estimate: one in 720
+  supports "no false rejection above roughly one in two hundred", not "none".
+  The cheap way to tighten it further is more batches rather than a cleverer
+  method, and the second pass here was exactly that — it doubled the evidence
+  and added nothing to the finding, which is itself the useful result.
+
+### The reclassified half: ten rows of the sheet were one title
+
+The stage is named for *rejected and reclassified* postings and the second half
+is the hand-labelled sheet, which has grown from 80 rows to 90 since it was
+last scored. Re-scored against the lexicon this session started with: **76/90,
+84.4%** — not the 96.2% `ACTION-REQUIRED.md` records, because that number was
+measured on the 80-row version and the ten rows added since all disagree.
+
+They are one title. `Make-Ready Specialist` at Greystar, ten of them, every one
+noted *"from the board"* — apartment turnover work, paint and patch between
+tenancies, arriving through the same ATS as the trading firms. The phrase
+reaches 60 titles in the corpus and touches nothing rated positively;
+`leasing consultant`, `property manager` and `maintenance supervisor` came off
+the same boards with it.
+
+    lexicon this session started with   76/90   84.4%
+    after the heavy-systems fix alone   75/90   83.3%
+    after the Greystar occupations      86/90   95.6%
+
+The four rows still disagreeing are all decisions already recorded: two PhD
+rows that `GATES` removes rather than rejecting, one credit-risk role the board
+has a button for, and one the reader rejected on geography while the tagger
+rejects it on the location gate instead.
+
+### The other half of the stage: what a body would have changed
+
+The secondary pattern three reviewers named — *"missing bodies: no context to
+determine scope"* — is not a lexicon problem and no word list closes it. It is
+the `bodies.py` queue, and Stage 22 had just handed it **4,157 new Swedish
+postings with no body at all**, which is why the queue needed a Jobbsafari
+fetcher before this stage could end. A body is also what lets
+`lexicon.judge`'s `no_markets_signal` rule fire, which is the only rule in the
+pipeline that can resolve an `unknown` on evidence of *absence* — measured over
+a whole document rather than guessed from a six-word title.
+
+Run: **4,990 attempted, 4,637 filled**, which is the whole queue — every
+Jobbsafari posting the tagger could not place, and the last 833 Workday ones.
+Sweden goes from no descriptions at all to 4,156, and the queue is empty rather
+than merely shorter.
