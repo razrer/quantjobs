@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from . import (
     alerts, ats, audit, bodies, coverage, db, discover, domains, extract,
@@ -799,6 +801,106 @@ def _stats(database: str) -> int:
     return 0
 
 
+def _denmark_since(connection) -> str | None:
+    """The date a Jobindex top-up should read back to, or None to sweep it all.
+
+    The top-up is one unfiltered query and the board's own result window holds
+    1,000 postings against roughly 600 published a day -- so it reaches about a
+    day and a half and no further. That is a daily poll, and it is only honest
+    while the poll actually happens daily.
+
+    So the date comes from the newest Danish row we hold rather than from the
+    calendar: run it two days running and it asks for a day, leave it a
+    fortnight and the gap is wider than the window can serve, which is the case
+    that has to fall back to the full taxonomy sweep instead of quietly
+    fetching the most recent 1,000 and reporting success. Same shape as the
+    short page that cost Jobbsafari 43,000 postings -- the cheap answer and the
+    complete one look identical from outside unless something checks.
+    """
+    row = connection.execute(
+        "SELECT MAX(first_seen) AS newest FROM jobs WHERE ats = ?",
+        (jobindex.NAME,),
+    ).fetchone()
+    if not row or not row["newest"]:
+        return None
+    newest = datetime.fromisoformat(row["newest"].replace("Z", "+00:00"))
+    if newest.tzinfo is None:
+        newest = newest.replace(tzinfo=timezone.utc)
+    gap = datetime.now(timezone.utc) - newest
+    if gap.days > 2:
+        print(
+            f"  Denmark: {gap.days} days since the last Danish row, which is"
+            " wider than the one-query window -- sweeping every category instead"
+        )
+        return None
+    # A day of slack. A duplicate costs an idempotent upsert and a gap costs a
+    # posting, which is the same trade JobStream's cursor makes.
+    return (newest - timedelta(days=1)).date().isoformat()
+
+
+def _daily(database: str, full: bool, publish: bool) -> int:
+    """Run the standing sequence end to end, so a refresh is one command.
+
+    **This is the compute-intensive half and it runs here, on demand.** Nothing
+    schedules it: the national boards are a few hundred requests, the re-tag is
+    minutes of CPU, and both are free on this machine and billable on anybody
+    else's. What gets deployed is the *output* -- see `web/publish.py`.
+
+    A step that fails does not stop the run. The sources are independent, and a
+    board that has been redesigned underneath us should cost its own postings
+    and not the other eight sources' -- nor the re-tag, nor the rebuild, which
+    would otherwise leave the board serving yesterday's file with no sign of
+    why. `alerts` runs at the end and is the thing that says which source went
+    quiet; the exit code says whether anything did.
+    """
+    root = Path(__file__).resolve().parent.parent
+    connection = db.connect(database)
+    since = None if full else _denmark_since(connection)
+    connection.close()
+
+    # The order is not arbitrary: the sources land postings, `bodies` fetches
+    # the descriptions a verdict turns on, and only then is there anything new
+    # for `tag` to read. Running the tagger first would classify the day's
+    # postings on their titles alone.
+    steps: list[tuple[str, Callable[[], int]]] = [
+        ("sweden", lambda: _sweden(database, None)),
+        ("denmark", lambda: _denmark(database, since, None)),
+        ("switzerland", lambda: _switzerland(database, None)),
+        ("jobstream", lambda: _jobstream(database, None)),
+        ("jobs", lambda: _jobs(database, 2_000, 12)),
+        ("pages", lambda: _pages(database, 4_000 if full else 500, 12)),
+        ("bodies", lambda: _bodies(database, 20_000 if full else 2_000, 12)),
+        ("tag", lambda: _tag(database, 1_000_000, "fit")),
+        ("alerts", lambda: _alerts(database)),
+    ]
+    if full:
+        # ~850 requests and no incremental form, so it is a weekly rather than
+        # a daily. It is not in the standing list for that reason alone.
+        steps.insert(3, ("singapore", lambda: _singapore(database, None)))
+
+    failed: list[str] = []
+    for name, step in steps:
+        print(f"\n=== {name} ===", flush=True)
+        try:
+            if step() != 0:
+                failed.append(name)
+        except Exception as exc:  # noqa: BLE001 - one source must not stop the rest
+            print(f"  FAIL {name}: {exc}", file=sys.stderr)
+            failed.append(name)
+
+    print("\n=== board ===", flush=True)
+    script = "publish.py" if publish else "build_data.py"
+    done = subprocess.run([sys.executable, str(root / "web" / script)], cwd=root)
+    if done.returncode != 0:
+        failed.append(script)
+
+    if failed:
+        print(f"\n{len(failed)} step(s) failed: {', '.join(failed)}", file=sys.stderr)
+        return 1
+    print("\nevery step ok")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="quantscraper", description=__doc__)
     parser.add_argument(
@@ -1022,7 +1124,26 @@ def main(argv: list[str] | None = None) -> int:
         "alerts", help="flag sources that broke quietly (Layer 0 health)"
     )
 
+    daily_command = commands.add_parser(
+        "daily", help="run the standing sequence and rebuild the board"
+    )
+    daily_command.add_argument(
+        "--full",
+        action="store_true",
+        help="sweep every Jobindex category and MyCareersFuture too, and widen"
+        " the page and body queues -- a weekly, against a daily that tops up"
+        " from where the data already reaches",
+    )
+    daily_command.add_argument(
+        "--publish",
+        action="store_true",
+        help="push the rebuilt board to quantjobs.spawned.app afterwards"
+        " (`web/publish.py`, which is also runnable on its own)",
+    )
+
     args = parser.parse_args(argv)
+    if args.command == "daily":
+        return _daily(args.db, args.full, args.publish)
     if args.command == "list":
         return _list(args.db, args)
     if args.command == "sample":

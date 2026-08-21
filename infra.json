@@ -1,0 +1,55 @@
+{
+  "version": "2.0",
+  "platform": "aws",
+  "config": {},
+  "components": [
+    {
+      "name": "root-spawned-vpc",
+      "type": "ImportedNetwork",
+      "vpc_id": "vpc-02c2bada76e8dc56f",
+      "private_subnet_ids": [
+        "subnet-065cf8291f59660a3",
+        "subnet-0fb15f145824490f6"
+      ],
+      "public_subnet_ids": [
+        "subnet-04dd7b80e812bd192",
+        "subnet-070243e3dd9a59570"
+      ],
+      "service_discovery_namespace": "root.spawned.internal"
+    },
+    {
+      "name": "spawned-app",
+      "type": "ImportedDomain",
+      "zone_id": "Z04776561ZMAZL6PIQ3H8",
+      "zone_name": "spawned.app"
+    },
+    {
+      "name": "board",
+      "type": "Bucket",
+      "versioning": false,
+      "source": {
+        "git": {
+          "url": "github.com/razrer/quantjobs",
+          "ref": "board"
+        }
+      }
+    },
+    {
+      "name": "board-cdn",
+      "type": "CDN",
+      "default_root_object": "index.html",
+      "price_class": "PriceClass_100"
+    }
+  ],
+  "connections": [
+    {
+      "from": "board-cdn",
+      "to": "board"
+    },
+    {
+      "from": "spawned-app",
+      "to": "board-cdn",
+      "host": "quantjobs.spawned.app"
+    }
+  ]
+}

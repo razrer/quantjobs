@@ -7,8 +7,14 @@ Nothing here is urgent — the project runs fine without any of it. These are th
 places where I hit a wall that needed a human, not a decision I should make for
 you.
 
-**One thing is genuinely waiting on you** — item 3, a judgement call I made
-about Jobindex's robots.txt that is yours to overturn. Nothing is blocked on
+**Item 5 is the one thing actually blocking something.** The board is built,
+the branch is pushed and the estate is described and validated, and the last
+step -- `spawned apply` -- fails on a CLI that is five months behind the
+project it is deploying. Updating it is a download, which is yours to run and
+not mine. It is one command and it is in the item.
+
+**One thing is a judgement call** — item 3, the reading I took of Jobindex's
+robots.txt, which is yours to overturn. Nothing is blocked on
 it: Denmark is built and swept either way, and the item says exactly what
 reversing it would cost. Sweden needed no such call: its board allows the
 paging parameter, and item 3 says what that costs instead.
@@ -529,6 +535,48 @@ because that one *is* on your exclude list. If you would rather not see C++
 infrastructure seats at all, the lever is putting `heavy_systems` back in the
 hard list — but it would take those three firms with it.
 ---
+
+## 5. Update the Spawned CLI -- one command, and the deploy is unblocked
+
+**What to run:**
+
+```bash
+curl -fsSL https://spawned.sh/install.sh | bash
+```
+
+Then, from the repository root:
+
+```bash
+python web/publish.py --no-build
+```
+
+**Why I did not run it.** It downloads a script and executes it. That is yours
+to authorise even when the vendor is the one you asked me to use, and the fact
+that the CLI itself prints the same command does not change whose call it is.
+
+**What is broken without it.** `spawned apply quantjobs` answers:
+
+    Error: deployment with id 'd03ad163-70d9-43ed-ba43-3998008f8873' not found
+
+Everything upstream of that works: `spawned validate` passes, `spawned get`
+reads the project, the `board` branch is on the remote carrying the two files
+the bucket wants. The reading is a version skew rather than a mistake in the
+config -- `swedlunch` and `classic-movies-stockholm` deploy from this same CLI
+and both were created before 2026-08-16, while `quantjobs` was created on the
+21st. The CLI reports 1.3.0 and advertises 2026.08.18 as available. A project
+created after a server-side change, against a client that predates it.
+
+**If the update does not fix it**, the fallback is the dashboard at
+spawned.ai/dashboard -- the project exists, `infra.json` is valid, and a deploy
+triggered there does the same work. Tell me what it says and I will read it.
+
+**One thing to know before it goes live.** `quantjobs.spawned.app` is public
+and unauthenticated -- CloudFront in front of a bucket, no login. The content
+is scraped public job advertisements, so nothing private is exposed, but the
+board is your job hunt and anyone with the URL can read it. If you would rather
+it were not, say so and the answer is small: the same bucket behind a
+CloudFront function checking a shared secret, or simply not applying and
+reading it at `file://` as before.
 
 ## A. FINMA (Switzerland) — **done, and I was wrong about why it was blocked**
 

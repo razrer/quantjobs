@@ -16,12 +16,14 @@ stage below has an explicit exit criterion instead.
 If a stage turns out to be blocked, record it in `ACTION-REQUIRED.md` and stop —
 do not skip ahead to something more interesting.
 
-**Stage 27 is the last one written down.** Every stage above it is closed, so
+**Stage 28 is the last one written down.** Every stage above it is closed, so
 the next unit of work is a decision rather than a queue: what to widen, what to
-measure, or what to leave alone. The standing daily run is `sweden`, `denmark`,
-`switzerland`, `jobstream`, `jobs`, `pages`, `bodies`, `tag`, `alerts` and
-`web/build_data.py` — and `alerts` is the thing that says when one of them has
-started lying.
+measure, or what to leave alone. The standing daily run is now one command,
+`python -m quantscraper daily` — sweden, denmark, switzerland, jobstream, jobs,
+pages, bodies, tag, alerts and the rebuild, in that order, with `alerts` the
+thing that says when one of them has started lying. `python web/publish.py`
+puts the result on the CDN. Both are manual, because the search is the
+expensive half and it is free on this machine.
 
 ## Geographic priority
 
@@ -76,6 +78,7 @@ nothing in the near-term plan now waits on a human.
 | 25 | Multi-location postings show in both places | **done** — `hub` is multi-valued end to end |
 | 26 | XVA and counterparty credit risk | **done** — 27 titles, no false positive |
 | 27 | Read what the `rejected` gate removes | **done** — 720 reviewed, 1 false rejection; hand sheet 84.4% → 95.6% |
+| 28 | One command to refresh, one to publish | **built** — bucket + CDN, `daily`, `publish.py`; apply blocked on a CLI update |
 ---
 
 ## Stage 0 — Employer universe, raw collection *(done)*
@@ -3056,3 +3059,78 @@ Run: **4,990 attempted, 4,637 filled**, which is the whole queue — every
 Jobbsafari posting the tagger could not place, and the last 833 Workday ones.
 Sweden goes from no descriptions at all to 4,156, and the queue is empty rather
 than merely shorter.
+
+---
+
+## Stage 28 — One command to refresh, one to publish
+
+Twenty-seven stages produced a board that only existed on this machine. The
+standing sequence was a list in a markdown file that had to be typed out nine
+commands at a time, and the result was read at `file://`. This stage is the two
+commands that close that, and the deliberate line between them.
+
+### The expensive half stays here
+
+`daily` runs the standing sequence in order — sweden, denmark, switzerland,
+jobstream, jobs, pages, bodies, tag, alerts — and rebuilds `data.js`. It is
+manual on purpose. The national boards are a few hundred requests and the
+re-tag is minutes of CPU, and both are free on this machine and metered on
+anybody else's; scheduling them in a cloud would buy nothing but a bill and a
+second place for the pipeline to break unattended. What gets deployed is the
+*output*.
+
+A step that fails does not stop the run. The sources are independent, and a
+board redesigned underneath us should cost its own postings rather than the
+other eight sources', the re-tag, and the rebuild — which would otherwise leave
+yesterday's file up with nothing saying why. `alerts` runs last and is the
+thing that names the source that went quiet, which is exactly the job it was
+given in Stage 8 and could not do until the Layer 4 pollers started writing to
+`runs`.
+
+**The daily/weekly split is measured, not conventional.** Jobindex's top-up is
+one query against a 1,000-posting window and the board publishes ~600 a day, so
+it reaches about a day and a half. `_denmark_since` therefore reads the newest
+Danish row we *hold* rather than the calendar: run it two days running and it
+asks for a day, leave it a fortnight and the gap exceeds what one query can
+serve — and that case sweeps the whole taxonomy instead of fetching the most
+recent 1,000 and reporting success. That is the Jobbsafari short page again,
+one layer up: the cheap answer and the complete one are indistinguishable from
+outside unless something checks. `--full` also adds MyCareersFuture, which has
+no incremental form at all and is ~850 requests, which is a weekly.
+
+### The cheap half is a bucket and a distribution
+
+`infra.json` deploys a private S3 bucket and a CloudFront distribution in front
+of it. Nothing else — no container, no load balancer, no database. The board
+has been a static file since Stage 12, so a server would have been a running
+cost with nothing to do: an idle task and an ALB bill by the hour whether or
+not anybody opens the page. Bucket versioning is off, because `data.js` is
+overwritten whole on every publish and rebuilt from the database on demand, so
+retaining prior copies buys 3 MB a day of snapshots nobody would read.
+
+**The data does not go on `master`, and the plumbing is why that is possible.**
+The bucket's source is a git ref, so the file has to reach the repository —
+while `web/data.js` is gitignored precisely because it is derived, several
+megabytes, and regenerated whenever the tagger changes. Committing it daily
+would grow the history by a few megabytes a day forever to record something no
+reader would check out. `publish.py` writes an orphan commit instead:
+`hash-object -w` each file, `mktree`, `commit-tree` with no parent, force-push
+to `board`. The branch is always one commit holding two files, each publish
+replaces it, the CI clone is two files rather than a repository, and the
+working tree is never touched — no checkout, no stash, no branch to come back
+from. `hash-object -w` is the load-bearing piece: plumbing does not consult the
+ignore rules, so nothing is force-added and the ignore rule stays true.
+
+### Exit criterion
+
+The board answers on https://quantjobs.spawned.app with the same posting count
+`build_data.py` last printed, and a second `publish.py` moves it.
+
+**Not met yet, and the reason is not ours.** `infra.json` validates, the branch
+is pushed and the plumbing is proved, but `spawned apply` answers `deployment
+with id 'd03ad163-...' not found` for this project. Two projects in the same
+org deploy fine from the same CLI and both were created before 2026-08-16;
+`quantjobs` was created on the 21st, and the CLI reports 1.3.0 against an
+available 2026.08.18. The reading is a project created after a server-side
+change that this CLI predates. It needs the installer run, which is a download
+and therefore the user's to run — see `ACTION-REQUIRED.md`.

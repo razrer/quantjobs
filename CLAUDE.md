@@ -123,8 +123,34 @@ python -m quantscraper alerts                 # flag sources that broke quietly
 ```
 
 ```bash
+python -m quantscraper daily                  # the whole standing sequence, once
+```
+
+```bash
+python -m quantscraper daily --full --publish # weekly sweep, then push it live
+```
+
+```bash
 python -m unittest discover -s tests          # regression tests
 ```
+
+`daily` is the standing sequence in one command — sweden, denmark,
+switzerland, jobstream, jobs, pages, bodies, tag, alerts, then a rebuild. **It
+is deliberately manual.** The search is the expensive half and it is free here
+and billable anywhere else, so nothing schedules it; what is deployed is the
+*output*, not the scraper. A step that fails does not stop the run, because a
+board redesigned underneath us should cost its own postings and not the other
+eight sources' — nor the re-tag, nor the rebuild, which would otherwise leave
+yesterday's file up with no sign of why. `alerts` says which one went quiet and
+the exit code says whether any did.
+
+`--full` sweeps every Jobindex category and MyCareersFuture as well, and widens
+the page and body queues. Without it, Denmark tops up with one query from where
+the data already reaches: `_denmark_since` reads the newest Danish row we hold
+rather than the calendar, because the board's own result window covers about a
+day and a half — and when the gap is wider than that it sweeps the whole
+taxonomy instead of quietly fetching the most recent 1,000 and reporting
+success. Same shape as the short page that cost Jobbsafari 43,000 postings.
 
 The board is a static page. Dump the data, then serve `web/` — it reads
 `data.js` with a script tag so `file://` works too, but a server is tidier:
@@ -148,6 +174,35 @@ when that mattered most; the four gates have since taken the board from about
 and the omission is now worth roughly a third of it rather than a half. If it
 ever looks *too* small, the number to read is the per-gate breakdown every
 build prints, not the file size.
+
+## Publishing it
+
+```bash
+python web/publish.py                         # build, push, sync the CDN
+```
+
+The board is served at **https://quantjobs.spawned.app** from `infra.json`: a
+private S3 bucket and a CloudFront distribution in front of it, and that is the
+whole estate. No container, no load balancer, no database. The board was
+already a static file a `file://` page could open, so a server would have been
+a running cost with nothing to do — an idle task and an ALB bill by the hour
+whether or not anybody opens the page, against a bucket holding 3 MB and a
+distribution serving one reader. Bucket `versioning` is off for the same
+reason: `data.js` is overwritten whole on every publish and is rebuilt from the
+database on demand, so keeping every prior copy would buy snapshots nobody
+would read.
+
+**The data does not go on `master`.** Spawned's bucket source is a git ref, so
+the file has to reach the repository somehow — and `web/data.js` is gitignored
+precisely because it is derived, several megabytes, and regenerated whenever
+the tagger changes. `publish.py` writes an *orphan* commit with git plumbing
+instead: hash the two files, `mktree`, `commit-tree` with no parent,
+force-push that to `board`. The branch is always exactly one commit holding
+exactly two files, each publish replaces it rather than adding to it, the CI
+clone is two files rather than a repository, and the working tree is never
+touched. `hash-object -w` is what makes it work at all — plumbing does not
+consult the ignore rules, so nothing has to be force-added and the ignore rule
+stays true.
 
 `fca` needs `FCA_EMAIL` and `FCA_KEY` in `.env` (gitignored, never committed).
 
@@ -197,6 +252,8 @@ registries/*.py  ->  employers table  ->  resolve.py  ->  firms table
 - `registries/` — one module per source
 - `web/build_data.py` — Layer 6: dumps `jobs` + `job_tags` to `data.js`
 - `web/index.html` — the board: filter rail, card grid, deadline-first ordering
+- `web/publish.py` — pushes the built board to the CDN as an orphan commit
+- `infra.json` — the deployed estate: one private bucket, one distribution
 
 `roster.csv` is the *audit set*, never the universe. A firm's absence from it
 says nothing about whether it belongs. When adding entries, keep names specific:
