@@ -9,7 +9,8 @@ from datetime import datetime, timezone
 
 from . import (
     alerts, ats, audit, bodies, coverage, db, discover, domains, extract,
-    fca, jobindex, jobroom_ch, jobstream, labels, mycareersfuture, pages,
+    fca, jobbsafari, jobindex, jobroom_ch, jobstream, labels, mycareersfuture,
+    pages,
     resolve, sites, tagging,
 )
 from .registries import REGISTRIES
@@ -18,6 +19,37 @@ from .registries import REGISTRIES
 # these are the firms with no website at all; the SEC already publishes one for
 # most of its filers.
 FOCUS_SOURCES = ("fi_se", "afm_nl", "finanstilsynet_dk", "mas_sg", "sfc_hk", "seed")
+
+
+def _record_poll(
+    connection,
+    source: str,
+    started_at: str,
+    seen: int,
+    *,
+    partial: bool = False,
+    problem: str | None = None,
+) -> None:
+    """Put a Layer 4 poll in `runs`, so `alerts` can see the source at all.
+
+    **The gap this closes was found the expensive way.** job-room.ch was built,
+    guarded and proved against a live portal, and its rows were not in the
+    database -- 187,960 postings and not one of them Swiss. Nothing announced
+    it, because `alerts` is the one thing whose job is noticing silence and it
+    reads `runs`, which until now only the registry fetches wrote to. A source
+    that collected nothing looked exactly like a source nobody had asked about.
+
+    A deliberate subset is not recorded: `--pages`, `--only` and `--since` are
+    probes and top-ups, and a baseline built from them would judge a full sweep
+    against a sample of it. That is the same rule `alerts` states for itself --
+    one run is not a baseline, and inventing one produces noise on exactly the
+    sources that are newest.
+    """
+    if partial:
+        return
+    db.record_run(
+        connection, source, started_at, seen, ok=problem is None, error=problem
+    )
 
 
 def _fetch(names: list[str], database: str) -> int:
@@ -187,7 +219,10 @@ def _discover(database: str, limit: int, roster: bool, workers: int) -> int:
 
 def _singapore(database: str, since: str | None) -> int:
     connection = db.connect(database)
+    started_at = db.now()
     swept = mycareersfuture.run(connection, since=since)
+    _record_poll(connection, mycareersfuture.NAME, started_at, swept.seen,
+                 partial=swept.partial, problem=swept.problem)
     print(
         f"swept {swept.pages:,d} pages: {swept.seen:,d} postings, "
         f"{swept.written:,d} written, {swept.repeats:,d} served twice"
@@ -204,7 +239,10 @@ def _singapore(database: str, since: str | None) -> int:
 
 def _denmark(database: str, since: str | None, only: list[int] | None) -> int:
     connection = db.connect(database)
+    started_at = db.now()
     swept = jobindex.run(connection, since=since, only=only)
+    _record_poll(connection, jobindex.NAME, started_at, swept.seen,
+                 partial=swept.partial, problem=swept.problem)
     print(
         f"swept {swept.slices:,d} slice(s) over {swept.pages:,d} pages: "
         f"{swept.seen:,d} postings, {swept.written:,d} written, "
@@ -239,9 +277,46 @@ def _denmark(database: str, since: str | None, only: list[int] | None) -> int:
     return 0
 
 
+def _sweden(database: str, pages: int | None) -> int:
+    connection = db.connect(database)
+    started_at = db.now()
+    swept = jobbsafari.run(connection, pages=pages)
+    _record_poll(connection, jobbsafari.NAME, started_at, swept.seen,
+                 partial=swept.partial, problem=swept.problem)
+    print(
+        f"swept Jobbsafari over {swept.pages:,d} pages: "
+        f"{swept.seen:,d} postings, {swept.written:,d} written, "
+        f"{swept.repeats:,d} served twice"
+    )
+    if not swept.partial:
+        print(f"  the board advertised {swept.advertised:,d}")
+    row = connection.execute(
+        "SELECT COUNT(*) AS n,"
+        " SUM(description IS NOT NULL AND description != '') AS bodied"
+        " FROM jobs WHERE ats = ?", (jobbsafari.NAME,)
+    ).fetchone()
+    print(
+        f"  {row['n']:,d} Swedish ads held, {row['bodied'] or 0:,d} with a"
+        " description (`bodies` fills the ones a verdict turns on)"
+    )
+    # The walk audits its own arithmetic against the total the board publishes.
+    # A round number in the output is what a cap looks like from the outside,
+    # and nothing else here would say so.
+    if swept.problem:
+        print(f"  FAIL {swept.problem}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def _switzerland(database: str, days: int | None) -> int:
     connection = db.connect(database)
+    started_at = db.now()
     swept = jobroom_ch.run(connection, days)
+    # No `partial` here: every poll of this portal is a window, and an ad-hoc
+    # `--days 6` is an outlier rather than a subset. `alerts` compares against
+    # a median precisely so one outlier cannot move the baseline.
+    _record_poll(connection, jobroom_ch.NAME, started_at, swept.seen,
+                 problem=swept.problem)
     print(
         f"polled job-room.ch back {swept.days} day(s) over {swept.pages:,d} pages: "
         f"{swept.seen:,d} postings, {swept.written:,d} written, "
@@ -313,7 +388,12 @@ def _jobstream(database: str, since_text: str | None = None) -> int:
         else None
     )
     since = override or jobstream.cursor(connection)
+    started_at = db.now()
     seen, written, withdrawn = jobstream.run(connection, override)
+    # A replay of a window already polled is a deliberate subset, the same as
+    # `--since` one country over.
+    _record_poll(connection, jobstream.NAME, started_at, seen,
+                 partial=override is not None)
     print(
         f"polled JobStream from {since:%Y-%m-%d %H:%M} UTC: "
         f"{seen:,d} changes, {written:,d} written, {withdrawn:,d} withdrawn"
@@ -376,7 +456,9 @@ def _tag(database: str, limit: int, dimension: str) -> int:
         print(f"\nread these first ({len(rows)})")
         for row in rows:
             print(
-                f"  {row['fit']:9s} {(row['hub'] or '?'):11s}"
+                # `hub` is a slash-joined list now, so it is truncated
+                # rather than allowed to shove the title off the line.
+                f"  {row['fit']:9s} {(row['hub'] or '?')[:11]:11s}"
                 f" {(row['title'] or '')[:52]:54s} {(row['location'] or '')[:28]}"
             )
     return 0
@@ -492,7 +574,7 @@ def _list(database: str, args) -> int:
     print(f"{len(rows)} posting(s)")
     for row in rows:
         print(
-            f"  {(row['fit'] or '-'):9s} {(row['hub'] or '-'):12s}"
+            f"  {(row['fit'] or '-'):9s} {(row['hub'] or '-')[:12]:12s}"
             f" {(row['seniority'] or '-'):12s} {(row['title'] or '')[:44]:46s}"
             f" {(row['location'] or '')[:22]:24s} {row['url'] or ''}"
         )
@@ -817,6 +899,17 @@ def main(argv: list[str] | None = None) -> int:
         " reader change without walking all eighty",
     )
 
+    sweden_command = commands.add_parser(
+        "sweden", help="sweep Jobbsafari, Sweden's widest job board"
+    )
+    sweden_command.add_argument(
+        "--pages",
+        type=int,
+        help="stop after this many pages -- a probe against a few hundred live"
+        " rows. The whole board is about a hundred pages, so the default is to"
+        " walk all of it",
+    )
+
     switzerland_command = commands.add_parser(
         "switzerland", help="poll job-room.ch, Switzerland's public employment service"
     )
@@ -958,6 +1051,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "denmark":
         only = [int(part) for part in args.only.split(",")] if args.only else None
         return _denmark(args.db, args.since, only)
+    if args.command == "sweden":
+        return _sweden(args.db, args.pages)
     if args.command == "switzerland":
         return _switzerland(args.db, args.days)
     if args.command == "jobs":

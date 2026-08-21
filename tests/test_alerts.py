@@ -10,7 +10,7 @@ import sqlite3
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from quantscraper import alerts, db
+from quantscraper import alerts, cli, db
 
 
 def _memory(test: unittest.TestCase) -> sqlite3.Connection:
@@ -95,6 +95,45 @@ class BreakageTest(unittest.TestCase):
         connection = _memory(self)
         _run(connection, "fi_se", 650)
         self.assertIn("esma_eea", alerts.coverage(connection))
+
+
+class Layer4PollsAreVisibleTest(unittest.TestCase):
+    """The gap that let a whole national source hold zero rows in silence.
+
+    `alerts` reads `runs`, and until the Swiss postings turned out to be
+    missing, only the registry fetches wrote to it -- so a Layer 4 poller that
+    collected nothing looked exactly like one nobody had asked about.
+    """
+
+    def test_a_full_sweep_is_recorded(self):
+        connection = _memory(self)
+        cli._record_poll(connection, "jobbsafari", db.now(), 48_173)
+        row = connection.execute("SELECT source, row_count, ok FROM runs").fetchone()
+        self.assertEqual((row["source"], row["row_count"], row["ok"]),
+                         ("jobbsafari", 48_173, 1))
+
+    def test_a_probe_or_a_top_up_is_not(self):
+        """A baseline built from `--pages 2` would judge a full sweep against a
+        sample of it -- the same reason `alerts` refuses to judge one run."""
+        connection = _memory(self)
+        cli._record_poll(connection, "jobbsafari", db.now(), 999, partial=True)
+        self.assertEqual(connection.execute("SELECT COUNT(*) FROM runs").fetchone()[0], 0)
+
+    def test_a_truncated_walk_is_recorded_as_a_failure(self):
+        connection = _memory(self)
+        cli._record_poll(connection, "jobroom", db.now(), 19_999,
+                         problem="22,900 advertised, 19,999 reachable")
+        row = connection.execute("SELECT ok, error FROM runs").fetchone()
+        self.assertEqual(row["ok"], 0)
+        self.assertIn("19,999", row["error"])
+        self.assertIn("fail", {a.kind for a in alerts.check(connection)})
+
+    def test_a_national_board_that_stops_collecting_now_shows_up(self):
+        connection = _memory(self)
+        for _ in range(3):
+            cli._record_poll(connection, "jobbsafari", db.now(), 48_000)
+        cli._record_poll(connection, "jobbsafari", db.now(), 5_421)
+        self.assertIn("shrank", {a.kind for a in alerts.check(connection)})
 
 
 if __name__ == "__main__":

@@ -239,6 +239,13 @@ SUBCATEGORIES: dict[int, str] = {
 _STASH = "var Stash = "
 _TAGS = re.compile(r"<[^>]+>")
 
+# What joins the categories a posting is filed under. **Not a comma**, which is
+# what MyCareersFuture uses and what the labels here contain: "Hotel, restaurant
+# og køkken" and "Landbrug, skov og fiskeri" would each split into two names
+# that match nothing, so the read-time gate would silently stop firing on the
+# two biggest trades on the board.
+CATEGORY_SEPARATOR = " | "
+
 
 class Blocked(RuntimeError):
     """The page answered but carried no search response.
@@ -553,12 +560,35 @@ def _write(connection: sqlite3.Connection, rows: list[tuple[str | None, Job]]) -
     )
 
 
+def _recategorise(
+    connection: sqlite3.Connection, held: dict[str, set[str]], ids: list[str]
+) -> None:
+    """Widen the category of postings a later slice also matched.
+
+    A posting is filed under more than one category about a quarter of the
+    time, and the sweep meets it again in the second category's slice. Skipping
+    it there entirely would leave `jobs.category` holding whichever slice
+    happened to reach it first -- so `Rengøring | Finans og forsikring` would be
+    a cleaning job or a finance job depending on sweep order, and the read-time
+    gate would drop it half the time. Only the category is rewritten; every
+    other field was already correct on the first pass.
+    """
+    with connection:
+        connection.executemany(
+            "UPDATE jobs SET category = ? WHERE ats = ? AND token = ? AND job_id = ?",
+            [
+                (CATEGORY_SEPARATOR.join(sorted(held[tid])), NAME, TOKEN, tid)
+                for tid in ids
+            ],
+        )
+
+
 def _collect(
     connection: sqlite3.Connection,
     query: dict[str, int],
     label: str | None,
     sweep: Sweep,
-    seen: set[str],
+    seen: dict[str, set[str]],
     *,
     since: str | None = None,
     first: Page | None = None,
@@ -568,20 +598,28 @@ def _collect(
     for page in walk(query, since=since, first=first):
         sweep.pages += 1
         hitcount = hitcount or page.hitcount
-        fresh = []
+        fresh: list[tuple[str | None, Job]] = []
+        widened: list[str] = []
         for row in page.rows:
-            if not row.get("tid"):
+            tid = row.get("tid")
+            if not tid:
                 continue
-            if row["tid"] in seen:
-                # Counted, not silenced: overlap between slices is normal here,
-                # because a posting is filed under two categories about a
-                # quarter of the time. The count is what distinguishes that
+            if tid in seen:
+                # Counted, not silenced: overlap is normal here -- between
+                # category slices because a posting carries two categories, and
+                # within a split because an ad offered as full *or* part time
+                # is in both halves. The count is what distinguishes either
                 # from a walk being served the same page twice.
                 sweep.repeats += 1
+                if label and label not in seen[tid]:
+                    seen[tid].add(label)
+                    widened.append(tid)
                 continue
-            seen.add(row["tid"])
+            seen[tid] = {label} if label else set()
             fresh.append((_domain(row), _job(row, label)))
         sweep.written += _write(connection, fresh)
+        if widened:
+            _recategorise(connection, seen, widened)
     return hitcount
 
 
@@ -590,7 +628,7 @@ def _sweep_slice(
     which: Slice,
     label: str | None,
     sweep: Sweep,
-    seen: set[str],
+    seen: dict[str, set[str]],
     depth: int = 0,
 ) -> None:
     """Walk one slice, splitting it further if it will not fit the window.
@@ -635,7 +673,9 @@ def run(
     posted since than one query can serve, and only a full sweep closes it.
     """
     sweep = Sweep(partial=since is not None or bool(only))
-    seen: set[str] = set()
+    # tid -> every category slice that matched it, so a posting filed under two
+    # keeps both rather than whichever slice reached it first.
+    seen: dict[str, set[str]] = {}
 
     board = fetch_page({}, 1)
     sweep.advertised = board.hitcount
@@ -649,7 +689,12 @@ def run(
 
     if since is not None:
         sweep.slices = 1
-        _collect(connection, {}, None, sweep, seen, since=since)
+        # No category: the unfiltered board says which postings exist, not
+        # which slice they belong to. `db.upsert_jobs` coalesces, so this never
+        # erases a category a full sweep established -- a posting *first* seen
+        # by a top-up simply carries none until the next one, and a NULL
+        # category passes the read-time gate, which is the safe direction.
+        _collect(connection, {}, None, sweep, seen, since=since, first=board)
         sweep.seen = len(seen)
         # The window is a ceiling on the top-up, not on the board: reaching it
         # means the cutoff was never reached, so the days in between were read
@@ -657,7 +702,16 @@ def run(
         sweep.stale = sweep.seen >= board.window
         return sweep
 
-    wanted = {subid: live[subid] for subid in (only or live) if subid in live}
+    # The live list drives the partition so a new category is swept; the
+    # snapshot backs it up so a category the board drops from its menu can
+    # still be named to `only`. An id in neither is a typo, and a typo that
+    # quietly sweeps nothing is the failure mode this project refuses.
+    known = {**SUBCATEGORIES, **live}
+    if only and (unknown := [subid for subid in only if subid not in known]):
+        raise ValueError(
+            "no such subcategory: " + ", ".join(str(subid) for subid in unknown)
+        )
+    wanted = {subid: known[subid] for subid in (only or live)}
     for which in slices(wanted):
         _sweep_slice(connection, which, wanted[which.query["subid"]], sweep, seen)
 

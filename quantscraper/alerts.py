@@ -26,6 +26,15 @@ or plausibly could:
 A source with no history is not judged. One run is not a baseline, and inventing
 one would produce noise on exactly the sources that are newest and least
 verified.
+
+**It can only see what writes to `runs`, and for a long time that was the
+registries alone.** job-room.ch was built, guarded and proved against a live
+portal while `jobs` held not one Swiss row -- and nothing here said so, because
+a source that collected nothing is indistinguishable from a source nobody asked
+about. The Layer 4 pollers (`sweden`, `denmark`, `singapore`, `switzerland`,
+`jobstream`) record a run now; `cli._record_poll` is where, and it deliberately
+skips a `--since` top-up or a `--pages` probe so a baseline is never built from
+a deliberate subset.
 """
 
 from __future__ import annotations
