@@ -19,6 +19,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # git diff below needs github.event.before to actually be in the
+          # local history; the default shallow (depth-1) clone doesn't have
+          # it and fails with "fatal: bad object", which is exit 128.
+          fetch-depth: 0
 
       - name: Install spawned CLI
         run: |
@@ -37,10 +42,19 @@ jobs:
           set -euo pipefail
           PROJECT="d03ad163-70d9-43ed-ba43-3998008f8873"
           COMPONENT="board"
+          BEFORE="${{ github.event.before }}"
 
           # Only push files this push actually touched, so an index.html-only
-          # commit doesn't also re-stamp robots.txt for no reason.
-          CHANGED=$(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}")
+          # commit doesn't also re-stamp robots.txt for no reason. On the
+          # first push to the branch (or any other case where BEFORE isn't a
+          # real reachable commit) there is nothing to diff against -- fall
+          # back to uploading both, which the path filter above already
+          # guarantees is safe since it's why this run fired at all.
+          if [ "$BEFORE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$BEFORE" 2>/dev/null; then
+            CHANGED=$'web/index.html\nweb/robots.txt'
+          else
+            CHANGED=$(git diff --name-only "$BEFORE" "${{ github.sha }}")
+          fi
 
           for f in web/index.html web/robots.txt; do
             if echo "$CHANGED" | grep -qx "$f"; then
