@@ -16,7 +16,7 @@ stage below has an explicit exit criterion instead.
 If a stage turns out to be blocked, record it in `ACTION-REQUIRED.md` and stop —
 do not skip ahead to something more interesting.
 
-**Stage 28 is the last one written down.** Every stage above it is closed, so
+**Stage 29 is the last one written down.** Every stage above it is closed, so
 the next unit of work is a decision rather than a queue: what to widen, what to
 measure, or what to leave alone. The standing daily run is now one command,
 `python -m quantscraper daily` — sweden, denmark, switzerland, jobstream, jobs,
@@ -78,7 +78,8 @@ nothing in the near-term plan now waits on a human.
 | 25 | Multi-location postings show in both places | **done** — `hub` is multi-valued end to end |
 | 26 | XVA and counterparty credit risk | **done** — 27 titles, no false positive |
 | 27 | Read what the `rejected` gate removes | **done** — 720 reviewed, 1 false rejection; hand sheet 84.4% → 95.6% |
-| 28 | One command to refresh, one to publish | **done** — live at quantjobs.spawned.app, 5,211 postings |
+| 28 | One command to refresh, one to publish | **done** — live at quantjobs.spawned.app |
+| 29 | The board read back, in Swedish | **done** — a body arriving after the tag was never read |
 ---
 
 ## Stage 0 — Employer universe, raw collection *(done)*
@@ -3154,3 +3155,129 @@ crawlable, and a search engine indexing this would re-publish other sites'
 listings under ours. It doubled as the cache probe -- uploaded twice with
 different content to measure whether CloudFront would serve a stale copy --
 which is why the answer above is measured rather than assumed.
+
+---
+
+## Stage 29 — The board read back, in Swedish
+
+The first refresh after the deploy put **585 Swedish postings** in front of the
+reader and they were babysitters, taxi drivers, postmen, pizza chefs and
+window cleaners. The reader's question was the right one to ask first — *what
+changed, or have I not deployed the website properly?* — and the answer was
+neither: the publish was byte-exact, and the pipeline had been doing this all
+along on a corpus small enough not to show it.
+
+### The cause is an ordering, not a vocabulary
+
+Every one of the 585 was `relevance: unknown`, and `unknown` survives every
+gate on purpose — a gate must fire on evidence, never on the absence of it.
+The question is therefore why the tagger had no verdict, and the answer is that
+it never saw a description:
+
+- `tagging.postings` selects postings with **no row at the current version**,
+  so a posting classified on its title is finished as far as `tag` is
+  concerned. A description fetched afterwards is never read.
+- `daily` ran `bodies` *before* `tag`, and `bodies.targets` reads `job_tags` to
+  find postings the tagger could not place — so a posting scraped ten minutes
+  earlier was not in the queue at all. It had no verdict yet.
+
+Together those mean **every fresh arrival spent its first day on the board
+judged on a six-word title**, and for a national board that is no evidence at
+all. It had simply never mattered before: Jobbsafari's first sweep landed
+before a tagger version bump, so the whole corpus was re-read with its bodies
+in hand. The first *incremental* run is what exposed it.
+
+**The measurement that says this is the fix**, over all 53,299 Jobbsafari
+postings:
+
+| | postings | still `unknown` |
+|---|---|---|
+| with a body | 4,157 | 170 (**4%**) |
+| no body | 49,142 | 13,950 (**28%**) |
+
+`lexicon.judge`'s `no_markets_signal` is the only rule in the pipeline that can
+resolve an `unknown` on evidence of absence, and it needs a document to be
+absent from. So `bodies._write` now deletes the current version's tags for
+every posting it fills, and `daily` tags **twice** — once to give the day's
+arrivals a verdict so the queue can see them, then `bodies`, then again to
+re-read the few hundred that just gained a description. Neither pass is
+expensive, because `tag` only ever visits postings with no row at the current
+version.
+
+### The vocabulary, read off the board rather than out of a dictionary
+
+The ordering fix cannot reach a posting the fetch fails on, and 4% stay
+`unknown` with a body in hand. Those were read by hand — all 567 distinct
+titles — and the gap has a shape: a national board advertises jobs no ATS in
+this project has ever carried, so the occupation lexicon had been written
+against the wrong corpus.
+
+A hundred needles went in over two passes, each dry-run over all 288,498 live titles against
+the standing test — does it touch a posting the tagger rates positively.
+Ten are **compound heads** rather than words, which is where the leverage is:
+`kock` reaches *pizzakock*, *sushikock* and *kvällskock*, and it also reaches
+the compound nobody has seen yet, which on a board carrying every job in
+Sweden is the whole problem.
+
+**Three kept *because* they touch a positive**, each a tagger false keep
+confirmed by reading it: `postdoktor` reaches two university postdocs rated
+`relevant` on the word *kvantitativ* — multivalent binding and lipid
+nanoparticles — and `okonomimedarbejder` an accounts clerk in a municipal
+children's department.
+
+**Two dropped.** `konsulent` runs clean and is out anyway: it is the ordinary
+Danish word for a consultant (*IT-konsulent*, *ERP-konsulent*), so it reads as
+a trade only in Swedish and would delete Danish technology work — the
+`landscape` and `gartner` reasoning again. `handlare` has exactly one hit in
+the corpus, rated `less_relevant`, a village shopkeeper — but a Swedish markets
+posting could reasonably be titled *Handlare*, and one row on the board is
+cheaper than a rule that could delete a trader.
+
+### A second frame: what the re-tag rated *positively*
+
+The board listing shows what got through. The positives show what got through
+**and was recommended**, and a false keep near the top of a page sorted by fit
+costs more than fifty at the bottom. Re-reading the 32 Nordic positives at
+lexicon 43 found three, and each new needle removes one:
+
+- **`tekniker` was a compound head and never a word**, and the word is eight
+  characters where `_compound` will not look below nine -- so
+  `servicetekniker` was gated and a bare `Tekniker` was not. 492 hits, and the
+  one rated `relevant` is `Tekniker till Quant Service i Ludvika`, where
+  *Quant* is the name of an electrical contractor in Dalarna. `citadel.com`
+  again, in Swedish.
+- **`bilbranschen` and `bilindustrin` are car sales wearing a markets word.**
+  `Intresserad av bilbranschen och försäljning? Bli Junior Trader` and `Trader
+  till växande företag inom bilindustrin` -- three hits each in the whole
+  corpus, and both sat near the top because *Trader* is the strongest title
+  word there is.
+
+`montage`, `biltvatt`, `bilrekondare`, `fordonssaljare` and `lagerarbete` came
+with them off the same reading, clean on the dry-run.
+
+### A hole the ordering fix opened, and one that was always there
+
+`build_data` read a posting's tags as `tags.get(key, {})`, so a posting with
+**no** tags arrived as an empty tag set and walked past all five gates at once.
+`unknown` means the tagger looked and could not say, and is kept on purpose;
+*no row at all* means nothing has looked. Retiring verdicts in `bodies` made
+that reachable -- fetch bodies, build without re-tagging, and every posting
+filled would have appeared ungated -- but an interrupted `tag` could always do
+it. Those postings are held back now and counted on their own line, because it
+is a queue depth rather than a gate: the answer is to run `tag`.
+
+### A dry-run that reports zero everywhere is measuring itself
+
+The first harness folded its candidate heads before passing them to
+`_compound`, and `fold` pads with spaces — so `fold("kock")` is `" kock "`,
+`token.endswith(" kock ")` is never true, and **all twelve heads reported 0
+hits**, including one that plainly matches `pizzakock`. The needle lists are
+folded by `_terms`; the head tuples are deliberately raw. Believing that run
+would have thrown away the highest-leverage half of the fix.
+
+### Exit criterion
+
+The Swedish and Danish postings on the board are ones a reader would consider,
+and the nine genuine ones the same sweep carried — `Quantitative Analyst to the
+IFRS 9 team`, `Riskanalytiker inom kapitalförvaltning`, `Quantitative Power
+Trader` among them — are still on it. Both halves are pinned by tests.

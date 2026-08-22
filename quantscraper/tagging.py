@@ -35,7 +35,7 @@ from . import db, lexicon
 # Bump on every lexicon change: the diff between two versions over the same
 # corpus is a free regression test, and it is the only way to tell "the
 # classifier improved" from "the market moved".
-TAGGER = 42
+TAGGER = 44
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS job_tags (
@@ -369,6 +369,22 @@ _TRADE_HEADS = (
     # `konsultationssygeplejerske`, `klejnsmed`.
     "skoterskor", "montorer", "chaufforer", "operatorer", "vaktare",
     "laerer", "laerere", "sygeplejerske", "sygeplejersker", "smed", "terapeut",
+    # A whole-word needle cannot see inside a Swedish compound, and these were
+    # each reaching the board as one: `pizzakock` and `sushikock` past `kock`,
+    # `brevbarare` past nothing at all, `fonsterputsare`, `snoskottare`,
+    # `kottmastare`, `skolpsykolog`, `gravmaskinist`, `reklamutdelare`,
+    # `batbyggare`, `parkourtranare`. A head is worth more than the words it
+    # replaces because it also catches the next compound nobody has seen yet --
+    # which on a board carrying every job in Sweden is the whole problem.
+    #
+    # Dry-run over all 288,498 live titles: none of these touches a posting the
+    # tagger rates positively. **`konsulent` was dropped despite a clean run**
+    # -- it is the ordinary Danish word for a consultant (`IT-konsulent`,
+    # `ERP-konsulent`), so it reads as a trade only in Swedish, and gating it
+    # would delete Danish technology work. `vikarie` was dropped for the
+    # reason already recorded below: a substitute is a contract, not a trade.
+    "kock", "barare", "putsare", "skottare", "mastare", "psykolog",
+    "maskinist", "utdelare", "byggare", "tranare",
 )
 
 # **Five candidate heads were dropped after the dry-run, and every one is the
@@ -1431,7 +1447,78 @@ _OFF_INDUSTRY = _terms(
     "butiksassistent", "butiksmedarbejder", "kosmetolog", "sikkerhedsvagt",
     "vaegter", "plejehjem", "hjemmeplejen", "sosu", "handvaerker",
     "elevassistenter", "stodassistenter", "behandlingsassistenter",
-    "ekonomiassistenter", "vardbitraden",    # ----------------------------------------------------------------------
+    "ekonomiassistenter", "vardbitraden",
+    # ----------------------------------------------------------------------
+    # **Read off the board itself, which is the frame that matters.** A fresh
+    # Jobbsafari sweep put 585 Swedish postings in front of the reader and they
+    # were babysitters, taxi drivers, postmen and pizza chefs. The words are
+    # here; the *shape* of the gap is that a national board advertises jobs no
+    # ATS in this project has ever carried, so the occupation vocabulary was
+    # written against the wrong corpus.
+    #
+    # Every needle dry-run over all 288,498 live titles, and the check is the
+    # standing one: does it touch a posting the tagger rates positively.
+    #
+    # **Three were kept *because* they touch one**, each a tagger false keep
+    # that reading it by hand confirms: `postdoktor` reaches two university
+    # postdocs rated `relevant` on the word *kvantitativ* -- multivalent
+    # binding and lipid nanoparticles, biophysics rather than markets -- and
+    # `okonomimedarbejder` reaches an accounts clerk in a municipal children's
+    # and culture department, rated `relevant`. Academic and municipal
+    # accounting are not this line of work, and `accountant` is already gated
+    # one block up at the user's own request.
+    #
+    # **Two were dropped.** `handlare` has exactly one hit in the whole corpus
+    # and it is rated `less_relevant` -- a village shopkeeper -- but a Swedish
+    # markets posting could reasonably be titled *Handlare*, and one row on the
+    # board is cheaper than a rule that could delete a trader. `taxi` was kept
+    # only after checking it cannot reach `robotaxi`, which is one token.
+    "barnvakt", "barnvakter", "babysitter", "babysitters", "barnflicka",
+    "barnpassning", "laxhjalp", "ledsagare", "anestesiolog", "gynekolog",
+    "urolog", "farmaceut", "farmaceuter", "receptarie", "skolpsykolog",
+    "specialistpsykolog", "allmanmedicin", "hemtjanstpersonal",
+    "familjebehandlare", "terapeuter", "massorer", "omsorgspersonal",
+    "kockar", "sushikock", "servis", "serveringspersonal",
+    "restaurangpersonal", "kottmastare", "matsal", "flyttstadning",
+    "lokalstadning", "fonsterputsare", "fonsterputsning", "sanerare",
+    "snoskottare", "skogsrojning", "taxi", "forare", "brevbarare",
+    "paketbud", "kurir", "reklamutdelare", "medakare", "paketsortering",
+    "gravmaskinist", "materialhanterare", "armerare", "rorlaggare",
+    "batbyggare", "arborist", "maleri", "malning", "folierare", "asbest",
+    "plattlaggare", "butiksansvarig", "telefonforsaljning", "kundbokare",
+    "expeditor", "delikatessansvarig",
+    # Schools, universities and public administration. A university chair is
+    # not industry quant work and the reader has already graduated, so
+    # `adjunkt`, `lektor`, `postdoktor` and `doktorand` are occupations here
+    # rather than seniorities.
+    "timvikarie", "timvikarier", "timvikariat", "skoladministrator",
+    "skolbibliotekarie", "adjunkt", "lektor", "postdoktor", "doktorand",
+    "utbildare", "registrator", "arbetsformedlare", "gruppadministrator",
+    "forradsadministrator", "utbildningsadministrator", "nattreceptionist",
+    "husfru", "skola", "skolan", "grundskola", "gymnasiet", "elevhalsa",
+    "aldreomsorg", "fritidshem", "forskoleklass",
+    # Danish, from the same reading. Jobindex is gated by its own taxonomy and
+    # leaks little, but a `--since` top-up writes a NULL category and a NULL
+    # category passes the gate, so these are what stands behind it.
+    "sagsbehandler", "ejendomsadministrator", "okonomimedarbejder",
+    "studiejob", "kontorelev", "salgselev", "serviceassistent",
+    # A second reading, of what the *re-tag* left rated positively rather than
+    # of what reached the board -- a different frame and it finds different
+    # things. Each of the first three removes a posting the tagger had rated
+    # positively, which is the strongest evidence a needle can have:
+    #
+    # - **`tekniker` was a compound head and never a word**, so `servicetekniker`
+    #   was gated while a bare `Tekniker` was not -- `_compound` wants nine
+    #   characters and the word is eight. 492 hits, and the one rated
+    #   positively is `Tekniker till Quant Service i Ludvika`, where *Quant* is
+    #   the name of an electrical contractor. `citadel.com` all over again.
+    # - **`bilbranschen` and `bilindustrin` are car sales wearing a markets
+    #   word.** `Intresserad av bilbranschen och försäljning? Bli Junior Trader`
+    #   and `Trader till växande företag inom bilindustrin` -- three hits each
+    #   in the whole corpus, and the board pinned both near the top because
+    #   *Trader* is the strongest title word there is.
+    "tekniker", "bilbranschen", "bilindustrin", "biltvatt", "bilrekondare",
+    "fordonssaljare", "montage", "lagerarbete",    # ----------------------------------------------------------------------
     # **Switzerland, the third focus hub with a national board.** 22,903 Swiss
     # postings arrived and only 50 of them reach the board -- the German,
     # Dutch and French words `lexicon.UNRELATED` already carried do most of

@@ -348,6 +348,7 @@ def main() -> None:
     firms: dict[str, dict] = {}
     jobs = []
     gated: dict[str, int] = {reason: 0 for reason in GATES}
+    untagged = 0
     for row in connection.execute(
         "SELECT ats, token, job_id, domain, employer, title, url, location,"
         # Withdrawn postings keep their row and stop being offered. The board
@@ -356,7 +357,21 @@ def main() -> None:
         " department, posted_at, deadline, description, first_seen"
         " FROM jobs WHERE removed_at IS NULL"
     ):
-        mine = tags.get((row["ats"], row["token"], row["job_id"]), {})
+        mine = tags.get((row["ats"], row["token"], row["job_id"]))
+
+        # **A posting the tagger has not read is not a posting with no
+        # verdict, and the difference is every gate on this page.** `unknown`
+        # means the tagger looked and could not say, and it is kept
+        # deliberately; *no row at all* means nothing has looked, and reading
+        # that as an empty tag set walks the posting past `off_industry`,
+        # `off_location`, `out_of_reach`, `phd_required` and `rejected`
+        # together. It became reachable when `bodies` started retiring the
+        # verdicts it invalidates -- run `bodies` and build without re-tagging
+        # and every posting it filled would arrive here ungated -- and an
+        # interrupted `tag` has always been able to do the same thing.
+        if mine is None:
+            untagged += 1
+            continue
 
         # **Stage one, and the only filters on this page that remove rather
         # than rank.** Everything else about the board is a knob the reader can
@@ -439,8 +454,11 @@ def main() -> None:
         # those are right to drop: everything genuinely elsewhere has already
         # been gated, so what is left is a posting that named no place, and the
         # rail says `unstated` for that. The local reading is the fallback for
-        # a posting the tagger has not seen yet -- an untagged posting must
-        # still be findable.
+        # a posting whose `hub` came back `unknown` and was therefore omitted
+        # from the payload -- it still has to be findable by place. It is no
+        # longer a fallback for a posting with no tags at all: those do not
+        # reach here, because arriving with an empty tag set walks a posting
+        # past every gate on the page.
         tagged = [h for h in _HUB_ORDER if h in (mine.get("hub") or ())]
         where = tagged or [w for w in (hub(row["location"]),) if w]
         if where:
@@ -486,6 +504,13 @@ def main() -> None:
     # would show it.
     for reason, count in gated.items():
         print(f"{count:>7,d} gated  {reason:<13} {GATES[reason]}")
+    if untagged:
+        # Not a gate: these were never read. It is a queue depth, and the
+        # answer is to run `tag`, which is why it prints separately.
+        print(
+            f"{untagged:>7,d} held   untagged      (no verdict at lexicon "
+            f"{tagging.TAGGER} -- run `tag`)"
+        )
     print(f"{sum(gated.values()):>7,d} gated  total         (kept in the database; `list --exclude <reason>` shows them)")
 
 

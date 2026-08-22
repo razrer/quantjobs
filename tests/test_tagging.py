@@ -1720,3 +1720,112 @@ class LeadershipContainmentTest(unittest.TestCase):
                 connection, rows, tagging.GATES, tagging.tag_posting),
             (0, 0, 0),
         )
+
+
+class SwedishBoardTitlesTest(unittest.TestCase):
+    """The 585 Swedish postings a fresh Jobbsafari sweep put on the board.
+
+    These are real titles taken off `data.js`, not invented ones. They are the
+    frame that matters: a national board advertises jobs no ATS in this project
+    has ever carried, so the occupation vocabulary had been written against the
+    wrong corpus and every one of these read as `relevance: unknown` -- which
+    every gate deliberately lets through.
+    """
+
+    def _gated(self, title, **kwargs) -> bool:
+        tags = _tags(title=title, **kwargs)
+        return "off_industry" in tags.get("exclusion_reason", set())
+
+    def test_the_titles_that_reached_the_board(self):
+        for title in (
+            "Barnvakt på heltid i Bro",
+            "English Speaking Babysitter in Lidingö",
+            "Allakando läxhjälp, Bromma, 1 gång/vecka, Generell läxhjälp",
+            "Taxi förare",
+            "Söker Taxi Förare",
+            "Brevbärare Tibro, Tidsbegränsad anställning",
+            "Brevbärare/paketbud - Huddinge",
+            "Pasta- och pizzakock till Fratelli Mall of Scandinavia",
+            "Sushikock",
+            "Kvällskock sökes till Exit Lounge & Bar",
+            "Köttmästare Sökes till Demirel Group AB",
+            "Fönsterputsare / Window cleaners - Hemfrid Tyresö",
+            "Snöskottare och sandupptagning",
+            "Grävmaskinist Stockholm",
+            "Reklamutdelare",
+            "Skolpsykolog till Svedenskolan Bergshamra - 40%",
+            "Anestesiolog till Tribonum för uppdrag i Södra Sverige",
+            "Farmaceuter till DOZ Apotek Upplands Väsby Bredden",
+            "Timvikarie - Brageskolan",
+            "Biträdande lektor inom tumörbiologi",
+            "Parkourtränare",
+            "Båtbyggare",
+            "Arborist",
+            "Vi söker armerare till Stockholm!",
+            "Registrator till statlig myndighet",
+            "Night Audit - Nattreceptionist",
+            "Sagsbehandler til kontrol af moms på e-handel",
+        ):
+            with self.subTest(title=title):
+                self.assertTrue(self._gated(title), f"{title!r} still reaches the board")
+
+    def test_a_compound_head_catches_the_next_one_too(self):
+        """The point of a head over a word: a compound nobody has seen yet."""
+        for title in ("Grillkock till nyöppnad restaurang", "Tidningsutdelare sökes"):
+            with self.subTest(title=title):
+                self.assertTrue(self._gated(title))
+
+    def test_the_swedish_postings_worth_keeping_survive(self):
+        """The same sweep carried these, and a gate that eats them is worse."""
+        for title in (
+            "Quantitative Analyst to the IFRS 9 team | SEB, Stockholm",
+            "Riskanalytiker inom kapitalförvaltning",
+            "Quantitative Power Trader",
+            "Intraday Trader",
+            "Kvantitativt inriktad analytiker för verksamhetsuppföljning",
+            "Fond- och värdepappersadministratör till AP7",
+            "Analyst - Leveraged Finance | SEB, Stockholm",
+            "Commodities Sales to FICC Markets | SEB, Stockholm",
+            "Risk Model Developer",
+        ):
+            with self.subTest(title=title):
+                self.assertFalse(self._gated(title), f"{title!r} was gated off the board")
+
+    def test_handlare_is_deliberately_not_a_needle(self):
+        """One shopkeeper on the board is cheaper than a rule eating a trader."""
+        self.assertFalse(self._gated("Handlare sökes till Tempo Singö"))
+
+    def test_konsulent_is_deliberately_not_a_head(self):
+        """Danish for an ordinary consultant, so it reads as a trade only in Swedish."""
+        self.assertFalse(self._gated("IT-konsulent til Operations-teamet"))
+
+
+class RatedPositivelyButNotTest(unittest.TestCase):
+    """Read off what the re-tag rated *positively*, a different frame again.
+
+    The board's own listing shows what got through; the positives show what got
+    through *and was recommended*. A false keep near the top of a page sorted
+    by fit costs more than fifty at the bottom.
+    """
+
+    def _gated(self, title) -> bool:
+        return "off_industry" in _tags(title=title).get("exclusion_reason", set())
+
+    def test_a_bare_technician_is_a_trade(self):
+        """`tekniker` was a compound head and never a word, and it is eight
+        characters -- one short of what `_compound` will look at."""
+        for title in ("Tekniker till Quant Service i Ludvika", "Linux tekniker",
+                      "AV-tekniker till Logic IT", "VVS-tekniker"):
+            with self.subTest(title=title):
+                self.assertTrue(self._gated(title))
+
+    def test_car_sales_wearing_the_word_trader(self):
+        for title in ("Intresserad av bilbranschen och försäljning? Bli Junior Trader",
+                      "Trader till växande företag inom bilindustrin"):
+            with self.subTest(title=title):
+                self.assertTrue(self._gated(title))
+
+    def test_a_real_trader_is_untouched(self):
+        for title in ("Intraday Trader", "Power Trader", "Trader for Electronic Trading"):
+            with self.subTest(title=title):
+                self.assertFalse(self._gated(title))

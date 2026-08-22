@@ -151,3 +151,62 @@ class WorkdayBodyTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RetiresStaleVerdictTest(unittest.TestCase):
+    """A body that arrives after the tag must send the posting back to `tag`.
+
+    `tagging.postings` selects postings with no row at the current version, so
+    a posting classified on its title is finished as far as `tag` is concerned
+    -- and a description fetched afterwards would never be read. That is how
+    585 Swedish postings reached the board judged on a six-word title.
+    """
+
+    def test_current_version_tags_go(self):
+        connection = _memory(self)
+        _posting(connection, "jobbsafari", "sweden", "1", "https://x/jobb/a-1")
+        bodies._write(connection, [("a description", "jobbsafari", "sweden", "1")])
+        self.assertEqual(
+            connection.execute(
+                "SELECT description FROM jobs WHERE job_id = '1'"
+            ).fetchone()["description"],
+            "a description",
+        )
+        self.assertEqual(
+            connection.execute(
+                "SELECT COUNT(*) n FROM job_tags WHERE job_id = '1' AND tagger = ?",
+                (tagging.TAGGER,),
+            ).fetchone()["n"],
+            0,
+        )
+
+    def test_an_older_tagger_is_left_alone(self):
+        """Only the current version is retired; the history stays as it was."""
+        connection = _memory(self)
+        _posting(connection, "jobbsafari", "sweden", "1", "https://x/jobb/a-1")
+        connection.execute(
+            "INSERT INTO job_tags (ats, token, job_id, dimension, value, confidence,"
+            " tagger, tagged_at) VALUES ('jobbsafari', 'sweden', '1', 'relevance',"
+            " 'rejected', 'weak', ?, '2026-08-01')",
+            (tagging.TAGGER - 1,),
+        )
+        connection.commit()
+        bodies._write(connection, [("a description", "jobbsafari", "sweden", "1")])
+        self.assertEqual(
+            connection.execute(
+                "SELECT COUNT(*) n FROM job_tags WHERE job_id = '1' AND tagger = ?",
+                (tagging.TAGGER - 1,),
+            ).fetchone()["n"],
+            1,
+        )
+
+    def test_nothing_written_touches_nothing(self):
+        connection = _memory(self)
+        _posting(connection, "jobbsafari", "sweden", "1", "https://x/jobb/a-1")
+        bodies._write(connection, [])
+        self.assertEqual(
+            connection.execute(
+                "SELECT COUNT(*) n FROM job_tags WHERE tagger = ?", (tagging.TAGGER,)
+            ).fetchone()["n"],
+            1,
+        )

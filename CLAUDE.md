@@ -1065,6 +1065,33 @@ whatever survives of every version —
 the hub table read 49,808 postings in `unknown` after `unknown` had already
 been split out, because six earlier taggers still said so.
 
+**A body that arrives after the tag is a body the tagger never reads, and it
+put 585 Swedish postings on the board.** `tagging.postings` selects postings
+with no row at the *current* version, so a posting classified on its title this
+morning is finished as far as `tag` is concerned — fetching its description in
+the afternoon changes nothing until the next version bump. Worse, `daily` ran
+`bodies` *before* `tag`, and `bodies.targets` reads `job_tags` to find postings
+the tagger could not place — so a posting scraped ten minutes ago was not in
+that queue at all, having no verdict yet. Every fresh arrival therefore spent
+its first day on the board judged on a six-word title. Two changes, together:
+`bodies._write` deletes the current version's tags for every posting it fills,
+and `daily` tags **twice** — once to give the day's arrivals a verdict, then
+`bodies`, then again to re-read the ones that just gained a description.
+
+It is worth settling because for a national board a body is nearly decisive.
+Measured over Jobbsafari: **4% of postings with a body stay `unknown` against
+28% without one.** `lexicon.judge`'s `no_markets_signal` is the only rule in
+the pipeline that can resolve an `unknown` on evidence of absence, and it needs
+a document to be absent from.
+
+**A compound head must be passed to `_compound` raw, never folded.** `fold`
+pads its result with spaces, so `fold("kock")` is `" kock "` and
+`token.endswith(" kock ")` is never true — a dry-run harness that folded its
+heads reported **0 hits for all twelve**, including one that plainly matches
+`pizzakock`. The needle lists are folded by `_terms`; the head tuples are not,
+and `_TRADE_HEADS` is written raw for that reason. A dry-run that reports zero
+everywhere is measuring itself.
+
 **Changing the lexicon without bumping `TAGGER` leaves stale tags that look
 current.** `tag` only visits postings with no row at the *current* version, so
 after an unbumped edit it reports `tagged 0 postings` and every summary keeps

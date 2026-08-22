@@ -228,6 +228,28 @@ def run(
 
 
 def _write(connection: sqlite3.Connection, batch) -> None:
+    """Store the descriptions, and retire the verdicts they were reached without.
+
+    **A body that arrives after the tag is a body the tagger never reads.**
+    `tagging.postings` selects postings with no row at the *current* version,
+    so a posting classified on its title this morning is finished as far as
+    `tag` is concerned -- and fetching its description in the afternoon changes
+    nothing until the next version bump. That is how 585 Swedish postings
+    reached the board: they arrived, tagged `unknown` on a six-word title,
+    and the body that would have settled them came too late to be read.
+
+    It is worth settling, because for these sources a body is nearly decisive.
+    Measured over Jobbsafari: **4% of postings with a body stay `unknown`
+    against 28% without one** -- `lexicon.judge`'s `no_markets_signal` is the
+    only rule in the pipeline that can resolve an `unknown` on evidence of
+    absence, and it needs a document to be absent from.
+
+    So the tags go, and the next `tag` re-reads the posting with the body in
+    front of it. Deleting from `job_tags` is safe in a way deleting from `jobs`
+    would not be: it is derived, `tag` rebuilds it from the posting on demand,
+    and `prune` already deletes from it. Only the current version's rows are
+    touched, so an older tagger's history is left exactly as it was.
+    """
     if not batch:
         return
     with connection:
@@ -235,6 +257,11 @@ def _write(connection: sqlite3.Connection, batch) -> None:
             "UPDATE jobs SET description = ?"
             " WHERE ats = ? AND token = ? AND job_id = ?",
             batch,
+        )
+        connection.executemany(
+            "DELETE FROM job_tags"
+            " WHERE ats = ? AND token = ? AND job_id = ? AND tagger = ?",
+            [(ats, token, job_id, tagging.TAGGER) for _, ats, token, job_id in batch],
         )
 
 

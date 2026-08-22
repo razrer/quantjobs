@@ -858,10 +858,20 @@ def _daily(database: str, full: bool, publish: bool) -> int:
     since = None if full else _denmark_since(connection)
     connection.close()
 
-    # The order is not arbitrary: the sources land postings, `bodies` fetches
-    # the descriptions a verdict turns on, and only then is there anything new
-    # for `tag` to read. Running the tagger first would classify the day's
-    # postings on their titles alone.
+    # **The tagger runs twice, and the second pass is not a belt-and-braces.**
+    # `bodies.targets` queues postings the tagger could not place -- it reads
+    # `job_tags` to find them -- so a posting scraped ten minutes ago is not in
+    # that queue at all: it has no verdict yet. Tag first and it does. Then
+    # `bodies` fetches the descriptions, retires the title-only verdicts it
+    # just invalidated, and the second pass re-reads those postings with the
+    # body in front of it.
+    #
+    # Running `bodies` once, before any tagging, is what the sequence used to
+    # do, and it meant every posting spent its first day on the board judged on
+    # a six-word title -- which for a national board is no evidence at all.
+    # Neither extra pass is expensive: `tag` visits only postings with no row
+    # at the current version, so the first pass sees the day's arrivals and the
+    # second sees the few hundred that just gained a body.
     steps: list[tuple[str, Callable[[], int]]] = [
         ("sweden", lambda: _sweden(database, None)),
         ("denmark", lambda: _denmark(database, since, None)),
@@ -869,8 +879,9 @@ def _daily(database: str, full: bool, publish: bool) -> int:
         ("jobstream", lambda: _jobstream(database, None)),
         ("jobs", lambda: _jobs(database, 2_000, 12)),
         ("pages", lambda: _pages(database, 4_000 if full else 500, 12)),
-        ("bodies", lambda: _bodies(database, 20_000 if full else 2_000, 12)),
         ("tag", lambda: _tag(database, 1_000_000, "fit")),
+        ("bodies", lambda: _bodies(database, 20_000 if full else 2_000, 12)),
+        ("re-tag", lambda: _tag(database, 1_000_000, "fit")),
         ("alerts", lambda: _alerts(database)),
     ]
     if full:
