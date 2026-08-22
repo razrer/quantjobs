@@ -1,61 +1,96 @@
 # quant-scraper
 
-Exhaustive quant-job aggregation, built employer-first.
+Exhaustive quant-job aggregation, built employer-first: enumerate the firms
+that could hire a quant from registries that are complete by law, resolve each
+to its own careers feed, and poll that. Aggregators and national job boards
+are a discovery net for employers the registries miss, never the primary
+source.
 
-This repo currently implements **Layer 1 of the plan: the employer universe.**
-Regulatory registries are the backbone because financial firms are *legally
-required* to register, so those lists are complete by construction. Later
-layers resolve each employer to a careers feed (Layer 2) and poll it (Layer 3).
+The board this produces is live at **https://quantjobs.spawned.app**.
 
 Full methodology: `C:\Users\razre\.claude\plans\snoopy-growing-hoare.md`.
+Execution order and exit criteria: [PLAN.md](PLAN.md). Guidance for Claude
+Code working in this repo, including every documented gotcha: [CLAUDE.md](CLAUDE.md).
 
 ## Running it
 
 No dependencies — standard library only, so there is nothing to install.
+`run.sh` / `run.ps1` wrap the commands below with the right interpreter (see
+[the environment gotcha](#one-environment-gotcha)) — `./run.sh fetch` is the
+same as the first command below.
+
+**Layer 1 — the employer universe**
 
 ```bash
-python -m quantscraper fetch
+python -m quantscraper fetch      # pull employers from registries
+python -m quantscraper resolve    # group raw rows into firms
+python -m quantscraper stats      # what is in the database
+python -m quantscraper audit      # check the universe against the named roster
 ```
+
+**Layer 2 — resolve each firm to a careers feed**
 
 ```bash
-python -m quantscraper resolve
+python -m quantscraper domains --limit 1000   # resolve firm names to domains
+python -m quantscraper fca --limit 300        # enrich domains from the FCA register (needs .env)
+python -m quantscraper ats --limit 800        # fingerprint careers hosts to an ATS
+python -m quantscraper discover --roster      # find boards no careers page named
 ```
+
+**Layer 3/3B — poll the feeds**
 
 ```bash
-python -m quantscraper stats
+python -m quantscraper jobs --limit 100       # pull postings from resolved boards
+python -m quantscraper pages --limit 500      # watch tier-B careers pages
 ```
+
+**Layer 4 — national boards, polled directly**
 
 ```bash
-python -m quantscraper audit
+python -m quantscraper jobstream              # Sweden's national delta feed
+python -m quantscraper switzerland            # job-room.ch
+python -m quantscraper sweden                 # Jobbsafari, all of it
+python -m quantscraper denmark                # Jobindex, every category
+python -m quantscraper denmark --since 2026-08-18   # daily top-up, one query
 ```
+
+**Layer 5/6 — classify and read the results**
 
 ```bash
-python -m quantscraper domains --limit 1000
+python -m quantscraper tag                    # classify postings into tags
+python -m quantscraper list --fit apply_now --hub amsterdam   # filter the tags
+python -m quantscraper list --dimensions      # every filterable value
+python -m quantscraper coverage               # how much of the market we see
+python -m quantscraper sample --limit 100     # draw postings to hand-label
+python -m quantscraper labels                 # score the lexicon against them
 ```
 
-`resolve` groups the raw registry rows into real-world firms; run it after
-`fetch`. It rebuilds from scratch every time, so it is safe to re-run.
+**The standing sequence**
 
-`audit` checks the universe against the named roster in
-`quantscraper/roster.csv` and reports, per hub, how many of those firms it
-found. `-v` lists what each hit actually matched, which is how a wrong match
-gets caught — see [Coverage audit](#coverage-audit).
+```bash
+python -m quantscraper daily                  # sweden, denmark, switzerland, jobstream,
+                                               # jobs, pages, bodies, tag, alerts, rebuild
+python -m quantscraper daily --full --publish # weekly: every category, then push live
+python -m quantscraper alerts                 # which source went quiet, on its own
+```
 
-`domains` resolves firm names to domains, `--limit` firms at a time. Results are
-cached, including failures, so re-running is cheap and the work survives a
-`resolve` rebuild — see [Domain resolution](#domain-resolution).
+`daily` is deliberately manual — see CLAUDE.md for why nothing schedules it.
+A step failing does not stop the run; `alerts` says which source broke and the
+exit code says whether any did.
 
-`fetch` takes optional registry names (`python -m quantscraper fetch fi_se`).
-Data lands in `employers.sqlite3`; override with `--db`.
+```bash
+python -m unittest discover -s tests          # regression tests
+```
 
 ### One environment gotcha
 
-`python` on this machine resolves to the msys2 build, which ships **without a
-CA bundle**, so every HTTPS request fails with `CERTIFICATE_VERIFY_FAILED`.
-Either use the Windows Python:
+Bare `python` on this machine resolves to the msys2 build, which ships
+**without a CA bundle**, so every HTTPS request fails with
+`CERTIFICATE_VERIFY_FAILED`. Use the Windows Python — `run.sh`/`run.ps1`
+already do this for you:
 
 ```bash
-"$LOCALAPPDATA/Programs/Python/Python313/python" -m quantscraper fetch
+"/c/Users/razre/AppData/Local/Programs/Python/Python313/python" -m quantscraper fetch
 ```
 
 or point msys2's OpenSSL at the bundle it already has:
@@ -63,6 +98,43 @@ or point msys2's OpenSSL at the bundle it already has:
 ```bash
 export SSL_CERT_FILE=C:/msys64/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
 ```
+
+Also set `PYTHONIOENCODING=utf-8` when printing firm names, or non-ASCII names
+raise `UnicodeEncodeError` on this console.
+
+## Pushing and publishing
+
+Two different things move on a `git push`, and only one of them is automatic.
+
+**Code** (this repo) pushes to the `quantjobs` remote, `master` branch:
+
+```bash
+git push quantjobs master
+```
+
+If that push touches `web/index.html` or `web/robots.txt`,
+[`.github/workflows/publish-board-static.yml`](.github/workflows/publish-board-static.yml)
+re-uploads just those files to the live bucket automatically — an HTML/CSS
+tweak to the board goes live with no extra step.
+
+**Data** (`web/data.js`, the actual job listings) never goes through git — it
+is gitignored, built from the local SQLite database that only exists on this
+machine, and CI has no copy of that database. Publishing a fresh set of
+listings is still a manual, local step:
+
+```bash
+python -m quantscraper daily --publish   # or: python web/publish.py
+```
+
+**Infrastructure** (`infra.json` — the bucket and CDN) changes almost never,
+and applying it is manual too:
+
+```bash
+spawned apply quantjobs
+```
+
+See CLAUDE.md's "Publishing it" section for the full story, including why git
+was tried as the data delivery mechanism first and dropped.
 
 ## What it collects
 

@@ -1,0 +1,51 @@
+name: Publish board static files
+
+# Re-uploads the board's own code (not its data) whenever it changes on push.
+# data.js is built from the local SQLite DB and is gitignored -- CI has no
+# copy of that DB, so a real data refresh still requires running
+# `python -m quantscraper daily --publish` (or `web/publish.py`) locally.
+# This workflow only keeps index.html / robots.txt in sync with what's
+# committed, so an HTML/CSS/JS edit goes live without a manual publish step.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "web/index.html"
+      - "web/robots.txt"
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install spawned CLI
+        run: |
+          curl -fsSL https://spawned.sh/install.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Authenticate
+        run: spawned whoami
+        env:
+          SPAWNED_API_KEY: ${{ secrets.SPAWNED_API_KEY }}
+
+      - name: Upload changed files
+        env:
+          SPAWNED_API_KEY: ${{ secrets.SPAWNED_API_KEY }}
+        run: |
+          set -euo pipefail
+          PROJECT="d03ad163-70d9-43ed-ba43-3998008f8873"
+          COMPONENT="board"
+
+          # Only push files this push actually touched, so an index.html-only
+          # commit doesn't also re-stamp robots.txt for no reason.
+          CHANGED=$(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}")
+
+          for f in web/index.html web/robots.txt; do
+            if echo "$CHANGED" | grep -qx "$f"; then
+              name=$(basename "$f")
+              echo "uploading $name"
+              spawned upload "$PROJECT" --component "$COMPONENT" --file "$f" --key "$name"
+            fi
+          done

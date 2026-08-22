@@ -199,6 +199,15 @@ would grow the history forever to record something no reader would check out.
 `spawned apply` is then only needed when *infrastructure* changes, which after
 the first run is approximately never. A publish is three uploads.
 
+**`.github/workflows/publish-board-static.yml` re-uploads `index.html` and
+`robots.txt` on push, and deliberately nothing else.** The Spawned GitHub App
+now has access to this repo, but `data.js` still can't go through CI — it is
+built from the local SQLite DB, which only exists on this machine, so a real
+data refresh is still `python -m quantscraper daily --publish` run by hand.
+The workflow authenticates with `SPAWNED_API_KEY` (a repo secret holding a
+dedicated `spawned apikeys create` key, not the browser-login session), so an
+HTML/CSS edit to the board goes live without a manual `publish.py` run.
+
 The first version of this pushed an orphan commit to a `board` branch instead,
 because the other way to fill a bucket is a git ref. It cost an afternoon, and
 the lesson is the error message:
