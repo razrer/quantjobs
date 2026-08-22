@@ -1829,3 +1829,37 @@ class RatedPositivelyButNotTest(unittest.TestCase):
         for title in ("Intraday Trader", "Power Trader", "Trader for Electronic Trading"):
             with self.subTest(title=title):
                 self.assertFalse(self._gated(title))
+
+
+class SwedishDefiniteFormTest(unittest.TestCase):
+    """Swedish marks the definite by suffixing the occupational head.
+
+    `underskoterska` against `Undersköterskor` was the plural; this is the same
+    shape one inflection further on, and it is a rule rather than a list so the
+    next definite form nobody has seen is caught too.
+    """
+
+    def _gated(self, title) -> bool:
+        return "off_industry" in _tags(title=title).get("exclusion_reason", set())
+
+    def test_the_definite_forms_the_corpus_actually_carries(self):
+        """Both of these were on the board with the indefinite form gated."""
+        for title in ("Taxiföraren", "Är du maskinföraren vi letat efter?"):
+            with self.subTest(title=title):
+                self.assertTrue(self._gated(title))
+
+    def test_the_bare_head_still_needs_a_compound(self):
+        """A head on its own is not a compound, and must not gate by itself."""
+        self.assertFalse(self._gated("Foraren"))
+
+    def test_a_short_definite_plural_is_below_the_floor_and_that_is_known(self):
+        """`Städarna` folds to eight characters and `_MIN_COMPOUND` is nine.
+
+        Written down rather than fixed. Lowering the floor to reach it would
+        make a suffix test fire on ordinary words, and the form does not occur:
+        `stadarna`, `forarna`, `saljarna` and `kockarna` have **zero hits**
+        between them across all 288,498 live titles. The indefinite plurals
+        that do occur -- `montorer`, `chaufforer`, `skoterskor` -- are heads in
+        their own right for exactly this reason.
+        """
+        self.assertFalse(self._gated("Städarna till Solna"))

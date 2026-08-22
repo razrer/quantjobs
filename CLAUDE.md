@@ -882,6 +882,18 @@ Each of these silently produced wrong results before being caught:
   naming the profession (`äldreboende`, `hemtjänsten`, `ungdomsboende`), and
   the **assignment** where nothing else does — 33 postings headed *Veteraner
   till städuppdrag!* carry no occupation word at all.
+- **Swedish marks the *definite* by suffixing the head too, which is the plural
+  lesson one inflection further on.** `Taxiföraren` and `Sök diskaren` reached
+  the board with `taxiforare` and `diskare` both needles.
+  `_TRADE_HEADS_INFLECTED` appends `-n`, `-na` and `-rna` rather than spelling
+  each form out, so the next definite form nobody has seen is caught too. It is
+  worth seven postings and that is not the argument — it is a rule rather than
+  a list. **The floor still applies**: `Städarna` folds to eight characters
+  against a `_MIN_COMPOUND` of nine, and lowering it would make a suffix test
+  fire on ordinary words. That form does not occur — `stadarna`, `forarna`,
+  `saljarna` and `kockarna` have zero hits between them across all 288,498 live
+  titles — and the indefinite plurals that *do* occur are heads in their own
+  right.
 - **Five Nordic compound heads are the `-arbetare` mistake in a new language,**
   and `_NOT_A_TRADE_HEAD` records them: `-arbejder` is *medarbejder*
   ("employee", 1,711 titles), `-medhjaelper` and `-hjaelper` are

@@ -35,7 +35,7 @@ from . import db, lexicon
 # Bump on every lexicon change: the diff between two versions over the same
 # corpus is a free regression test, and it is the only way to tell "the
 # classifier improved" from "the market moved".
-TAGGER = 44
+TAGGER = 45
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS job_tags (
@@ -398,6 +398,24 @@ _TRADE_HEADS = (
 # instead.
 _NOT_A_TRADE_HEAD = (
     "arbejder", "medhjaelper", "hjaelper", "vagt", "assistenter",
+)
+
+# **Swedish marks the definite by suffixing the head, so the needle cannot see
+# it.** `Taxiföraren` and `Sök diskaren` both reached the board while
+# `taxiforare` and `diskare` were needles -- the same shape as the plural
+# (`Undersköterskor` against `underskoterska`) one inflection further on.
+# Rather than write each form out, the heads are inflected here: `-n` for the
+# definite singular, `-na` and `-rna` for the definite plural.
+#
+# It is worth seven postings, which is not the argument -- the argument is that
+# it is a *rule* rather than a list, so the next definite form nobody has seen
+# is caught too. Dry-run over all 288,498 live titles: seven newly caught, none
+# rated positively. One of the seven is `Tandhygienist till FTV Bergmästaren`,
+# where the head matched a clinic's proper name; it is a dental posting already
+# gated by `tandhygienist`, so the coincidence costs nothing here -- but it is
+# the reason this list is inflected and `_MANAGER_HEADS` is not.
+_TRADE_HEADS_INFLECTED = _TRADE_HEADS + tuple(
+    head + suffix for head in _TRADE_HEADS for suffix in ("n", "na", "rna")
 )
 
 # A one-character prefix is a coincidence rather than a compound, so a match
@@ -1518,7 +1536,14 @@ _OFF_INDUSTRY = _terms(
     #   in the whole corpus, and the board pinned both near the top because
     #   *Trader* is the strongest title word there is.
     "tekniker", "bilbranschen", "bilindustrin", "biltvatt", "bilrekondare",
-    "fordonssaljare", "montage", "lagerarbete",    # ----------------------------------------------------------------------
+    "fordonssaljare", "montage", "lagerarbete",
+    # The last of the residual, read off the rebuilt board. **`kassa` was
+    # dropped**: it is the cash desk in a shop and the cash position in a
+    # treasury, so it is the `handel` trap in a new word -- 108 clean hits
+    # today and a Swedish liquidity role would be the first thing it ate.
+    "diskaren", "servicepersonal", "hotellreceptionister", "postanstalld",
+    "fardtjanst", "sjukresor", "forestry", "turism", "fastighetsformedling",
+    "baka pizza", "farskvaror",    # ----------------------------------------------------------------------
     # **Switzerland, the third focus hub with a national board.** 22,903 Swiss
     # postings arrived and only 50 of them reach the board -- the German,
     # Dutch and French words `lexicon.UNRELATED` already carried do most of
@@ -2186,7 +2211,7 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
         off_industry = danish
     elif trade:
         off_industry = f"title {trade!r}"
-    elif compounded_trade := _compound(just_title, _TRADE_HEADS):
+    elif compounded_trade := _compound(just_title, _TRADE_HEADS_INFLECTED):
         # `Elsäljare` and `Fältsäljare` are one token each, so no needle sees
         # them. Read from the title alone, never the department: a
         # `Säljarstöd` department on a markets posting is the firm's org chart.
