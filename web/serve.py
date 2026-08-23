@@ -21,9 +21,6 @@ from quantscraper import labels  # noqa: E402
 ROOT = Path(__file__).resolve().parent
 PORT = 8731
 
-# The board's short facet keys, translated to `labels.csv`'s column names.
-_DIMENSION = {"rel": "relevance", "sen": "seniority"}
-
 
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs) -> None:
@@ -39,7 +36,7 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(length) or b"{}")
-            dimension = _DIMENSION[body["dim"]]
+            dimension = labels.DIMENSION_NAMES[body["dim"]]
             key = (body["ats"], body["token"], body["job_id"])
             context = {name: body.get(name, "") for name in labels.CONTEXT}
             labels.upsert(labels.PATH, key, dimension, body.get("value", ""), context)

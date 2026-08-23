@@ -33,6 +33,23 @@
       "type": "CDN",
       "default_root_object": "index.html",
       "price_class": "PriceClass_100"
+    },
+    {
+      "name": "correction-writer",
+      "type": "Function",
+      "runtime": "python3.12",
+      "handler": "main.handler",
+      "memory": 128,
+      "timeout": 10,
+      "source": {
+        "git": {
+          "url": "github.com/razrer/quantjobs",
+          "ref": "master",
+          "context": "functions/correction_writer",
+          "commands": ["zip function.zip main.py"],
+          "artifact": "function.zip"
+        }
+      }
     }
   ],
   "connections": [
@@ -44,6 +61,15 @@
       "from": "spawned-app",
       "to": "board-cdn",
       "host": "quantjobs.spawned.app"
+    },
+    {
+      "from": "correction-writer",
+      "to": "board"
+    },
+    {
+      "from": "spawned-app",
+      "to": "correction-writer",
+      "host": "quantjobs-api.spawned.app"
     }
   ]
 }

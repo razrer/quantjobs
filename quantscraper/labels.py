@@ -70,6 +70,11 @@ HEADER = ("n", *FILL, *CONTEXT, *KEYS)
 # Kept for callers that only care which columns are writable.
 FIELDS = (*KEYS, *FILL)
 
+# The board's short facet keys, translated to this file's column names. Shared
+# by `web/serve.py` (local corrections) and `cli._corrections` (corrections
+# pulled back from the live board's Lambda) so the two paths can't drift.
+DIMENSION_NAMES = {"rel": "relevance", "sen": "seniority"}
+
 RELEVANCE = ("relevant", "less_relevant", "adjacent", "rejected")
 # `student_intern` was here and is gone, at the user's decision. It was the
 # only value on this scale the tagger reads from a *body* rather than a title,

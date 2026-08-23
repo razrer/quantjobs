@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 from collections.abc import Callable
@@ -11,8 +12,8 @@ from datetime import datetime, timedelta, timezone
 
 from . import (
     alerts, ats, audit, bodies, coverage, db, discover, domains, extract,
-    fca, jobbsafari, jobindex, jobroom_ch, jobstream, labels, mycareersfuture,
-    pages,
+    fca, http, jobbsafari, jobindex, jobroom_ch, jobstream, labels,
+    mycareersfuture, pages,
     resolve, sites, tagging,
 )
 from .registries import REGISTRIES
@@ -21,6 +22,10 @@ from .registries import REGISTRIES
 # these are the firms with no website at all; the SEC already publishes one for
 # most of its filers.
 FOCUS_SOURCES = ("fi_se", "afm_nl", "finanstilsynet_dk", "mas_sg", "sfc_hk", "seed")
+
+# The live board's write route (`functions/correction_writer`), read back
+# here. See `_corrections` below and CLAUDE.md's "Publishing it".
+CORRECTIONS_ENDPOINT = "https://quantjobs-api.spawned.app/corrections"
 
 
 def _record_poll(
@@ -764,6 +769,44 @@ def _alerts(database: str) -> int:
     return 1
 
 
+def _corrections(endpoint: str) -> int:
+    """Pull hand corrections made on the live board back into labels.csv.
+
+    The deployed board is a bucket behind a CDN with no server of its own, so
+    a Reject click there (or a relevance/seniority override) has nowhere
+    local to land -- it used to reach only that browser's `localStorage`.
+    `functions/correction_writer` is the other half: a small Lambda the board
+    posts to instead, appending into one JSON blob in the same bucket the
+    board's own files live in. This reads that blob back and calls the same
+    `labels.upsert` that `web/serve.py` calls for a correction made locally,
+    so a click made on a phone reaches the tagger the same way one made at a
+    desk running `serve.py` does -- on the next pull rather than immediately.
+
+    Safe to run repeatedly: `labels.upsert` overwrites keyed on
+    (ats, token, job_id), so re-pulling the same corrections is a no-op.
+    """
+    try:
+        raw = http.get_text(endpoint)
+    except Exception as exc:  # noqa: BLE001 -- report and exit, nothing else running
+        print(f"could not reach {endpoint}: {exc}", file=sys.stderr)
+        return 1
+
+    data = json.loads(raw or "{}")
+    if not data:
+        print("no corrections pending")
+        return 0
+
+    for entry in data.values():
+        key = (entry["ats"], entry["token"], entry["job_id"])
+        context = {name: entry.get(name, "") for name in labels.CONTEXT}
+        labels.upsert(
+            labels.PATH, key, labels.DIMENSION_NAMES[entry["dim"]],
+            entry.get("value", ""), context,
+        )
+    print(f"pulled {len(data)} correction(s) into {labels.PATH}")
+    return 0
+
+
 def _stats(database: str) -> int:
     connection = db.connect(database)
 
@@ -873,6 +916,10 @@ def _daily(database: str, full: bool, publish: bool) -> int:
     # at the current version, so the first pass sees the day's arrivals and the
     # second sees the few hundred that just gained a body.
     steps: list[tuple[str, Callable[[], int]]] = [
+        # Cheap (one GET) and unrelated to the rest -- runs first so a Reject
+        # clicked on the live board reaches `labels.csv` before this run's
+        # `tag` passes, rather than sitting a day behind for no reason.
+        ("corrections", lambda: _corrections(CORRECTIONS_ENDPOINT)),
         ("sweden", lambda: _sweden(database, None)),
         ("denmark", lambda: _denmark(database, since, None)),
         ("switzerland", lambda: _switzerland(database, None)),
@@ -1135,6 +1182,15 @@ def main(argv: list[str] | None = None) -> int:
         "alerts", help="flag sources that broke quietly (Layer 0 health)"
     )
 
+    corrections_command = commands.add_parser(
+        "corrections",
+        help="pull hand corrections made on the live board into labels.csv",
+    )
+    corrections_command.add_argument(
+        "--endpoint", default=CORRECTIONS_ENDPOINT,
+        help="the live board's correction-reading Lambda (default: the deployed one)",
+    )
+
     daily_command = commands.add_parser(
         "daily", help="run the standing sequence and rebuild the board"
     )
@@ -1170,6 +1226,8 @@ def main(argv: list[str] | None = None) -> int:
         return _tag(args.db, args.limit, args.dimension)
     if args.command == "pages":
         return _pages(args.db, args.limit, args.workers)
+    if args.command == "corrections":
+        return _corrections(args.endpoint)
     if args.command == "alerts":
         return _alerts(args.db)
     if args.command == "jobstream":

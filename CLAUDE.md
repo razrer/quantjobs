@@ -228,6 +228,25 @@ the lesson is the error message:
   `RefreshHit` with the new bytes, measured rather than assumed. Nothing has to
   invalidate the distribution, and no cache-busting query string is needed.
 
+**The board's Reject/reclassify clicks needed a way off a static site, and the
+answer is one Function, not a database.** `web/serve.py` upserts a correction
+straight into `labels.csv` when the board runs locally, but the deployed
+board is a bucket behind a CDN with no server -- a click there only ever
+reached that browser's `localStorage`, gone on the next clear, never seen by
+the tagger. `functions/correction_writer` is a small Lambda (`infra.json`'s
+`correction-writer`, reachable at `quantjobs-api.spawned.app`) that the board
+posts to instead, appending into one JSON blob in the same bucket the board's
+own files live in (`_corrections/corrections.json`). `python -m quantscraper
+corrections` -- also the first step of `daily` -- reads that blob back and
+calls the same `labels.upsert` `serve.py` calls, so a correction made on a
+phone reaches `labels.csv` the same way one made at a desk running
+`serve.py` does, just on the next pull instead of immediately. One JSON blob
+rather than one object per correction, and no DynamoDB table: this is one
+person clicking a handful of corrections a month, so a read-modify-write race
+is not a real risk, and it keeps the added cost to one component
+(**Spawned bills ~$3.89/mo for a Function**, per-second regardless of
+invocation count) rather than two.
+
 `fca` needs `FCA_EMAIL` and `FCA_KEY` in `.env` (gitignored, never committed).
 
 `run.ps1` / `run.sh` wrap these with the correct interpreter (see below).

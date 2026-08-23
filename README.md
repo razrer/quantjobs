@@ -12,6 +12,34 @@ Full methodology: `C:\Users\razre\.claude\plans\snoopy-growing-hoare.md`.
 Execution order and exit criteria: [PLAN.md](PLAN.md). Guidance for Claude
 Code working in this repo, including every documented gotcha: [CLAUDE.md](CLAUDE.md).
 
+## Quick reference: updating the live board
+
+Two different things can be "out of date," and they're fixed differently.
+
+**1. New job listings** (fetch everything and push it live):
+
+```bash
+./run.ps1 daily --full --publish
+```
+
+One command — sweeps every source, re-tags, rebuilds the board, and uploads
+the new data. Takes a while (the re-tag alone is several minutes). Run it from
+the repo root; on this machine it's PowerShell, so `./run.ps1`, not `./run.sh`.
+
+**2. A code change** (e.g. you edited `web/index.html`):
+
+```bash
+git add web/index.html
+git commit -m "describe the change"
+git push quantjobs master
+```
+
+Just commit and push to `master` — a GitHub Action re-uploads `index.html` /
+`robots.txt` to the live site automatically. No manual publish step for code.
+
+(Full details, including infrastructure changes, are in
+[Pushing and publishing](#pushing-and-publishing) below.)
+
 ## Running it
 
 No dependencies — standard library only, so there is nothing to install.
@@ -63,7 +91,16 @@ python -m quantscraper list --dimensions      # every filterable value
 python -m quantscraper coverage               # how much of the market we see
 python -m quantscraper sample --limit 100     # draw postings to hand-label
 python -m quantscraper labels                 # score the lexicon against them
+python -m quantscraper corrections            # pull Reject/relevance/seniority
+                                               # clicks made on the live board
 ```
+
+The live board has no server of its own, so a correction made there posts to
+a small Lambda (`functions/correction_writer`) instead of straight to
+`labels.csv`. `corrections` reads that back and upserts it in, same as
+`web/serve.py` already does for corrections made while running the board
+locally. It's also the first step of `daily`, so a normal day picks these up
+automatically — run it on its own only if you want a click to land sooner.
 
 **The standing sequence**
 
