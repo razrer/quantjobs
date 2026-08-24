@@ -169,11 +169,13 @@ hand.
 `data.js` omits every dimension sitting on its "nothing known" default rather
 than writing `unknown` a hundred thousand times. The board reads a missing key
 as exactly that — do not "fix" it by writing the defaults back in. It was ~33 MB
-when that mattered most; the five gates have since taken the board from about
-45,000 postings to **5,211 out of a 259,083-row corpus**, so the file is 3.1 MB
-and the omission is now worth roughly a third of it rather than a half. If it
-ever looks *too* small, the number to read is the per-gate breakdown every
-build prints, not the file size.
+when that mattered most; the five gates have since taken the board to **8,278
+out of a 295,347-row corpus**, so the file is 4.7 MB and the omission is now
+worth roughly a third of it rather than a half. If it ever looks *too* small,
+the number to read is the per-gate breakdown every build prints, not the file
+size. (It read 5,211 before the Nordic pass at lexicon 46; the gates did not
+loosen so much as stop mistaking three thousand postings for junk — see the
+board-gates section below.)
 
 ## Publishing it
 
@@ -1191,12 +1193,80 @@ emit `unknown`, so it can convert a non-answer and can never overturn a
 positive — which is what stops it manufacturing a false rejection in the rows
 that matter. It also costs ~0.1 ms per posting.
 
+**"Too much junk and too little jobs" was one fault, not two, and the bucket
+holding both is `relevance: unknown`.** The reader's complaint about the
+Swedish and Danish board named *inköpare* as the junk and Nordea as the miss.
+Measured: **199 Nordic cards, of which 176 were `unknown`** — and that bucket
+held `Inköpare för UBW Inköp support` thirteen times *and* `Commodities Sales
+to FICC Markets | SEB`, `AP3 söker två globala aktieförvaltare`, `Internship
+till Allokering, Likvida Marknader och Analys på AP4` and Swedbank's `APO to
+Group Treasury`. The board sorts by fit, so the two sorted together: four
+`strong` cards, then 176 rows in which the purchasers outnumbered the desks.
+Emptying `unknown` from below (occupation words) and from above (a markets
+reading) are the same repair, and doing only one of them makes the page worse.
+
+**`lexicon.MARKETS` existed, was correct, and nothing read it for relevance.**
+`tagging.py`'s ladder went core → exclusions → `adjacent`+markets → body
+phrases → `judge` → `unknown`, with **no branch for a title that names markets
+and nothing else**. So `Market Data Specialist`, `Backoffice Administrator -
+Mutual Funds` and `.Net developer to the Portfolio Solutions and Derivatives
+Clearing Tech team` all returned the same verdict as a purchaser. The branch
+that reads it runs **last, after `judge`**, which is the same placement rule
+`judge` itself is held to: it can only ever convert an `unknown`, so it cannot
+rescue a wealth adviser or overturn any rejection. It confers `adjacent` and no
+better — a markets word says *where* a posting is, never what the work is.
+
+**Adding that branch is what exposes every ordinary word hiding on `MARKETS`,
+and there were two.** The list's own docstring bans ordinary English from it
+and the same rule had never been applied to Swedish: **bare `handel` was on
+it**, though `CLAUDE.md` has said for a long time that `handel` is *commerce*
+and that only the compounds survive. 85 live titles carry it and they are
+`Butiksmedarbetare, team kolonial/e-handel` and `Butiksmedarbejder til special
+vin handel` — supermarket staff, essentially all of them. And `front office`,
+which is genuine on 209 titles, is a hotel reception on `Shiftleader Front
+Office, Scandic Spectrum`; the shift word is the discriminator, not the phrase.
+**A contextual list is only as safe as the strongest thing that reads it.**
+
+**`förvaltare` is the one Swedish word this board turns on, and it means two
+opposite jobs.** *Teknisk förvaltare* and *Ekonomisk Förvaltare till Sweax* are
+property caretakers; *Ränteförvaltare till Swedbank Robur* is a fixed-income
+portfolio manager. The bare head belongs on neither list — the qualified
+compounds (`ränteförvaltare`, `aktieförvaltare`, `portföljförvaltare`) go on
+`MARKETS` and the property ones on `_OFF_INDUSTRY`. Same shape as `handel` one
+paragraph up, and `råvaror` before it.
+
+**A Swedish job title is one token, and that killed `ENGINEERING` too.**
+`utvecklare` has been a needle on `lexicon.ENGINEERING` for a long time while
+the corpus advertises `Fullstackutvecklare`, `Javautvecklare` and
+`Backendutvecklare` — 855 live titles a whole-word match cannot see inside.
+`ENGINEERING_HEADS` matches them as a suffix, exactly as `_TRADE_HEADS` does
+for occupations. A broad head is safe **here specifically because the list is
+two-sided**: `Systemutvecklare till SEB Markets` keeps, `Fullstackutvecklare
+till en e-handelsplattform` does not.
+
+**The Nordic *markets* vocabulary really does carry almost no signal, and the
+dry-run is worth repeating rather than re-deriving.** 54 candidates over all
+295,347 live titles: **forty have zero hits** — `räntebärande`,
+`obligationsportfölj`, `marknadsrisk`, `modellvalidering`, `handelsbord`, not
+one occurrence between them. Translating the *negative* half is what moves a
+Nordic board; the positive half is insurance, and the twelve words that do
+occur are worth having only because each is cheap.
+
 **A department is nothing but the desk's name, so it must never reject the
 role.** `Senior Trading Associate` sits in a department called *Trading
 Operations* and the desk-support rule read title and department together — so
 the desk's name rejected a seat on the desk. That was the first false rejection
 the hand-labelled fixture found, which is exactly what it exists for. Desk
 support is read from the **job title alone**.
+
+**And it has now happened three times, so treat "title only" in a comment as a
+claim to check rather than a fact.** `discretionary_investing`'s own comment
+says "matched on the title only" — and it was handed `fold(title, department)`
+like every other `_EXCLUSION` category. Nordea's `Rates Sales - SEK Focus` sits
+in a department called *Investment banking / Institutional banking / Markets*
+and was rejected outright on `investment banking`. Seniority was the second
+occurrence and desk support the first; **whenever a needle list says it reads
+the title, check what text the call site actually passes it.**
 
 **A management title outranks a weak positive, the same way an exclusion
 does.** `Director of Trading`, `Head of Managed Accounts`, `Applied Science
@@ -1316,10 +1386,56 @@ corpus is a six-word title.
 live in `web/build_data.py`'s `GATES`: `off_industry` (another profession),
 `off_location` (outside the target and semi-target geography), `out_of_reach`
 (director, VP, manager, project leader, product owner — a rank nobody reaches
-from under a year of experience), `phd_required` (a doctorate stated as
+from under a year of experience; **a plain `Senior` is no longer one of
+them**, see below), `phd_required` (a doctorate stated as
 compulsory, which is an eligibility fact rather than a verdict — 21 postings)
 and `rejected` (the tagger read it and it is not this line of work). Each is counted separately on every build, because one
 total would hide which of the four ate a hub.
+
+**`senior_6_10` came off `out_of_reach` at the user's instruction, and what it
+was eating is the argument.** It gated 9,914 postings, 947 of them in Stockholm
+and Copenhagen, and in the Nordics what it removed was not leadership: Nordea's
+`Quantitative Risk Analyst, Credit Risk Data Management [Assistant/Regular/
+Senior]` — a title whose own bracket offers the assistant rung — plus Swedbank's
+`Senior quantitative analyst within credit risk` and Lynx's `Senior Engineer –
+Systematic Equity`. A Nordic bank stamps *Senior* on a three-to-five-year
+grade, which is the argument `_NOT_HEAD_GRADE` already makes about `Associate
+Director`. The rank is still read and still ranks: `_fit` caps it at `stretch`.
+Real leadership is untouched — `_MANAGEMENT` catches Head of, Chief, Director,
+Manager and Team Lead by title, and `lead` and `head_or_md` stay on the gate.
+
+**Taking a gate off makes `_fit` branches reachable that were not, and one of
+them ran backwards.** `_fit` returned `stretch` for any `senior_6_10` posting
+*before* it looked at relevance — harmless while those postings were removed
+before the board saw them, and wrong the moment they were not: `stretch`
+outranks `unknown` in `index.html`'s `FIT_RANK`, so **290 of the 466 Nordic
+cards became `Senior <IT consultant>` sitting above every genuine markets
+posting still at `unknown`**. A rank word is not evidence about subject matter
+and `fit` is about subject matter. The cap now needs a relevance to cap.
+Whenever a gate is removed, re-read what downstream ranking it was hiding.
+
+**A student rung outranks a management word, because it is the grade the title
+states about the applicant.** Nordea's `Student Client Credit Manager to
+Stockholm` sits in a department called *Internships / Student positions* and was
+rejected outright on *manager*, which there names the book rather than the
+reports; `Intern, AI Solutions for External Manager Selection` and `Early Career
+Intern - Fundamental Equities COO Office` failed the same way. 95 titles carry
+both signals and **the majority are Greystar's `Student Living` apartment
+brand**, where *student* is the tenant — those never depended on this rule,
+since `student living` is an `_OFF_INDUSTRY` word and `off_industry` is the
+first gate `build_data.py` tries.
+
+**`discretionary_investing` ranks now instead of rejecting, at the user's
+instruction and against the hand-labelled sheet.** The sheet rejected nine such
+rows in a row and it is right about the *work*; the instruction is about the
+*board* — a markets seat at a markets firm belongs on it, ranked below the
+quant roles rather than removed. `Rates Sales - SEK Focus` at Nordea and
+`Commodities Sales to FICC Markets` at SEB are the postings that decided it,
+and the reader's words were *"it is ok if it picks up junk, i can remove them
+myself"*. The category still fires and still records its evidence, so `list
+--exclude discretionary_investing` shows exactly what it caught; `_fit` caps it
+at `plausible`. `Partner, Private Equity` still goes, on `_MANAGEMENT`, which
+this did not touch.
 
 **`rejected` is the widest gate and the one to be most careful with.** It
 removes 12,637 postings, more than the other three combined, and it is the only

@@ -240,14 +240,49 @@ class HandLabelledTest(unittest.TestCase):
         self.assertNotIn("management title", tags.get("relevance_evidence", ""))
         self.assertNotEqual(tags["seniority"], {"head_or_md"})
 
-    def test_discretionary_investing_is_not_quant_work(self):
-        """Nine rejections in a row on the hand-labelled sheet, while the
-        lexicon had `investment analyst` filed as a weak positive."""
+    def test_discretionary_investing_ranks_rather_than_rejects(self):
+        """**Reversed at the reader's instruction**, against nine rejections in
+        a row on the hand-labelled sheet.
+
+        The sheet said these are not quant work and it is right about the
+        work. The instruction is about the *board*: a markets seat at a markets
+        firm belongs on it, ranked below the quant roles rather than removed
+        from view. `Rates Sales - SEK Focus` at Nordea and `Commodities Sales
+        to FICC Markets` at SEB are the postings that decided it, and the
+        reader's words were "it is ok if it picks up junk, i can remove them
+        myself".
+
+        So the category still fires and is still recorded with its evidence --
+        `list --exclude discretionary_investing` still shows exactly what it
+        caught -- and it no longer reaches `rejected`. `_fit` caps it at
+        `plausible`, which is what "below the quant roles" means here."""
         for title in ("Senior Investment Analyst", "Portfolio Associate",
-                      "Asset Management Analyst", "Partner, Private Equity",
-                      "Equity Research Analyst"):
+                      "Asset Management Analyst", "Equity Research Analyst"):
             with self.subTest(title=title):
-                self.assertEqual(_tags(title=title)["relevance"], {"rejected"})
+                tags = _tags(title=title)
+                self.assertNotIn("rejected", tags["relevance"])
+                self.assertIn("discretionary_investing", tags["exclusion_reason"])
+
+    def test_a_partner_is_still_leadership_whatever_desk_it_names(self):
+        """`Partner, Private Equity` was on the list above and comes off it:
+        the reason it goes is `_MANAGEMENT`, which is untouched by the
+        instruction and would remove it whatever the desk was called. Worth
+        pinning separately, so a later change to the investing category cannot
+        be read as having decided this one."""
+        tags = _tags(title="Partner, Private Equity")
+        self.assertEqual(tags["relevance"], {"rejected"})
+        self.assertIn("out_of_reach", tags["exclusion_reason"])
+
+    def test_a_department_is_not_the_desk_for_this_category_either(self):
+        """Its own comment said "matched on the title only" and it was handed
+        `fold(title, department)`. `Rates Sales - SEK Focus` sits in a
+        department called *Investment banking / Institutional banking /
+        Markets* and was rejected on `investment banking` -- the desk's name,
+        not the job's. Third time this file has made the same mistake."""
+        tags = _tags(title="Rates Sales - SEK Focus",
+                     department="Investment banking / Institutional banking / Markets")
+
+        self.assertNotIn("discretionary_investing", tags.get("exclusion_reason", set()))
 
     def test_a_quant_qualifier_still_rescues_the_same_desk(self):
         """The qualifier is the whole difference, as it is for `Credit Risk
@@ -1200,9 +1235,50 @@ class OutOfReachTest(unittest.TestCase):
         for title in ("Director of Trading", "VP, Quantitative Analyst",
                       "Manager - Quantitative Strategies", "Product Owner - Risk",
                       "Project Leader, Analytics", "Head of Quantitative Research",
-                      "Senior Quantitative Developer"):
+                      "Lead Quantitative Developer"):
             with self.subTest(title=title):
                 self.assertTrue(self._gated(title))
+
+    def test_a_plain_senior_title_ranks_rather_than_gates(self):
+        """**`senior_6_10` came off the gate at the reader's instruction.**
+
+        It was removing 9,914 postings, 947 of them in Stockholm and
+        Copenhagen, and what it took there was not leadership: `Senior
+        quantitative analyst within credit risk` at Swedbank, `Senior Engineer
+        - Systematic Equity` at Lynx, Nordea's `Quantitative Risk Analyst,
+        Credit Risk Data Management [Assistant/Regular/Senior]` -- a title
+        whose own bracket offers the assistant rung. A Nordic bank stamps
+        *Senior* on a three-to-five-year grade, which is the argument
+        `_NOT_HEAD_GRADE` already makes for `Associate Director`.
+
+        The rank is still read and still ranks: `_fit` caps it at `stretch`."""
+        for title in ("Senior Quantitative Developer",
+                      "Senior Quantitative Researcher"):
+            with self.subTest(title=title):
+                self.assertFalse(self._gated(title))
+                self.assertEqual(_tags(title=title)["seniority"], {"senior_6_10"})
+                self.assertEqual(_tags(title=title)["fit"], {"stretch"})
+
+    def test_a_student_title_is_not_a_leadership_title(self):
+        """`Student Client Credit Manager to Stockholm` sits in a department
+        called "Internships / Student positions" at Nordea and was rejected
+        outright on the word *manager*, which there names the book rather than
+        the reports. A management word in an intern title is the office the
+        intern sits in."""
+        for title in ("Student Client Credit Manager to Stockholm",
+                      "Intern, AI Solutions for External Manager Selection",
+                      "Early Career Intern - Fundamental Equities COO Office"):
+            with self.subTest(title=title):
+                self.assertFalse(self._gated(title))
+
+    def test_the_student_veto_does_not_reach_student_housing(self):
+        """Greystar's `Student Living` is an apartment brand -- *student* is
+        the tenant, not the applicant -- and it is the majority of the 95
+        titles carrying both signals. They never depended on this rule:
+        `student living` is an `_OFF_INDUSTRY` word, and `off_industry` is the
+        first gate `build_data.py` tries."""
+        tags = _tags(title="Leasing Manager - Haven at Elgin (Student Living)")
+        self.assertIn("off_industry", tags["exclusion_reason"])
 
     def test_nordic_manager_compounds_are_removed(self):
         """Swedish builds a manager's title by compounding and no word list
@@ -1658,11 +1734,19 @@ class YearsFigurePromotesOnly(unittest.TestCase):
                 tags = _tags(title=title, description=self.BODY.format(n=floor))
                 self.assertEqual(tags["seniority"], {"senior_6_10"})
 
-    def test_the_demoted_posting_is_gated_again(self):
-        """The point of the fix, not a side effect of it."""
-        tags = _tags(title="Senior Software Engineer",
+    def test_the_demoted_posting_is_ranked_down_again(self):
+        """The point of the fix, not a side effect of it.
+
+        It used to assert the gate, because `senior_6_10` was one. That rung
+        ranks rather than gates now, at the reader's instruction, so the
+        consequence to pin is the one that still exists: the rank survives the
+        body's smaller number and `_fit` caps the posting at `stretch`. A
+        quant title is used because `_fit` only reads the rank once relevance
+        has been decided -- see the comment there."""
+        tags = _tags(title="Senior Quantitative Researcher",
                      description=self.BODY.format(n=3))
-        self.assertIn("out_of_reach", tags["exclusion_reason"])
+        self.assertEqual(tags["seniority"], {"senior_6_10"})
+        self.assertEqual(tags["fit"], {"stretch"})
 
     def test_a_title_with_no_grade_still_takes_the_floor(self):
         tags = _tags(title="Quantitative Researcher",
@@ -1863,3 +1947,160 @@ class SwedishDefiniteFormTest(unittest.TestCase):
         their own right for exactly this reason.
         """
         self.assertFalse(self._gated("Städarna till Solna"))
+
+
+class MarketsTitleIsNotUnknownTest(unittest.TestCase):
+    """**A title that names a markets desk is not a posting nothing looked at.**
+
+    The reader's complaint about the Swedish and Danish board was "too much
+    junk, e.g. inköpare, and too little jobs", and the two halves turned out to
+    be one fault. 176 of the 199 Nordic cards were `relevance: unknown`, and
+    that bucket held both `Inköpare för UBW Inköp support` and `Commodities
+    Sales to FICC Markets | SEB` -- so on a board that sorts by fit they sat in
+    the same block, and the real seats were underneath the purchasers.
+
+    `lexicon.MARKETS` had the right words the whole time and nothing read them
+    for relevance. The branch runs last, after `judge`, so it can only ever
+    convert an `unknown`.
+    """
+
+    def _relevance(self, title, department=None, description=None):
+        return _tags(title=title, department=department,
+                     description=description)["relevance"]
+
+    def test_a_markets_desk_in_the_title_reaches_adjacent(self):
+        for title in ("Commodities Sales to FICC Markets",
+                      "Market Data Specialist",
+                      "Backoffice Administrator - Mutual Funds",
+                      "APO to Group Treasury",
+                      "Net developer to the Portfolio Solutions and "
+                      "Derivatives Clearing Tech team"):
+            with self.subTest(title=title):
+                self.assertEqual(self._relevance(title), {"adjacent"})
+
+    def test_it_never_overturns_a_rejection(self):
+        """The placement is the safety property. Every exclusion, every hard
+        gate and the whole occupation lexicon have already had their say by the
+        time this runs, so it cannot rescue a posting they removed."""
+        for title in ("Receptionist, Trading Floor",
+                      "Sjuksköterska till Capital Markets",
+                      "Head of Fixed Income"):
+            with self.subTest(title=title):
+                self.assertEqual(self._relevance(title), {"rejected"})
+
+    def test_it_reads_the_title_and_never_the_body(self):
+        """A body naming markets is the employer describing itself, which is
+        the failure mode this file records against every body-matched rule."""
+        body = ("We are a systematic trading firm active in fixed income and "
+                "foreign exchange across every capital market. " * 8)
+        self.assertEqual(self._relevance("Inköpare för UBW Inköp support",
+                                         description=body),
+                         {"rejected"})
+
+    def test_a_hotel_front_office_is_not_a_trading_floor(self):
+        """`front office` is one of the strongest words on `MARKETS` and 209
+        titles carry it -- all but a handful genuine desks. The shift word is
+        the discriminator, not the phrase."""
+        self.assertNotEqual(
+            self._relevance("Shiftleader Front Office, Scandic Spectrum"),
+            {"adjacent"},
+        )
+
+
+class NordicVocabularyTest(unittest.TestCase):
+    """Swedish and Danish, in both directions, read off the board the reader
+    complained about."""
+
+    def _tagged(self, title, **kw):
+        return _tags(title=title, **kw)
+
+    def test_the_occupations_the_reader_named_are_gated(self):
+        """`Inköpare` alone was thirteen of the 199 Nordic cards, from six
+        consultancies advertising the same `UBW Inköpssupport` seat."""
+        for title in ("Inköpare för UBW Inköp support", "Inköpsansvarig",
+                      "Operativ inköpare till Apotea | Stockholm",
+                      "IT-upphandlare till Solna stad",
+                      "Kategoriansvarig med kommersiellt driv till Apotea",
+                      "Fastighetsingenjör", "Miljökonsult inom förorenad mark",
+                      "Logistikkoordinator", "Servicekoordinator til Vores Bolig"):
+            with self.subTest(title=title):
+                self.assertIn("off_industry",
+                              self._tagged(title)["exclusion_reason"])
+
+    def test_the_corporate_functions_are_excluded_in_nordic_too(self):
+        """The English words rejected an `HR Business Partner` and said nothing
+        about `HR-ansvarig`. A corporate function is the same job in any
+        language."""
+        for title in ("HR-ansvarig", "Kampanjkoordinator till Dagab",
+                      "Marknadskoordinator", "Lönekonsult på 50%",
+                      "Fotograf till Svenskt Kosttillskott"):
+            with self.subTest(title=title):
+                self.assertEqual(self._tagged(title)["relevance"], {"rejected"})
+
+    def test_forvaltare_is_a_caretaker_and_ranteforvaltare_is_not(self):
+        """**The one word this whole exercise turns on.** Swedish `förvaltare`
+        is a property caretaker in `Teknisk förvaltare` and a portfolio manager
+        in `Ränteförvaltare till Swedbank Robur`, and the second is a posting
+        this board exists to find. Only the qualified compounds are markets
+        words; the bare head is on neither list."""
+        self.assertIn("off_industry",
+                      self._tagged("Teknisk förvaltare till Lennart Ericsson "
+                                   "Fastigheter AB")["exclusion_reason"])
+        self.assertNotIn("rejected",
+                         self._tagged("Ränteförvaltare till Swedbank Robur")["relevance"])
+        self.assertNotIn("rejected",
+                         self._tagged("AP3 söker två globala "
+                                      "aktieförvaltare")["relevance"])
+
+    def test_bare_handel_is_commerce_and_is_not_a_markets_word(self):
+        """`CLAUDE.md` has said so for a long time and `lexicon.MARKETS` kept
+        the bare word anyway -- invisible while it was only ever the second
+        half of a two-sided test. 85 live titles carry it and they are
+        supermarket and wine-shop staff."""
+        self.assertIsNone(
+            lexicon.first(lexicon.normalize("Butiksmedarbetare, team "
+                                            "kolonial/e-handel, Willys"),
+                          lexicon.MARKETS)
+        )
+
+    def test_swedish_developer_compounds_reach_the_engineering_rule(self):
+        """A Swedish job title is one token, so the `utvecklare` needle that
+        has been on `ENGINEERING` for a long time could not see
+        `Fullstackutvecklare`. Same shape as `_TRADE_HEADS` one module over."""
+        for title in ("Fullstackutvecklare till en e-handelsplattform",
+                      "Javautvecklare sökes", "Backendutvecklare",
+                      "Lösningsarkitekt till IT"):
+            with self.subTest(title=title):
+                self.assertEqual(lexicon.judge(title).reason, "pure_engineering")
+
+    def test_the_engineering_rule_stays_two_sided_in_swedish_too(self):
+        """Which is what makes a broad compound head safe: `ENGINEERING` never
+        rejects on its own."""
+        self.assertEqual(
+            lexicon.judge("Systemutvecklare till SEB Markets, fixed income").verdict,
+            "keep",
+        )
+
+
+class RankDoesNotPromoteAnUnreadPostingTest(unittest.TestCase):
+    """`stretch` outranks `unknown` on the board, so a rank word must not lift
+    a posting nobody has read above one that was.
+
+    While `senior_6_10` was a gate this was unreachable -- those postings never
+    got to `_fit`. Taking the gate off made it reachable, and 290 of the 466
+    Nordic cards became `Senior <IT consultant>` sitting above every genuine
+    markets posting still at `unknown`."""
+
+    def test_a_senior_title_with_no_verdict_stays_unknown(self):
+        """A title no list places, which in this corpus is most of a national
+        board. `Senior Javautvecklare` will not do -- the Swedish engineering
+        compounds reject now, and that is a verdict -- and neither will any
+        named occupation, for the same reason."""
+        tags = _tags(title="Senior Grid Specialist")
+        self.assertEqual(tags["relevance"], {"unknown"})
+        self.assertEqual(tags["fit"], {"unknown"})
+
+    def test_a_senior_title_with_a_verdict_still_caps_at_stretch(self):
+        self.assertEqual(
+            _tags(title="Senior Quantitative Researcher")["fit"], {"stretch"}
+        )

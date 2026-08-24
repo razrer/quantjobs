@@ -94,7 +94,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-VERSION = 5
+VERSION = 6
 
 # Everything that is not a letter, digit, `+` or `#` is a separator. Those two
 # are kept because `c++` and `c#` name things a posting is graded on, and
@@ -269,9 +269,67 @@ MARKETS = _terms(
     "counterparty risk", "risk analytics", "investment strategy",
     "investment research", "asset allocation", "exchange traded",
     "alternative investments", "listed derivatives",
-    "handel", "värdepapper", "kapitalmarknad", "kapitalförvaltning",
+    # Two more the Nordic board asked for, both measured over all 295,347 live
+    # titles and both sitting entirely inside finance. `treasury` is 375
+    # titles -- rates, funding and FX, which is markets-adjacent rather than
+    # markets, and `adjacent` is exactly the rank this list confers.
+    # `mutual fund` is fifteen. Swedbank's `APO to Group Treasury` and
+    # Avanza's `Backoffice Administrator - Mutual Funds` are the two that
+    # found them. **`cash management` was measured and dropped**: 64 titles,
+    # all genuine, but it is transaction banking rather than markets and the
+    # word belongs nearer `non_quant_finance`.
+    "treasury", "mutual fund", "mutual funds",
+    # **Bare `handel` came off this list, and it is the rule the block above
+    # states applied to Swedish.** `CLAUDE.md` has recorded for a long time
+    # that `handel` is *commerce* -- e-handel, detaljhandel, dagligvaruhandel
+    # -- and names a shop as often as a desk, which is why
+    # `tagging._ROLE_CLASS` carries only the compounds. This list kept the bare
+    # word anyway, and it was invisible while `MARKETS` was only ever the
+    # second half of a two-sided test. Measured over all 295,347 live titles:
+    # 85 carry it, and they are `Butiksmedarbetare, team kolonial/e-handel`,
+    # `Gucca.dk søger elev i Digital Handel` and `Butiksmedarbejder til
+    # special vin handel` -- supermarket and wine-shop staff, essentially all
+    # of them. The compounds replace it.
+    "aktiehandel", "valutahandel", "derivathandel", "värdepappershandel",
+    "börshandel", "obligationshandel", "råvaruhandel", "handelsbord",
+    "handelsgolv", "handelsstöd",
+    "värdepapper", "kapitalmarknad", "kapitalförvaltning",
     "effecten", "beleggingen", "vermogensbeheer", "handelaar",
     "wertpapiere", "kapitalmarkt", "marché financier",
+    # ----------------------------------------------------------------------
+    # **Nordic, and the yield is the finding rather than the disappointment.**
+    # `CLAUDE.md` records that the Nordic quant vocabulary carries almost no
+    # signal because the Nordic quant postings are written in English, and a
+    # dry-run of 54 candidates over all 295,347 live titles says so again:
+    # forty of them have **zero** hits -- `räntebärande`, `obligationsportfölj`,
+    # `marknadsrisk`, `modellvalidering`, `investeringsanalys`, `handelsbord`,
+    # not one occurrence between them. Only the words below occur at all, and
+    # they are here because each is cheap and each names a real seat this
+    # board was missing: AP3's `två globala aktieförvaltare`, AP4's
+    # `Internship till Allokering, Likvida Marknader och Analys`, AP7's
+    # `Fond- och värdepappersadministratör`, Nykredit's `Market Data ... pris-
+    # og rentedata`.
+    #
+    # **The compounds only, never the bare head**, which is the same rule
+    # `handel` is already here under: `förvaltare` on its own is a property
+    # caretaker in Swedish -- `Teknisk förvaltare`, `Ekonomisk Förvaltare till
+    # Sweax` -- and it out-numbers the portfolio-manager reading in this
+    # corpus. `ränteförvaltare` and `aktieförvaltare` are unambiguous;
+    # `förvaltare` would put a board full of janitors on a markets list.
+    "ränteförvaltare", "aktieförvaltare", "kapitalförvaltare",
+    "portföljförvaltare", "portföljförvaltning", "fondförvaltare",
+    "porteføljeforvalter", "kapitalforvaltning", "formueforvaltning",
+    "värdepappersadministratör", "fondadministratör", "fondadministration",
+    "likvida marknader", "allokering", "tillgångsallokering",
+    "markedsdata", "marknadsdata", "rentedata", "renteprodukter",
+    # Two initialisms and a product name, each of which places a posting in
+    # markets as firmly as any phrase above. `ficc` is the desk; `ifrs 9` is
+    # the impairment standard for financial instruments and nothing outside
+    # finance carries it; `simcorp` is the portfolio-management system the
+    # Nordic institutions run, so a posting naming it is a markets systems
+    # seat -- AP4 advertises `Systemförvaltare SimCorp Dimension`, which is a
+    # front-office systems job whose title otherwise reads as a caretaker.
+    "ficc", "ifrs 9", "simcorp",
 )
 
 
@@ -504,6 +562,39 @@ ENGINEERING = _terms(
     "data platform", "etl", "integration engineer", "ai engineer",
     "systemutvecklare", "utvecklare", "programmerare", "systemadministratör",
     "softwareentwickler", "entwickler", "développeur", "ontwikkelaar",
+)
+
+# **The Swedish half of the list above was dead for the same reason the trade
+# words were: a Swedish job title is one token.** `utvecklare` has been a
+# needle here for a long time and the corpus advertises `Fullstackutvecklare`,
+# `Javautvecklare`, `Backendutvecklare` and `Systemförvaltare` -- single
+# tokens, which a whole-word match cannot see inside. It is exactly the shape
+# `tagging._TRADE_HEADS` was written for one module over, and it left 30-odd
+# Swedish developer postings a day sitting at `relevance: unknown` on the
+# board next to the purchasers.
+#
+# Matched as a suffix, and safe here for the reason `_compound` gives: the
+# heads are long and Swedish is agglutinative. Dry-run over all 295,347 live
+# titles -- 855 `-utvecklare`, 160 `-arkitekt`, 33 `-udvikler`, 7
+# `-programmerare` -- and **not one of them touches a posting the tagger rates
+# positively**, which is the check that decides a needle in this project.
+#
+# **This list stays two-sided, which is what makes a broad head safe.**
+# `ENGINEERING` never rejects on its own: step 7 keeps the posting whenever
+# any markets word appears, so `Systemutvecklare till SEB Markets` survives
+# and `Fullstackutvecklare till en e-handelsplattform` does not. That is why
+# `-arkitekt` is here despite reaching ~25 town planners and landscape
+# architects: they are the wrong *profession* rather than the wrong
+# engineering seat, so the reason recorded for them is imprecise, and the
+# verdict is the same one `_OFF_INDUSTRY` would have reached.
+#
+# **`-tekniker` and `-konsulent` were dropped.** `tekniker` is already both an
+# `_OFF_INDUSTRY` word and a `_TRADE_HEADS` head, so it would only relabel
+# 2,682 postings that are gated already; `konsulent` is the ordinary Danish
+# word for a consultant of any kind, and `CLAUDE.md` records it being dropped
+# from the trade heads for that exact reason.
+ENGINEERING_HEADS = (
+    "utvecklare", "udvikler", "utvikler", "programmerare", "arkitekt",
 )
 
 # Genuinely ambiguous: quantitative at one firm, commentary at the next. These
@@ -835,7 +926,7 @@ def judge(
     #    Collapsing that middle into `keep` is what filled the board with a
     #    vendor's backend engineers; collapsing it into `reject` would throw
     #    away the trading-systems roles this project exists to find.
-    hit = first(role, ENGINEERING)
+    hit = first(role, ENGINEERING) or compound(role, ENGINEERING_HEADS)
     if hit:
         if quant_body:
             return Verdict("keep", None, f"{hit} + {quant_body}", "strong")

@@ -8,7 +8,8 @@ places where I hit a wall that needed a human, not a decision I should make for
 you.
 
 **Nothing here blocks the board any more.** It is live at
-**https://quantjobs.spawned.app** with 5,211 postings. Item 5 records what the
+**https://quantjobs.spawned.app** with 8,278 postings (5,211 before the
+Nordic lexicon pass -- see item 6). Item 5 records what the
 deploy cost and the one preference left in it -- the site is public and
 unauthenticated, which is a choice you can reverse.
 
@@ -18,7 +19,8 @@ it: Denmark is built and swept either way, and the item says exactly what
 reversing it would cost. Sweden needed no such call: its board allows the
 paging parameter, and item 3 says what that costs instead.
 
-**Item 4 is new** and is three preferences rather than three questions: a board
+**Item 6 is new** and records the two calls you made on the Nordic board.
+Item 4 and is three preferences rather than three questions: a board
 button's default, one town moving into the Stockholm belt, and 295 postings a
 bug had been removing. Each is one line to reverse and none blocks anything.
 
@@ -574,6 +576,52 @@ have left it alone rather than deleting a branch on your remote without asking
 ```bash
 git push quantjobs --delete board
 ```
+
+## 6. Two calls you made on the Nordic board, and one I made after them
+
+You asked for the Swedish and Danish pages to be more exhaustive and to filter
+better, and answered two questions while I was in there. Both are recorded here
+because they are preferences rather than facts, and both are one line to
+reverse.
+
+**1. A plain `Senior` no longer removes a posting.** It was gating 9,914
+postings, 947 of them in Stockholm and Copenhagen, and in the Nordics what it
+took was not leadership: Nordea's `Quantitative Risk Analyst, Credit Risk Data
+Management [Assistant/Regular/Senior]` — whose own bracket offers the assistant
+rung — Swedbank's `Senior quantitative analyst within credit risk`, Lynx's
+`Senior Engineer – Systematic Equity`. The rank is still read and still ranks
+the posting below everything else; it just no longer removes it. Real
+leadership is a separate rule and is untouched — Head of, Chief, Director,
+Manager, Team Lead all still gate. **To reverse:** put `"senior_6_10"` back in
+`_OUT_OF_REACH` in `tagging.py`, bump `TAGGER`, re-run `tag`.
+
+**2. Markets seats that are not quant work now rank instead of rejecting.**
+`Rates Salesperson` and `Commodities Sales to FICC Markets` at Nordea and SEB,
+`Förvaltare inom private equity` at AP4, `Controller for Valuation Analysis in
+Asset Management` at Danske. Your words were *"it is ok if it picks up junk, i
+can remove them myself"*, so these reach the board capped at `plausible`,
+below every genuine quant title. **This overrides the hand-labelled sheet**,
+which rejected nine such rows in a row — worth knowing, because that sheet is
+still the fixture `labels` scores against and it will read as a disagreement.
+**To reverse:** take `"discretionary_investing"` out of `SOFT` in
+`tag_posting`, bump `TAGGER`, re-run.
+
+**3. One I decided: a rank word no longer promotes a posting nobody has read.**
+This is a consequence of your first call rather than a preference of its own,
+and I would make it again, but you should know it happened. `_fit` returned
+`stretch` for any senior posting *before* it looked at relevance — harmless
+while those postings were gated, and wrong the moment they were not, because
+`stretch` outranks `unknown` on the board. Left alone, **290 of the 466 Nordic
+cards would have been `Senior <IT consultant>` sitting above every real markets
+posting**, which is the complaint you started with wearing a different hat.
+
+**Two `Inköpare` cards survive** and I left them: `Konsultinköpare` and
+`Inköpsadministratör` are single Swedish tokens the word list cannot see inside.
+The fix is a compound head, the same mechanism `-säljare` and `-sköterska`
+already use, and it costs a 35-minute re-tag for two cards. Say if you want it
+and it goes in with the next version bump.
+
+---
 
 ## A. FINMA (Switzerland) — **done, and I was wrong about why it was blocked**
 

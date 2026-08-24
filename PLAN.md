@@ -16,7 +16,7 @@ stage below has an explicit exit criterion instead.
 If a stage turns out to be blocked, record it in `ACTION-REQUIRED.md` and stop —
 do not skip ahead to something more interesting.
 
-**Stage 29 is the last one written down.** Every stage above it is closed, so
+**Stage 30 is the last one written down.** Every stage above it is closed, so
 the next unit of work is a decision rather than a queue: what to widen, what to
 measure, or what to leave alone. The standing daily run is now one command,
 `python -m quantscraper daily` — sweden, denmark, switzerland, jobstream, jobs,
@@ -80,6 +80,7 @@ nothing in the near-term plan now waits on a human.
 | 27 | Read what the `rejected` gate removes | **done** — 720 reviewed, 1 false rejection; hand sheet 84.4% → 95.6% |
 | 28 | One command to refresh, one to publish | **done** — live at quantjobs.spawned.app |
 | 29 | The board read back, in Swedish | **done** — a body arriving after the tag was never read |
+| 30 | The Nordic board: one bucket held the junk and the misses | **done** — 199 cards → ~410, 23 ranked → 66 |
 ---
 
 ## Stage 0 — Employer universe, raw collection *(done)*
@@ -3281,3 +3282,133 @@ The Swedish and Danish postings on the board are ones a reader would consider,
 and the nine genuine ones the same sweep carried — `Quantitative Analyst to the
 IFRS 9 team`, `Riskanalytiker inom kapitalförvaltning`, `Quantitative Power
 Trader` among them — are still on it. Both halves are pinned by tests.
+
+
+## Stage 30 — The Nordic board: one bucket held the junk and the misses
+
+The reader's report was two complaints in one sentence: *"There is too much
+junk, e.g. inköpare, and too little jobs. There are more relevant job postings
+from nordea alone than what you show on the page."* They read as opposite
+faults pulling the filter in opposite directions. They are the same fault.
+
+### The measurement that reframed it
+
+**25,722 live postings in Stockholm and Copenhagen. 199 on the board. 176 of
+those 199 were `relevance: unknown`.**
+
+`unknown` means the tagger looked and could not say, and it is kept on purpose
+— a gate must fire on evidence, never on the absence of it. But the board sorts
+by `fit`, and every `unknown` posting sorts to the same place. So that bucket
+held `Inköpare för UBW Inköp support` **thirteen times**, from six different
+consultancies advertising the same seat — and it also held `Commodities Sales
+to FICC Markets | SEB`, `AP3 söker två globala aktieförvaltare`, `Internship
+till Allokering, Likvida Marknader och Analys på AP4`, `Fond- och
+värdepappersadministratör till AP7` and Swedbank's `APO to Group Treasury`.
+
+The Swedish page was four `strong` cards followed by 176 rows in which the
+purchasers outnumbered the desks. That is exactly what "too much junk *and*
+too little jobs" looks like from the outside, and neither half can be fixed
+without the other: emptying `unknown` from below alone leaves a short page with
+nothing recommended on it, and filling it from above alone buries the new
+arrivals under the same purchasers.
+
+### Collection was never the problem, which is worth stating
+
+`alerts` reported every source healthy, Jobbsafari and Jobindex had swept the
+day before, and **Nordea's own API advertises 138 postings against the 145 we
+hold**. The reader named Nordea and they were right about the board: of 39
+Nordea postings in Stockholm and Copenhagen, **five** were on it. They were not
+right about the scrape, and checking that first is what stopped this becoming a
+scraper change.
+
+### Six defects, found by tracing the named postings
+
+Each was traced from a specific posting the reader would have wanted:
+
+1. **Nothing read `lexicon.MARKETS` for relevance.** The ladder in `tagging.py`
+   ran core → exclusions → `adjacent`+markets → body phrases → `judge` →
+   `unknown`, with no branch for *a title that names markets and nothing else*.
+   The list existed and was correct; no caller asked it this question. A branch
+   placed **last, after `judge`** — so it can only convert an `unknown`, never
+   overturn a rejection — now confers `adjacent`, and no better, because a
+   markets word says where a posting is and not what the work is.
+
+2. **`senior_6_10` was gating 9,914 postings**, 947 in the two Nordic hubs, and
+   what it removed there was not leadership: Nordea's `Quantitative Risk
+   Analyst, Credit Risk Data Management [Assistant/Regular/Senior]` — a title
+   whose own bracket offers the assistant rung — Swedbank's `Senior
+   quantitative analyst within credit risk`, Lynx's `Senior Engineer –
+   Systematic Equity`. Off the gate at the reader's decision; still read, still
+   ranked, capped at `stretch`.
+
+3. **A student rung lost to a management word.** `Student Client Credit Manager
+   to Stockholm` sits in a department called *Internships / Student positions*
+   and was rejected outright on *manager*, which there names the book rather
+   than the reports.
+
+4. **`discretionary_investing` read the department**, against its own comment
+   saying "matched on the title only". `Rates Sales - SEK Focus` sits in
+   *Investment banking / Institutional banking / Markets* and was rejected on
+   the desk's name. It also ranks rather than rejects now, at the reader's
+   decision and against the hand-labelled sheet — see `CLAUDE.md`.
+
+5. **Two ordinary words were hiding on `MARKETS`,** invisible while that list
+   was only ever the second half of a two-sided test. Bare `handel` is
+   *commerce* — 85 live titles, `Butiksmedarbetare, team kolonial/e-handel`,
+   supermarket staff essentially all of them — and `front office` is a hotel
+   reception on `Shiftleader Front Office, Scandic Spectrum`.
+
+6. **`ENGINEERING`'s Swedish half was dead**, the same way the trade words were
+   before Stage 29: `utvecklare` has been a needle for a long time and the
+   corpus advertises `Fullstackutvecklare` and `Javautvecklare`, 855 titles a
+   whole-word match cannot see inside.
+
+### Taking a gate off exposed a ranking branch running backwards
+
+`_fit` returned `stretch` for any `senior_6_10` posting **before** it looked at
+relevance. That was unreachable while those postings were gated, and wrong the
+moment they were not: `stretch` outranks `unknown` in `index.html`'s
+`FIT_RANK`, so **290 of the 466 cards became `Senior <IT consultant>` sitting
+above every genuine markets posting still at `unknown`** — the original
+complaint back again in a new costume. A rank word is not evidence about
+subject matter, and `fit` is about subject matter. The cap needs a relevance to
+cap now. **Whenever a gate is removed, re-read what downstream ranking it was
+hiding.**
+
+### The Nordic markets vocabulary really does carry no signal
+
+54 candidate Swedish and Danish markets words, dry-run over all 295,347 live
+titles: **forty have zero hits.** `räntebärande`, `obligationsportfölj`,
+`marknadsrisk`, `modellvalidering`, `investeringsanalys`, `handelsbord` — not
+one occurrence between them. `CLAUDE.md` already said so and it is worth
+believing rather than re-deriving: the Nordic quant postings are written in
+English, so translating the *negative* half is what moves a Nordic board.
+
+The twelve words that do occur went in anyway because each is cheap, and one of
+them carries the whole exercise: **`förvaltare` means two opposite jobs.**
+*Teknisk förvaltare* is a property caretaker; *Ränteförvaltare till Swedbank
+Robur* is a fixed-income portfolio manager. The bare head belongs on neither
+list — the qualified compounds go on `MARKETS`, the property ones on
+`_OFF_INDUSTRY`. Same shape as `handel`, and as `råvaror` before it.
+
+### The residue is shaped `Erfaren <trade>`
+
+With the purchasers gone, the largest remaining family was Swedish postings no
+list had a word for: `Erfaren Guldsmed / Juvelfattare`, `Erfaren Kantpressare`,
+`Erfaren bilskadereparatör`, `Erfaren växeltelefonist`, `Erfaren arkivarie`.
+Thirty-seven needles, all clean on the dry-run. **The `-ingenjör` compounds are
+named individually and the suffix is still refused** — the head reaches
+`Softwareingeniør`, and that is the case `CLAUDE.md` records as the one where
+the measurement said yes and the principle said no.
+
+### Exit criterion
+
+The Swedish and Danish board leads with postings a quant would apply to. Where
+it was four ranked cards under 176 unranked ones, it is **66 ranked cards** —
+AP3's global equity managers, Swedbank's `Ränteförvaltare`, Nordea's front
+office AM e-Trading and its `[Assistant/Regular/Senior]` quant seat, SEB's FICC
+internship, Nykredit's fixed-income trading start, Saxo's electronic-trading
+trader, Goldman's Stockholm asset-management internship — above a residue that
+is smaller than the board used to be in total. Every defect above is pinned by
+a test, and every needle was dry-run over the whole corpus against the standing
+check: does it touch a posting the tagger rates positively.

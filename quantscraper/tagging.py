@@ -35,7 +35,7 @@ from . import db, lexicon
 # Bump on every lexicon change: the diff between two versions over the same
 # corpus is a free regression test, and it is the only way to tell "the
 # classifier improved" from "the market moved".
-TAGGER = 45
+TAGGER = 46
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS job_tags (
@@ -1112,6 +1112,33 @@ _EXCLUSION = {
         "accounting", "bookkeeping", "payroll",
         "rekryterare", "rekrutterer", "marknadsforing", "markedsforing",
         "personaladministrator",
+        # **The Nordic half of the same list, and it was missing entirely.**
+        # The English words here reject an English `HR Business Partner` and
+        # said nothing at all about `HR-ansvarig`, `Kampanjkoordinator`,
+        # `Marknadskoordinator`, `Lönekonsult` or `Bogholder` -- all of which
+        # reached the board through `relevance: unknown` beside the
+        # purchasers. A corporate function is the same job in any language.
+        #
+        # These belong here rather than in `_OFF_INDUSTRY` because that is
+        # where their English equivalents live and the split is deliberate:
+        # `_OFF_INDUSTRY` is another *profession* and gates, while HR,
+        # marketing and payroll are functions every firm including a trading
+        # firm has, so they are an exclusion. Both end in the posting coming
+        # off the board; only the recorded reason differs, and `list --exclude`
+        # is read by reason.
+        #
+        # This category is not on `_BODY_SAFE_EXCLUSIONS`, so every needle
+        # here is matched against the title only -- which is what it needs to
+        # be. Dry-run over all 295,347 live titles: none touches a posting
+        # rated positively.
+        "hr ansvarig", "hr specialist", "hr konsult", "hr assistent",
+        "hr partner", "rekryteringskonsult", "personalkonsulent",
+        "lonekonsult", "loneassistent", "redovisningsassistent", "bogholder",
+        "kommunikator", "marknadskoordinator", "marknadsassistent",
+        "markedskoordinator", "kampanjkoordinator", "kampanjplanerare",
+        "eventkoordinator", "sociala medier", "paid social",
+        "seo specialist", "sem specialist", "copywriter", "grafisk designer",
+        "fotograf",
     ),
     "crypto_web3": ("crypto", "web3", "defi", "blockchain", "nft"),
     "heavy_systems": ("fpga", "verilog", "kernel bypass", "embedded systems"),
@@ -1590,6 +1617,102 @@ _OFF_INDUSTRY = _terms(
     "chauffeur poids lourds", "vendeuse", "educatrice", "enseignante",
     "assistante dentaire", "operatore socio sanitario", "infermiere", "cuoco",
     "cameriere", "muratore", "elettricista", "idraulico", "magazziniere",
+    # ----------------------------------------------------------------------
+    # **Read off the Swedish and Danish board, which the reader named.** The
+    # complaint was "too much junk, e.g. inköpare, and too little jobs", and
+    # the two halves turned out to be one fault: 176 of the 199 Nordic cards
+    # were `relevance: unknown`, which is the bucket holding both the
+    # purchasers and the real markets seats, so they sorted together. This is
+    # the half that empties it from below. `Inköpare` alone was thirteen of
+    # those cards, from six different consultancies advertising the same
+    # `UBW Inköpssupport` seat.
+    #
+    # Dry-run over all 295,347 live titles, and the check is the standing one:
+    # does a needle touch a posting the tagger rates positively. **One does,
+    # and it is kept after reading it by hand** -- `indkøber` reaches
+    # `Indkøber - Trading` at a Danish firm called Kompetent, rated `adjacent`
+    # on the word *trading*, which there means commerce. Same shape as
+    # `Tekniker till Quant Service` and `Trader till växande företag inom
+    # bilindustrin` two blocks up: a purchaser at a trading company is a
+    # purchaser.
+    #
+    # **`förvaltare` is deliberately not here and must not be added.** The
+    # Swedish word is a property caretaker in `Teknisk förvaltare` and a
+    # portfolio manager in `Ränteförvaltare till Swedbank Robur`, and the
+    # second is a posting this board exists to find. The qualified compounds
+    # go on `lexicon.MARKETS` instead; only the property ones are gated here.
+    # `controller`, `analytiker` and `specialist` are absent for the reason
+    # recorded further up -- they are the wrong *job* rather than the wrong
+    # industry, and they rank rather than gate.
+    #
+    # purchasing and procurement, which is what the reader pointed at
+    "inkopare", "inkop", "inkopsansvarig", "inkopsassistent", "inkopschef",
+    "operativ inkopare", "strategisk inkopare", "sortimentsansvarig",
+    "upphandlare", "upphandling", "upphandlingskonsult", "kategoriansvarig",
+    "indkober", "indkob",
+    # property, facilities and building services -- the `förvaltare` reading
+    # that is not a portfolio
+    "fastighetsingenjor", "fastighetsforvaltare", "fastighetsforvaltning",
+    "teknisk forvaltare", "fastighetschef", "driftstekniker",
+    "ejendomsadministrator", "ejendomsservice",
+    # environment, logistics and the remaining Nordic field professions
+    "miljokonsult", "miljosamordnare", "miljoingenjor",
+    "logistikkoordinator", "transportledare", "speditor", "lagerchef",
+    "servicekoordinator", "kundeservicemedarbejder", "forsikringsradgiver",
+    "skaderadgiver",
+    # Town planning and landscape, whole words so they gate as the profession
+    # they are. `lexicon.ENGINEERING_HEADS` reaches them through `-arkitekt`
+    # as well and would reject them as engineering, which is the right verdict
+    # under the wrong name; this list runs first and names them correctly.
+    "landskapsarkitekt", "planarkitekt", "stadsarkitekt", "byplanarkitekt",
+    "planeringsarkitekt", "indretningsarkitekt",
+    # **A hotel's front office is a reception desk**, and `front office` is one
+    # of the strongest words on `lexicon.MARKETS`. `Shiftleader Front Office,
+    # Scandic Spectrum` and `Shiftleader Front Office, Scandic Kødbyen` were
+    # promoted onto the Copenhagen board by the new markets-title branch --
+    # which is what that branch is for and also exactly the collision to
+    # expect from it. Removing `front office` is not the answer: 209 titles
+    # carry it and all but these are genuine desks, from Marex's `Front Office
+    # Python Developer` to State Street's `Front-Office Trading Specialist`.
+    # The shift word is the discriminator, and it is clean -- `shiftleader` is
+    # two Scandic postings, `shift leader` is 72 baristas, pub staff and data
+    # centre crews, `receptionschef` is 18 hotels and campsites, none of them
+    # anywhere near finance.
+    "shiftleader", "shift leader", "receptionschef", "hotel front office",
+    # **The second pass over the same board, and the shape of the residue is
+    # `Erfaren <trade>`.** With the purchasers gone the largest remaining
+    # family was Swedish postings the lists simply had no word for --
+    # `Erfaren Guldsmed / Juvelfattare`, `Erfaren Kantpressare`, `Erfaren
+    # bilskadereparatör`, `Erfaren växeltelefonist`, `Erfaren arkivarie`.
+    # All 37 dry-run over all 295,347 live titles; none touches a posting the
+    # tagger rates positively.
+    #
+    # **The `-ingenjör` compounds are named individually and the suffix is
+    # still refused**, which is the alternative this file's own note about it
+    # proposes: the head reaches `Softwareingeniør`, and `software engineer`
+    # and `developer` are deliberately absent from `_SOFTWARE_SPECIALTY`
+    # because a quant-dev posting calls itself one. `automationsingenjör` and
+    # `processingenjör` cannot reach anything of the sort.
+    "entreprenadingenjor", "processingenjor", "projektingenjor",
+    "matningsingenjor", "byggnadsingenjor", "automationsingenjor",
+    "elingenjor", "produktionsingenjor", "kvalitetsingenjor",
+    "guldsmed", "kantpressare", "bilskadereparator", "cafepersonal",
+    "vaxeltelefonist", "butiksetablerare", "energikartlaggare",
+    "geokonstruktor", "beredare", "ledningssamordnare", "byggnadsantikvarie",
+    "arkivarie", "projektor", "lokalvard", "kundvard",
+    "beredskapssamordnare", "informationssakerhetssamordnare",
+    "molekylarbiolog", "cellbiolog", "biomedicinsk analytiker", "logoped",
+    "dietist",
+    # Law, in the Nordic spelling. **The compounds are what was escaping**:
+    # bare `jurist` is already on `lexicon.CORPORATE` and was rejecting 182
+    # titles, but `jurist` is not one of `lexicon.SWEDISH_HEADS`, so
+    # `Bolagsjurist` and `Erfaren dataskyddsjurist` were single tokens nothing
+    # could see inside and both came back `undecided`. The bare noun is
+    # repeated here so the reason recorded for a lawyer is the same one
+    # recorded for a lawyer's compound; it changes which gate fires and not
+    # whether one does.
+    "jurist", "bolagsjurist", "dataskyddsjurist", "myndighetsjurist",
+    "affarsjurist", "skatteradgivare",
 )
 
 # Deliberately absent, each after matching something real in the corpus:
@@ -1924,7 +2047,21 @@ def _residual(found: list[tuple[str, str]], where: str) -> list[tuple[str, str]]
 # and `experience_floor` already carries the number for anyone who wants to
 # filter harder. `unknown` is not here either, which is the point -- the gate
 # fires on a rank that was read, never on one that was missing.
-_OUT_OF_REACH = frozenset({"senior_6_10", "lead", "head_or_md"})
+#
+# **`senior_6_10` came out at the reader's decision, and the Nordics are why.**
+# It was gating 9,914 postings, 947 of them in Stockholm and Copenhagen, and
+# what it removed there was not leadership: `Senior Data Scientist` at Nordea,
+# `Senior quantitative analyst within credit risk` at Swedbank, `Senior
+# Engineer - Systematic Equity` at Lynx. A Nordic bank stamps *Senior* on a
+# three-to-five-year grade the way it stamps *Associate Director* on one, and
+# `_NOT_HEAD_GRADE` already records that argument for the rung above.
+#
+# The word still sets `seniority`, so it ranks -- the board sorts it below
+# everything else and `list --seniority senior_6_10` still finds it. What
+# changed is only that it no longer *removes*. Real leadership is a separate
+# rule and is untouched: `_MANAGEMENT` catches Head of, Chief, Director,
+# Manager and Team Lead by title, and `lead` and `head_or_md` stay here.
+_OUT_OF_REACH = frozenset({"lead", "head_or_md"})
 
 # What the board will show. Everything else is gated -- see `_off_location` and
 # the note in `web/build_data.py`. `unknown` is deliberately in: a posting that
@@ -2258,11 +2395,40 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
     # cannot outrank a weak positive, and it stays hard below, because crypto
     # is on the exclude list outright and Kraken's 306 postings are correctly
     # gone.
-    SOFT = ("crypto_web3", "heavy_systems")
+    # **`discretionary_investing` ranks now instead of rejecting, at the
+    # reader's decision**, and it had two faults rather than one.
+    #
+    # The first is the reader's call and overrides what the hand-labelled
+    # sheet says: nine discretionary rows in a row were labelled `rejected`
+    # there, and the instruction now is that a markets seat at a markets firm
+    # belongs on the board ranked below the quant work rather than off it.
+    # `Rates Sales - SEK Focus` and `Commodities Sales to FICC Markets` at
+    # Nordea and SEB are the postings that decided it.
+    #
+    # The second is a plain defect and would matter whatever the reader chose.
+    # Its own comment where the needles are defined says "matched on the title
+    # only" -- and `title` here is `fold(row["title"], row["department"])`, so
+    # it was reading the department too. `Rates Sales - SEK Focus` sits in a
+    # department called *Investment banking / Institutional banking / Markets*
+    # and was rejected on `investment banking`, which is the desk's name and
+    # not the job's. That is the same failure `CLAUDE.md` records twice
+    # already, for desk support and for seniority, and this is the third
+    # place: **whenever a needle list says "title only", check what text it is
+    # actually handed.**
+    #
+    # Kept out of `hard` as well, so a body cannot reintroduce the rejection.
+    SOFT = ("crypto_web3", "heavy_systems", "discretionary_investing")
+    exclusions = [
+        (value, evidence) for value, evidence in exclusions
+        if value != "discretionary_investing"
+        or _hit(just_title, _EXCLUSION["discretionary_investing"])
+    ]
     rejecting = [v for v, _ in exclusions if v not in SOFT]
     hard = [
         value for value, _ in exclusions
-        if value != "heavy_systems" or value in from_title
+        # Never hard, wherever it was found: it ranks now. See `SOFT` above.
+        if value != "discretionary_investing"
+        and (value != "heavy_systems" or value in from_title)
     ]
     # Two grades of core needle, because a desk word qualifies one and not the
     # other. `_QUANT_CORE` is unambiguous -- nothing called *quantitative* or
@@ -2295,9 +2461,24 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
     # `Associate - Fund Governance` sits in a department called *Director
     # Services*, and a department is not a grade. That posting is named in the
     # seniority comments already, and it was still being rejected here.
+    # **A student rung outranks a management word, because the applicant's
+    # grade is the one the title states about *them*.** `Student Client Credit
+    # Manager to Stockholm` sits in a department called "Internships / Student
+    # positions" at Nordea, and it was rejected outright on the word *manager*
+    # -- which there names the book, not the reports. `Intern, AI Solutions for
+    # External Manager Selection` and `Early Career Intern - Fundamental
+    # Equities COO Office` failed the same way: a management word in an intern
+    # title is the office the intern sits in.
+    #
+    # 95 titles carry both and the majority are Greystar's `Student Living`
+    # apartment brand, where *student* is the tenant rather than the applicant.
+    # Those are untouched by this: `student living` is already in
+    # `_OFF_INDUSTRY`, and `off_industry` is the first gate `build_data.py`
+    # tries, so they never depended on this rule to be removed.
+    student_rung = lexicon.first(lexicon.normalize(row["title"]), lexicon.INTERN_TITLE)
     management = (
         _hit(just_title, _MANAGEMENT)
-        if not _hit(just_title, _NOT_MANAGEMENT) else None
+        if not (_hit(just_title, _NOT_MANAGEMENT) or student_rung) else None
     )
 
     # A software-specialty title outranks a weak positive, for the same reason
@@ -2465,6 +2646,35 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
         # out of its reach and it cannot manufacture a false rejection in the
         # rows that matter.
         add("relevance", "rejected", f"{call.reason}: {call.evidence or 'no signal'}")
+    elif desk_named := lexicon.first(
+        lexicon.normalize(f"{row['title'] or ''} {_field(row, 'department') or ''}"),
+        lexicon.MARKETS,
+    ):
+        # **A title that names a markets desk is not a posting nothing looked
+        # at, and until now the two were the same answer.** `Commodities Sales
+        # to FICC Markets`, `Market Data Specialist`, `Backoffice
+        # Administrator - Mutual Funds`, `APO to Group Treasury` and `.Net
+        # developer to the Portfolio Solutions and Derivatives Clearing Tech
+        # team` all came back `unknown` -- the same verdict as `Inköpare för
+        # UBW Inköp support`, and on a board that sorts by fit they sat in the
+        # same block. That is what "too much junk and too little jobs" looks
+        # like from the outside: not two faults but one, a bucket holding
+        # everything the tagger could not read.
+        #
+        # It runs **last, after `judge`**, which is what makes it safe. It can
+        # only ever convert an `unknown` -- every exclusion, every hard gate
+        # and the whole occupation lexicon have already had their say, so this
+        # cannot rescue a wealth adviser or overturn a rejection. It is the
+        # same placement rule `judge` itself is held to one branch up.
+        #
+        # `adjacent` and not better: a markets word says *where* the posting
+        # is, never what the work is. `_fit` caps that at `plausible`, so
+        # these rank below every genuine quant title and above the residue.
+        #
+        # Read from title and department only. A body naming markets is the
+        # employer describing itself, which is the failure mode this file
+        # records against every body-matched rule.
+        add("relevance", "adjacent", f"markets title {desk_named!r}", "weak")
     else:
         add("relevance", "unknown", None)
 
@@ -2633,7 +2843,11 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
     out_of_reach = None
     if management:
         out_of_reach = f"management title: {management!r}"
-    elif compounded := _compound_manager(just_title):
+    elif not student_rung and (compounded := _compound_manager(just_title)):
+        # Same veto as `management` above, and it has to be repeated here
+        # because this branch reads the compound rather than the word list:
+        # `Studentmedarbetare till logistikchefen` is a student post beside a
+        # manager, not a manager.
         out_of_reach = f"management title: {compounded!r}"
     elif seniority_value in _OUT_OF_REACH:
         out_of_reach = f"seniority: {seniority_value}"
@@ -2775,7 +2989,16 @@ def _fit(tags: list[Tag]) -> Tag:
     # Under a year of experience: a senior posting is a stretch however well
     # the subject matter fits, and saying so is the whole point of the
     # dimension. `CLAUDE.md` puts "too senior" on the exclude list.
-    if seniority in ("head_or_md", "lead", "senior_6_10"):
+    # **A rank the reader cannot reach caps a posting they would otherwise
+    # want. It must not *promote* one nobody has read.** `stretch` outranks
+    # `unknown` on the board (`FIT_RANK` in `index.html`), so while
+    # `senior_6_10` was a gate this branch could never be reached by a posting
+    # with no verdict -- they were removed before the board saw them. Taking
+    # the gate off made it reachable, and 290 of the 466 Nordic cards became
+    # `Senior <IT consultant>` sitting above every genuine markets posting
+    # still sitting at `unknown`. The word *senior* is not evidence about the
+    # subject matter, and this dimension is about the subject matter.
+    if seniority in ("head_or_md", "lead", "senior_6_10") and relevance != "unknown":
         return make("stretch", f"seniority {seniority}")
     if relevance == "relevant" and seniority in ("junior_0_2", "new_grad"):
         return make("apply_now", f"research/modelling, {seniority}, {hub}")
