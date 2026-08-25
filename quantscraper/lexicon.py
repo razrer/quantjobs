@@ -27,26 +27,23 @@ no body text turns a *Receptionist* into a quant role. So:
 - **a title can prove a posting is a different job** -- and the word that proved
   it is recorded as evidence.
 
-That distinction is what makes this corpus tractable. 81% of postings are a
-title, a location and a date -- the list endpoints Workday, BambooHR, Personio,
-Breezy and SmartRecruiters publish carry nothing else -- so a classifier that
-waits for descriptions classifies almost nothing, while one that rejects on
-named occupations can clear most of the noise today.
+That distinction is what makes this corpus tractable: most postings are a
+title, a location and a date, so a classifier that waits for descriptions
+classifies almost nothing while one that rejects named occupations can clear
+most of the noise today.
 
 It is also the sharpest place in the project to be wrong, so every rejection
-stores the phrase that caused it and nothing is ever deleted: `job_tags`
-rebuilds from `jobs`, and a lexicon bug costs one re-run.
+stores the phrase that caused it and nothing is deleted: `job_tags` rebuilds
+from `jobs`, and a lexicon bug costs one re-run.
 
 ## Three verdicts, because two would force a guess
 
 `keep` - `reject` - `undecided`.
 
-`undecided` is not a failure state, it is the **backfill queue**. A posting
-whose title is ambiguous and whose body was never fetched is precisely the
-posting worth fetching a body for, and there are far fewer of those than there
-are postings. That turns "92% have no description" from a blocker into a
-prioritised list. A two-verdict classifier has to guess on those, and here a
-guess is either a false rejection or a board full of noise.
+`undecided` is not a failure state, it is the **backfill queue**: a posting
+with an ambiguous title and no body is exactly the one worth fetching a body
+for, and `bodies.py` reads it that way. A two-verdict classifier has to guess
+on those, and a guess is either a false rejection or a board full of noise.
 
 ## Two-sided rules, for the two cases a word list gets wrong
 
@@ -82,19 +79,25 @@ phrase can only ever match whole words.
 
 ## The lists are multilingual because the corpus is
 
-Sweden's JobStream feed is Swedish and is 2,227 ads of nurses, chefs and
-drivers; the Teamtailor boards are Nordic; Workday serves French, German and
-Portuguese postings from the same tenants. An English-only word list rejects
-none of them, which reads as "nothing was wrong with these" rather than as a
-gap -- the same silent failure as a scraper returning zero rows with HTTP 200.
+The national feeds are Swedish, Danish, German and French; the Teamtailor
+boards are Nordic; Workday serves several languages from the same tenants. An
+English-only word list rejects none of them, which reads as "nothing was wrong
+with these" rather than as a gap -- the same silent failure as a scraper
+returning zero rows with HTTP 200.
+
+**Never translate a word list into a new language; mine it out of the corpus
+and read what it matches.** German *Anlage* is both *investment* and
+*industrial plant*, and here it is overwhelmingly the second: `anlagenführer`
+is 212 titles and every one is a machine operator.
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 
-VERSION = 6
+VERSION = 7
 
 # Everything that is not a letter, digit, `+` or `#` is a separator. Those two
 # are kept because `c++` and `c#` name things a posting is graded on, and
@@ -132,16 +135,48 @@ def _terms(*phrases: str) -> tuple[str, ...]:
     return tuple(normalize(phrase).strip() for phrase in phrases)
 
 
+# A phrase can only match if its first word is a token of the text, so most of
+# a long list can be skipped on a set lookup instead of scanned. Measured over
+# the corpus: 9x on the largest list, and matching is half the cost of a re-tag.
+#
+# Keyed by `id()` for an O(1) lookup -- hashing a 600-tuple on every call would
+# cost more than it saves -- and each tuple is stored beside its index so it
+# cannot be freed and have its id reused.
+_INDEX: dict[int, tuple[tuple[str, ...], tuple[tuple[str, str, str], ...]]] = {}
+
+
+def _index(terms: tuple[str, ...]) -> tuple[tuple[str, str, str], ...]:
+    """(first word, padded phrase, phrase) for each phrase, built once."""
+    entry = _INDEX.get(id(terms))
+    if entry is None or entry[0] is not terms:
+        entry = (terms, tuple(
+            (term.split(" ", 1)[0], f" {term} ", term) for term in terms
+        ))
+        _INDEX[id(terms)] = entry
+    return entry[1]
+
+
+@lru_cache(maxsize=16)
+def _words(text: str) -> frozenset[str]:
+    """The text's distinct tokens. Cached, because one posting is matched
+    against ~110 phrase lists over the same three or four normalized strings."""
+    return frozenset(text.split())
+
+
 def first(text: str, terms: tuple[str, ...]) -> str | None:
     """The first phrase of `terms` present in already-normalized `text`."""
-    for term in terms:
-        if f" {term} " in text:
+    words = _words(text)
+    for head, padded, term in _index(terms):
+        if head in words and padded in text:
             return term
     return None
 
 
 def every(text: str, terms: tuple[str, ...]) -> list[str]:
-    return [term for term in terms if f" {term} " in text]
+    """Every phrase of `terms` present, for the rules that count corroboration."""
+    words = _words(text)
+    return [term for head, padded, term in _index(terms)
+            if head in words and padded in text]
 
 
 # --------------------------------------------------------------------------
@@ -197,26 +232,22 @@ GENERIC_IN_BODY = frozenset(_terms(
 ))
 QUANT_BODY = tuple(term for term in QUANT if term not in GENERIC_IN_BODY)
 
-# And the specific phrases split again, because they are two different kinds of
-# evidence and only one of them stands alone.
+# The specific phrases split again, into two kinds of evidence, because only
+# one of them stands alone.
 #
-# **Some phrases name markets activity: the anchor is inside the phrase.** No
-# document says "statistical arbitrage" or "smart order routing" about anything
-# else, so finding one in a body settles the question by itself.
+# **Some name markets activity: the anchor is inside the phrase.** No document
+# says "statistical arbitrage" about anything else, so one in a body settles it.
 #
 # **The rest name a method, and every technical field owns them.** `monte
 # carlo` is derivatives pricing at a bank and radiation shielding at a reactor;
-# `time series` is signal research at a fund and telemetry on a robotaxi;
-# `backtests` is alpha research at Squarepoint and demand forecasting at a
-# retailer. All three were measured, not guessed -- see `judge`.
+# `time series` is signal research at a fund and telemetry on a robotaxi.
+# Measured, not guessed -- see `judge`.
 #
-# Which bucket a phrase goes in is asymmetric, so the doubtful ones go below.
-# A phrase in `SELF_ANCHORING` that turns out to be ordinary costs a false
-# keep; a phrase in the method bucket costs nothing at all unless the posting
-# *also* mentions markets nowhere, and a genuine quant advertisement never
-# manages that. `quantitative finance` sits below for exactly that reason: it
-# reads like the strongest phrase here and a consumer bank's core-ledger
-# posting carries it.
+# The split is asymmetric, so doubtful phrases go in the method bucket: a wrong
+# entry there costs nothing unless the posting mentions markets nowhere, which
+# no genuine quant advertisement manages, while a wrong entry above costs a
+# false keep. `quantitative finance` reads like the strongest phrase here and
+# is below, because a consumer bank's core-ledger posting carries it.
 SELF_ANCHORING = frozenset(_terms(
     "systematic trading", "algorithmic trading", "algo trading",
     "statistical arbitrage", "stat arb", "pairs trading",
@@ -269,27 +300,18 @@ MARKETS = _terms(
     "counterparty risk", "risk analytics", "investment strategy",
     "investment research", "asset allocation", "exchange traded",
     "alternative investments", "listed derivatives",
-    # Two more the Nordic board asked for, both measured over all 295,347 live
-    # titles and both sitting entirely inside finance. `treasury` is 375
-    # titles -- rates, funding and FX, which is markets-adjacent rather than
-    # markets, and `adjacent` is exactly the rank this list confers.
-    # `mutual fund` is fifteen. Swedbank's `APO to Group Treasury` and
-    # Avanza's `Backoffice Administrator - Mutual Funds` are the two that
-    # found them. **`cash management` was measured and dropped**: 64 titles,
-    # all genuine, but it is transaction banking rather than markets and the
-    # word belongs nearer `non_quant_finance`.
+    # Both measured and both sitting entirely inside finance. `treasury` is
+    # markets-adjacent rather than markets, and `adjacent` is exactly the rank
+    # this list confers. **`cash management` was measured and dropped**: 64
+    # genuine titles, but transaction banking rather than markets.
     "treasury", "mutual fund", "mutual funds",
-    # **Bare `handel` came off this list, and it is the rule the block above
-    # states applied to Swedish.** `CLAUDE.md` has recorded for a long time
-    # that `handel` is *commerce* -- e-handel, detaljhandel, dagligvaruhandel
-    # -- and names a shop as often as a desk, which is why
-    # `tagging._ROLE_CLASS` carries only the compounds. This list kept the bare
-    # word anyway, and it was invisible while `MARKETS` was only ever the
-    # second half of a two-sided test. Measured over all 295,347 live titles:
-    # 85 carry it, and they are `Butiksmedarbetare, team kolonial/e-handel`,
-    # `Gucca.dk søger elev i Digital Handel` and `Butiksmedarbejder til
-    # special vin handel` -- supermarket and wine-shop staff, essentially all
-    # of them. The compounds replace it.
+    # **Bare `handel` came off this list**, which is the ban above applied to
+    # Swedish: it is *commerce* -- e-handel, detaljhandel -- and names a shop
+    # as often as a desk. It was invisible while `MARKETS` was only ever the
+    # second half of a two-sided test; of the 85 live titles carrying it,
+    # essentially all are supermarket and wine-shop staff. The compounds
+    # replace it. **A contextual list is only as safe as the strongest thing
+    # that reads it.**
     "aktiehandel", "valutahandel", "derivathandel", "värdepappershandel",
     "börshandel", "obligationshandel", "råvaruhandel", "handelsbord",
     "handelsgolv", "handelsstöd",
@@ -298,38 +320,77 @@ MARKETS = _terms(
     "wertpapiere", "kapitalmarkt", "marché financier",
     # ----------------------------------------------------------------------
     # **Nordic, and the yield is the finding rather than the disappointment.**
-    # `CLAUDE.md` records that the Nordic quant vocabulary carries almost no
-    # signal because the Nordic quant postings are written in English, and a
-    # dry-run of 54 candidates over all 295,347 live titles says so again:
-    # forty of them have **zero** hits -- `räntebärande`, `obligationsportfölj`,
-    # `marknadsrisk`, `modellvalidering`, `investeringsanalys`, `handelsbord`,
-    # not one occurrence between them. Only the words below occur at all, and
-    # they are here because each is cheap and each names a real seat this
-    # board was missing: AP3's `två globala aktieförvaltare`, AP4's
-    # `Internship till Allokering, Likvida Marknader och Analys`, AP7's
-    # `Fond- och värdepappersadministratör`, Nykredit's `Market Data ... pris-
-    # og rentedata`.
+    # The Nordic quant vocabulary carries almost no signal, because the Nordic
+    # quant postings are written in English: of 54 candidates dry-run over
+    # every live title, **forty have zero hits** -- `räntebärande`,
+    # `marknadsrisk`, `modellvalidering`, not one occurrence between them.
+    # The twelve below are here because each is cheap and each names a real
+    # seat the board was missing. Translating the *negative* half is what moves
+    # a Nordic board; this half is insurance.
     #
-    # **The compounds only, never the bare head**, which is the same rule
-    # `handel` is already here under: `förvaltare` on its own is a property
-    # caretaker in Swedish -- `Teknisk förvaltare`, `Ekonomisk Förvaltare till
-    # Sweax` -- and it out-numbers the portfolio-manager reading in this
-    # corpus. `ränteförvaltare` and `aktieförvaltare` are unambiguous;
-    # `förvaltare` would put a board full of janitors on a markets list.
+    # **The compounds only, never the bare head**, the same rule `handel` is
+    # here under: `förvaltare` alone is a property caretaker and out-numbers
+    # the portfolio-manager reading in this corpus.
     "ränteförvaltare", "aktieförvaltare", "kapitalförvaltare",
     "portföljförvaltare", "portföljförvaltning", "fondförvaltare",
     "porteføljeforvalter", "kapitalforvaltning", "formueforvaltning",
     "värdepappersadministratör", "fondadministratör", "fondadministration",
     "likvida marknader", "allokering", "tillgångsallokering",
     "markedsdata", "marknadsdata", "rentedata", "renteprodukter",
-    # Two initialisms and a product name, each of which places a posting in
-    # markets as firmly as any phrase above. `ficc` is the desk; `ifrs 9` is
-    # the impairment standard for financial instruments and nothing outside
-    # finance carries it; `simcorp` is the portfolio-management system the
-    # Nordic institutions run, so a posting naming it is a markets systems
-    # seat -- AP4 advertises `Systemförvaltare SimCorp Dimension`, which is a
-    # front-office systems job whose title otherwise reads as a caretaker.
+    # Two initialisms and a product name, each placing a posting in markets as
+    # firmly as any phrase above: `ficc` is the desk, `ifrs 9` is the
+    # impairment standard for financial instruments, and `simcorp` is the
+    # portfolio system the Nordic institutions run -- AP4's `Systemförvaltare
+    # SimCorp Dimension` is a front-office seat whose title reads as a
+    # caretaker.
     "ficc", "ifrs 9", "simcorp",
+    # ----------------------------------------------------------------------
+    # **The same list read against every hub rather than just the Nordic
+    # one.** Ranking the phrases by how many board postings still sitting at
+    # `relevance: unknown` each would move turned up two families this list
+    # had missed, and both are ordinary English rather than a translation
+    # problem.
+    #
+    # **The first is word order and synonym.** `model risk` was here and `risk
+    # model` was not, so Denmark's `Risk Model Developer` read as a posting
+    # nothing had looked at; `portfolio management` was here and `portfolio
+    # analysis` was not; `alternative investments` was here and `alternative
+    # assets` was not. A needle list written phrase by phrase acquires these
+    # silently, and only a frequency count over what is still unread finds
+    # them.
+    #
+    # **The second is the desk vocabulary of firms that are not trading
+    # firms** -- custody, fund services, surveillance, syndicate. Those are
+    # where State Street, Apex, Euronext and SimCorp advertise, and they were
+    # invisible.
+    #
+    # Every phrase below was measured over all 295,347 live titles and the
+    # promoted examples read by hand. **Three that looked obviously right were
+    # dropped:**
+    #
+    # - **`broker`** promotes 61 postings and 59 of them are *insurance*
+    #   brokers -- Marsh, Ryan Specialty, HW Kaufman, `Property & Casualty
+    #   Broker`, `Senior Placement Broker Haftpflichtversicherung`. Insurance
+    #   is on the reader's exclude list outright. `brokers` is worse: 18 of 18
+    #   are one Singapore recruiter's `HSBC Life Investment Brokers`.
+    # - **`valuation`** promotes 12 and they are `Valuation Analyst - Real
+    #   Estate Advisory` and `Forensic Litigation & Valuation Services`.
+    #   Property and disputes, not marks. SimCorp's `Valuation Product Area`
+    #   is reached by `simcorp` instead, which is the specific handle.
+    # - **`order management`** is supply chain at Motorola as often as it is
+    #   an OMS.
+    #
+    # `dealer` survives the same test where `broker` fails: 8 promotions, all
+    # of them `FX Dealer`, `Multi Asset Dealer`, `Institutional Dealer`.
+    "risk model", "risk models", "portfolio analysis", "alternative assets",
+    "global markets", "private markets", "investor services", "collateral",
+    "private credit", "open ended fund", "real assets",
+    "financial institutions", "corporate banking", "private bank",
+    "dealer", "markets analyst", "post trade", "fund services",
+    "fund accounting", "depositary", "trade surveillance",
+    "structured finance", "spot trade", "market abuse",
+    "middle office", "back office", "trade support", "securities lending",
+    "repo", "money market",
 )
 
 
@@ -564,35 +625,21 @@ ENGINEERING = _terms(
     "softwareentwickler", "entwickler", "développeur", "ontwikkelaar",
 )
 
-# **The Swedish half of the list above was dead for the same reason the trade
-# words were: a Swedish job title is one token.** `utvecklare` has been a
-# needle here for a long time and the corpus advertises `Fullstackutvecklare`,
-# `Javautvecklare`, `Backendutvecklare` and `Systemförvaltare` -- single
-# tokens, which a whole-word match cannot see inside. It is exactly the shape
-# `tagging._TRADE_HEADS` was written for one module over, and it left 30-odd
-# Swedish developer postings a day sitting at `relevance: unknown` on the
-# board next to the purchasers.
-#
-# Matched as a suffix, and safe here for the reason `_compound` gives: the
-# heads are long and Swedish is agglutinative. Dry-run over all 295,347 live
-# titles -- 855 `-utvecklare`, 160 `-arkitekt`, 33 `-udvikler`, 7
-# `-programmerare` -- and **not one of them touches a posting the tagger rates
-# positively**, which is the check that decides a needle in this project.
+# **A Swedish job title is one token, which killed the Swedish half of the list
+# above.** `utvecklare` has been a needle for a long time while the corpus
+# advertises `Fullstackutvecklare` and `Javautvecklare` -- 855 live titles a
+# whole-word match cannot see inside. Same shape as `tagging._TRADE_HEADS`, and
+# safe for the same reason: the heads are long and Swedish is agglutinative.
 #
 # **This list stays two-sided, which is what makes a broad head safe.**
-# `ENGINEERING` never rejects on its own: step 7 keeps the posting whenever
-# any markets word appears, so `Systemutvecklare till SEB Markets` survives
-# and `Fullstackutvecklare till en e-handelsplattform` does not. That is why
-# `-arkitekt` is here despite reaching ~25 town planners and landscape
-# architects: they are the wrong *profession* rather than the wrong
-# engineering seat, so the reason recorded for them is imprecise, and the
-# verdict is the same one `_OFF_INDUSTRY` would have reached.
+# `ENGINEERING` never rejects on its own -- step 7 keeps the posting whenever
+# a markets word appears, so `Systemutvecklare till SEB Markets` survives and
+# `Fullstackutvecklare till en e-handelsplattform` does not. That is why
+# `-arkitekt` is here despite reaching ~25 town planners: the verdict is the
+# one `_OFF_INDUSTRY` would reach, only under a less precise reason.
 #
-# **`-tekniker` and `-konsulent` were dropped.** `tekniker` is already both an
-# `_OFF_INDUSTRY` word and a `_TRADE_HEADS` head, so it would only relabel
-# 2,682 postings that are gated already; `konsulent` is the ordinary Danish
-# word for a consultant of any kind, and `CLAUDE.md` records it being dropped
-# from the trade heads for that exact reason.
+# **`-tekniker` and `-konsulent` were dropped.** `tekniker` is already gated
+# twice over, and `konsulent` is the ordinary Danish word for a consultant.
 ENGINEERING_HEADS = (
     "utvecklare", "udvikler", "utvikler", "programmerare", "arkitekt",
 )
@@ -718,6 +765,17 @@ STUDENT_PROGRAMME = _terms(
     # *Competition Law* seat.
     "student employee", "student worker", "stock competition",
     "trading competition", "case competition", "student ambassador",
+    # Swiss-German apprenticeships, which are the same contract as a *duales
+    # Studium* one line up: a `Lehrstelle` cannot be held without being
+    # enrolled, and `Lernende/r` is what the holder is called. 585 titles
+    # across Switzerland, none rated positively.
+    #
+    # **`Praktikum` is deliberately not here and must not be added.** It is
+    # German for *internship*, which is a contract rather than a programme --
+    # the same call `CLAUDE.md` records for `vikarie`, and the dry-run makes
+    # the point: its one positively-rated hit is `Praktikum Private Equity
+    # (m/w/d)`, a posting this reader could take.
+    "lehrstelle", "lernende", "lernender",
 )
 
 # `are enrolled` is deliberately absent: "employees who are enrolled in our
@@ -783,63 +841,36 @@ def judge(
     markets_role = first(role, MARKETS)
     markets_body = first(body, MARKETS)
 
-    # **A methodology phrase is evidence only next to a markets anchor**, which
-    # is the two-sided test step 7 has always applied to engineering titles and
-    # nothing else did. Step 7 asks "is this engineer at a markets firm?"; the
-    # same question decides whether "monte carlo" is derivatives pricing or
-    # radiation shielding, and until now steps 6, 8 and 9 never asked it.
+    # **A methodology phrase is evidence only next to a markets anchor** -- the
+    # two-sided test step 7 applies to engineering titles, which steps 6, 8 and
+    # 9 never asked. The same question decides whether "monte carlo" is
+    # derivatives pricing or radiation shielding.
     #
-    # Counting phrases was the obvious alternative and it does not work. It was
-    # measured: `Thermal - Fluids Analyst` carries *model validation* and
-    # *numerical methods*, and a payments company's `Data Scientist` carries
-    # *time series* and *statistical modelling*. Two phrases, no markets, both
-    # rejected by hand.
+    # **Counting phrases was the obvious alternative and it was measured not to
+    # work**: `Thermal - Fluids Analyst` carries *model validation* and
+    # *numerical methods*, a payments company's `Data Scientist` carries *time
+    # series* and *statistical modelling*. Two phrases each, no markets, both
+    # rejected by hand. The dry-run moved 103 postings, hand-read in full: a
+    # radiation-shielding engineer kept by *monte carlo*, a robotaxi tech lead
+    # by *time series*, and a **garage-door salesman by *options pricing***.
     #
-    # Dry-run over all 69,961 postings before committing, per `CLAUDE.md`: 103
-    # move, 79 distinct titles, hand-read in full. `Senior Radiation Shielding
-    # Engineer` was kept by *monte carlo*, `Tech Lead, Autonomy Performance -
-    # Robotaxi` by *time series*, and `Commercial Garage Door Sales
-    # Representative` by *options pricing*. The three that sounded like markets
-    # were read individually and are not: `Senior Market Strategist` is a CPA
-    # firm's wealth desk, `Staff Software Engineer` is a payments app, and
-    # `Interest & Product Logic Specialist` is a consumer bank's core ledger.
-    #
-    # A phrase that names markets activity outright is exempt, because there is
-    # nothing left for an anchor to add: a body saying "backtesting
-    # infrastructure for statistical arbitrage" has already answered the
+    # A phrase naming markets activity outright is exempt: a body saying
+    # "backtesting for statistical arbitrage" has already answered the
     # question, and two tests pin that the narrowing does not cost it.
     markets_activity = first(body, QUANT_MARKETS_BODY)
     quant_body = markets_activity
     if quant_body is None and (markets_role or markets_body):
         quant_body = first(body, QUANT_METHOD_BODY)
 
-    # **What it takes to overturn a title that already named the occupation**,
-    # which is a stronger question than what it takes to read an ambiguous one.
-    #
-    # Step 6 below runs only after step 5 has let every quantitative title
-    # through, so by the time it fires the title has said *wealth advisor* or
-    # *loan officer* and said nothing quantitative at all. Its body escape was
-    # a single `quant_body` phrase -- and a wealth manager's advertisement
-    # contains one the way every governance document contains "model
-    # validation". Measured on the hand-labelled sheet: `Wealth Advisor` with
-    # no body rejects, and the same title with a 28,572-character body came
-    # back `undecided` on one phrase from the firm's own description of itself.
-    #
-    # So the escape now needs a phrase that names markets *activity* outright
-    # rather than a method shared with every technical field. That is the split
-    # `QUANT_MARKETS_BODY` already draws and the same asymmetry `CLAUDE.md`
-    # records for it: *monte carlo* is derivatives pricing at a bank and
-    # radiation shielding at a reactor, but nothing writes *statistical
-    # arbitrage* in passing.
-    #
-    # Counting phrases was the alternative and `CLAUDE.md` has already measured
-    # it as the wrong rule one layer down -- two method phrases is what a
-    # thermal-fluids analyst carries. Here it would be weaker still, because a
-    # finance title guarantees the markets context that made counting look like
-    # evidence.
-    #
-    # `markets_activity` is the first half of `quant_body` above, kept under
-    # its own name because step 6 wants exactly that half and nothing else.
+    # `markets_activity` is the first half of `quant_body`, kept under its own
+    # name because **overturning a title that already named the occupation
+    # takes more than reading an ambiguous one**. Step 6 runs after step 5 has
+    # let every quantitative title through, so by then the title says *wealth
+    # advisor* and nothing quantitative -- and its escape was one `quant_body`
+    # phrase, which a wealth manager's advertisement contains the way every
+    # governance document contains "model validation". Measured: `Wealth
+    # Advisor` with no body rejects, and the same title with a 28,572-character
+    # body came back `undecided` on one phrase of the firm's self-description.
 
     # 1. A named occupation. The strongest evidence in the module -- but a
     #    quantitative word in the title *itself* means the title is doing
@@ -870,27 +901,22 @@ def judge(
     if hit:
         return Verdict("reject", "crypto_web3", hit, "strong")
 
-    # 4. A body demanding a future graduation date. It outranks the tests below
-    #    -- `Quantitative Research Intern` is the most relevant title in the
-    #    corpus and still unreachable for someone who has graduated -- but only
-    #    when the title agrees that this is a student position.
-    #
-    #    Alone it is not enough, and the audit that found this is the reason:
-    #    Aquatic Capital's `Quantitative Researcher, Early Career` and
-    #    `Quantitative Researcher, PhD` were both rejected on the phrases
-    #    "expected graduation" and "pursuing a degree", which their bodies use
-    #    to describe who *may* apply. Those two are the most on-target postings
-    #    in the whole corpus, and this rule threw them away silently. So a
-    #    quantitative title downgrades the gate to a read, exactly as it does
-    #    for a named occupation in step 1.
-    # 3b. A programme that cannot be held without being enrolled. Read from the
+    # 4a. A programme that cannot be held without being enrolled. Read from the
     #     title, and unlike the body gate below it needs no corroboration --
-    #     the title *is* the contract. 199 postings, none of them rated
-    #     positively before this existed.
+    #     the title *is* the contract.
     hit = first(role, STUDENT_PROGRAMME)
     if hit:
         return Verdict("reject", "student_only", hit, "strong")
 
+    # 4b. A body demanding a future graduation date, which outranks the tests
+    #     below -- `Quantitative Research Intern` is the most relevant title in
+    #     the corpus and still unreachable for someone who has graduated.
+    #
+    #     **But a body alone is not enough**: Aquatic Capital's `Quantitative
+    #     Researcher, Early Career` and `Quantitative Researcher, PhD` were
+    #     both rejected on "expected graduation" and "pursuing a degree", which
+    #     their bodies use to describe who *may* apply. So a quantitative title
+    #     downgrades the gate to a read, as it does in step 1.
     hit = first(body, STUDENT_ONLY)
     if hit:
         student_title = first(role, INTERN_TITLE)
@@ -969,47 +995,69 @@ def judge(
 # Board profile -- the firm-level signal, measured rather than asserted
 # --------------------------------------------------------------------------
 #
-# `TAGGING.md` proposes deriving `firm_type` from `employers.category`, on the
-# grounds that a regulator's classification beats a firm's own marketing. It
-# does -- but it classifies the *licensed entity*, and the board belongs to the
-# *group*. LaSalle Investment Management Asia is a Singapore Capital Markets
-# Services Licensee; the board its domain resolves to is `jll.com`, and that is
-# 2,021 property-management postings. `airbus.com` arrived the same way, via
-# Airbus Aeroassurances, and carries 2,016. The category says markets; the
-# board says aircraft, and the category is not wrong -- it is answering a
-# different question.
+# The obvious firm signal is `employers.category`, on the grounds that a
+# regulator's classification beats a firm's own marketing. It does -- but it
+# classifies the *licensed entity* while the board belongs to the *group*.
+# LaSalle Investment Management Asia is a Singapore Capital Markets Services
+# Licensee whose domain resolves to `jll.com`, 2,021 property-management
+# postings; `airbus.com` arrived the same way via Airbus Aeroassurances. The
+# category is not wrong, it is answering a different question.
 #
 # So the honest firm signal is measured from what the board actually publishes.
-# It also generalises the failure `PLAN.md` recorded and left open: Palmer
-# Square's careers page links to a jewellery retailer's Lever board, and this
-# reads it as a board whose postings are almost entirely somebody else's job.
+# It also catches a board that is somebody else's -- Palmer Square's careers
+# page links to a jewellery retailer's Lever feed.
 
 MIN_BOARD = 10  # below this a share is noise, not a profile
 
-# Sweden's national feed is not a firm's board. Profiling it would return
-# "non_markets", which is true and useless: it carries every job in the country
-# by design, and it is the source that makes Stockholm complete rather than
-# merely well covered.
-NOT_A_BOARD = ("jobtech",)
+# A national feed is not a firm's board. Profiling one returns "non_markets",
+# which is true and useless: it carries every job in the country by design.
+#
+# **The rule is the source's shape, not its size** -- if one token carries
+# postings from thousands of unrelated employers, no profile of it means
+# anything. Only `jobtech` was here for a long time, and once `board_profile`
+# was wired to a gate that gap went live: `jobindex/denmark` sits on 13 keeps
+# against a floor of 10, so a lexicon change costing Denmark four keeps would
+# have silently gated the whole Danish feed.
+NOT_A_BOARD = ("jobtech", "jobbsafari", "jobindex", "jobroom", "mycareersfuture")
 
 
 def board_profile(keep: int, undecided: int, rejected: int) -> tuple[str, str] | None:
     """(profile, evidence) for one board, or None if there is too little to say.
 
-    `undecided` counts towards relevance deliberately. A board of ambiguous
-    finance titles is a finance employer we have not read yet; a board of
-    housekeepers and maintenance technicians is not, and the two have to come
-    out differently or the measure just counts how many bodies we fetched.
+    `undecided` counts towards relevance deliberately -- **but not as much as a
+    keep**, and getting that wrong made the measure useless in the one
+    direction it exists for. Scoring `keep + undecided` against the total
+    called **`bosch.com` a markets board with `keep = 0`**: 149 unplaceable
+    titles against 157 rejections is 49% "not rejected", and Bosch is a
+    manufacturer.
+
+    Counting `undecided` at all is still right -- a board of ambiguous finance
+    titles is a finance employer nobody has read, and ignoring those would
+    measure how many bodies we happened to fetch. What is wrong is treating "we
+    could not read this" as equal to "we read it and it is markets work": in
+    this corpus an undecided is overwhelmingly *a six-word title in some
+    industry*. So it is worth a quarter of a keep, and a board with no keeps
+    can never be `markets`.
     """
     total = keep + undecided + rejected
     if total < MIN_BOARD:
         return None
+    # A keep is a full vote, an undecided a quarter of one -- the smallest
+    # weight that still separates a board of unread finance titles from a board
+    # of unread anything.
     relevant = keep + undecided
-    share = relevant / total
-    if share >= 0.40:
+    weighted = (keep + 0.25 * undecided) / total
+    if keep and weighted >= 0.40:
         profile = "markets"
-    elif share >= 0.05:
+    # **A share is the wrong statistic for a large board**, and `non_markets`
+    # is the verdict that cannot afford to be wrong about one: `td.com` carries
+    # 58 postings read as markets work and `dbs.com` 42 -- real desks at real
+    # banks -- and both scored under 5% against 2,400 and 1,600 postings of
+    # retail branch work. So the floor is absolute as well as proportional: a
+    # board that has shown us `MIN_BOARD` markets postings is a markets
+    # employer however much else it publishes.
+    elif weighted >= 0.05 or keep >= MIN_BOARD:
         profile = "mixed"
     else:
         profile = "non_markets"
-    return profile, f"{relevant}/{total} not rejected"
+    return profile, f"{relevant}/{total} not rejected, {keep} of them read as markets work"

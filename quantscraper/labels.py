@@ -105,21 +105,16 @@ LEGACY = {
     "student intern": "unknown",
 }
 
-# How much of the sample each fit bucket gets. `out_of_scope` and `unknown`
-# together are nearly half, because those are the buckets a false rejection
-# hides in and no other row can reveal one.
 # **A false rejection can only hide among postings that could plausibly be in
-# scope**, and the first sheet got this wrong in the most expensive way. It
+# scope**, and the first sheet got this wrong in the most expensive way: it
 # drew 30% of its rows from `out_of_scope` across the *whole* corpus, so the
-# reader's first seven rows were an AI-training gig, a compliance officer, a
-# commercial lawyer, an applied-AI engineer and a real-estate acquisition
-# manager. Rejecting a van driver is not a mistake the lexicon can make; the
-# rows worth an hour are the ones where it could.
+# reader's first seven rows were an AI-training gig, a compliance officer and a
+# commercial lawyer. Rejecting a van driver is not a mistake the lexicon can
+# make; the rows worth an hour are the ones where it could.
 #
-# So the frame is drawn from `lexicon.judge`, which already separates the two
-# kinds of rejection. These reasons are *contestable* -- a human could
-# reasonably overturn them, and one already did: `Equity Research Analyst` and
-# a Swedbank credit-risk quant were both worth reading and both sit here.
+# So the frame comes from `lexicon.judge`, which already separates the two kinds
+# of rejection. These reasons are *contestable* -- a human could reasonably
+# overturn them, and one already did.
 CONTESTABLE = frozenset({
     "non_quant_finance", "pure_engineering", "too_senior", "student_only",
 })
@@ -331,15 +326,13 @@ def draw(connection: sqlite3.Connection, limit: int, path: Path) -> tuple[int, i
     drawn = choose(_candidates(connection), limit)
 
     # **Shuffled, and this is not cosmetic.** The draw is built bucket by
-    # bucket, so writing it in that order groups every `apply_now` at the top
-    # and every `out_of_scope` in one block further down -- and then row
-    # position tells you exactly what the tagger decided, which is the thing
-    # leaving the `fit` column out was supposed to prevent. Thirty rejections
-    # in a row also invite rubber-stamping.
+    # bucket, so writing it in that order leaks the tagger's verdict through
+    # row position as plainly as the omitted `fit` column would -- and thirty
+    # rejections in a row invite rubber-stamping.
     #
-    # `hash()` is salted per process and would reshuffle the sheet on every
-    # run, so the order comes from a digest of the key: stable across runs and
-    # machines, which is what lets a half-filled sheet survive a redraw.
+    # `hash()` is salted per process and would reshuffle on every run, so the
+    # order comes from a digest of the key: stable across runs and machines,
+    # which is what lets a half-filled sheet survive a redraw.
     ordered = sorted(dict.fromkeys([*done, *drawn]), key=_scatter)
 
     written = 0

@@ -358,10 +358,9 @@ class DescriptionTest(unittest.TestCase):
 
 
 class SearchEndpointTest(unittest.TestCase):
-    def test_the_search_ceiling_is_recorded(self):
-        """`/v2/search` advertises a last page of 672 and returns HTTP 418 from
-        page 100 on. This module must never be "simplified" onto it."""
-        self.assertEqual(mcf.SEARCH_PAGE_CEILING, 100)
+    def test_it_enumerates_the_listing_not_the_search(self):
+        """`/v2/search` returns HTTP 418 from page 100 on, so it cannot walk
+        the portal. This module must never be "simplified" onto it."""
         self.assertIn("/v2/jobs", mcf.LIST_URL)
 
 

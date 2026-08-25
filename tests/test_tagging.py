@@ -1581,9 +1581,9 @@ class SoftwareSpecialtyTest(unittest.TestCase):
 class VicePresidentIsAnOfficerGrade(unittest.TestCase):
     """Four hand-labelled rows, all noted "filter out becuase VP role".
 
-    `PLAN.md` records the argument for the old placement -- at a bank VP is a
-    mid-career grade -- and `_MANAGEMENT` had already stopped believing it,
-    so the gate and the ladder disagreed about the same word.
+    The argument for the old placement -- at a bank VP is a mid-career grade --
+    is true and no longer decides anything: `_MANAGEMENT` had already stopped
+    believing it, so the gate and the ladder disagreed about the same word.
     """
 
     def test_vp_reads_as_head_or_md(self):
@@ -2104,3 +2104,175 @@ class RankDoesNotPromoteAnUnreadPostingTest(unittest.TestCase):
         self.assertEqual(
             _tags(title="Senior Quantitative Researcher")["fit"], {"stretch"}
         )
+
+
+class EveryHubReadTheSameWayTest(unittest.TestCase):
+    """The Stockholm method applied outward: rank the phrases by how many board
+    postings still sit at `relevance: unknown`, then read what each would move.
+
+    Two families came out of doing that across every hub rather than one, and
+    neither is a translation problem -- both are ordinary English the list had
+    simply never been checked against.
+    """
+
+    def _rel(self, title, **kw):
+        return _tags(title=title, **kw)["relevance"]
+
+    def test_word_order_variants_are_read(self):
+        """`model risk` was a needle and `risk model` was not, so Denmark's
+        `Risk Model Developer` read as a posting nothing had looked at."""
+        for title in ("Risk Model Developer",
+                      "Investment Portfolio Analysis Specialist",
+                      "Depositary Officer - Alternative Assets"):
+            with self.subTest(title=title):
+                self.assertNotEqual(self._rel(title), {"unknown"})
+
+    def test_the_custody_and_fund_services_desk_is_read(self):
+        """Where State Street, Apex, Euronext and SimCorp advertise. None of
+        this vocabulary was on any list."""
+        for title in ("Senior Depositary Analyst", "Trade Surveillance Analyst",
+                      "Associate, Product Management, Fund Services",
+                      "Senior Analyst - Open Ended Fund Integration",
+                      "Structured Finance Analyst 2", "FX Dealer"):
+            with self.subTest(title=title):
+                self.assertEqual(self._rel(title), {"adjacent"})
+
+    def test_broker_is_an_insurance_word_in_this_corpus(self):
+        """It promotes 61 postings and 59 are insurance -- Marsh, Ryan
+        Specialty, `Property & Casualty Broker`. Insurance is on the reader's
+        exclude list outright, so the phrase stays off `MARKETS` however much
+        it looks like it belongs. `dealer` passes the same test and is in."""
+        for title in ("Property & Casualty Broker", "Senior Casualty Broker",
+                      "HSBC Life Investment Brokers"):
+            with self.subTest(title=title):
+                self.assertNotEqual(self._rel(title), {"adjacent"})
+
+    def test_valuation_is_a_property_word_in_this_corpus(self):
+        """`Valuation Analyst - Real Estate Advisory` and `Forensic Litigation
+        & Valuation Services` are what the bare word reaches. SimCorp's
+        `Valuation Product Area` is reached by `simcorp` instead, which is the
+        specific handle rather than the general one."""
+        self.assertEqual(self._rel("Valuation Analyst - Real Estate Advisory"),
+                         {"unknown"})
+        # The specific handle, which is a product name no other industry uses.
+        # It reaches AP4's `Systemförvaltare SimCorp Dimension` -- a title that
+        # otherwise reads as a caretaker.
+        self.assertEqual(self._rel("Systemförvaltare SimCorp Dimension till AP4"),
+                         {"adjacent"})
+
+    def test_a_firm_name_in_the_employer_field_is_not_read_and_that_is_known(self):
+        """SimCorp's own board says `Senior Software Engineer - Portfolio
+        Analysis`, and the firm name is in `jobs.employer` rather than the
+        title, so `simcorp` cannot reach it. `portfolio analysis` does, which
+        is why that phrase is on the list -- but the general case is open.
+
+        `lexicon.board_profile` is the rule for it and `CLAUDE.md` records that
+        it is implemented, tested and wired to nothing. Written down here so
+        the next person reaches for it rather than widening `MARKETS` again."""
+        self.assertEqual(self._rel("Senior Software Engineer - Portfolio Analysis"),
+                         {"adjacent"})
+
+
+class InvestingTitleIsAMarketsTitleTest(unittest.TestCase):
+    """Stopping a rejection is not the same as conferring a reading.
+
+    `discretionary_investing` came off the reject list at the reader's
+    instruction, and 201 of the 342 postings that then reached the board
+    arrived at `relevance: unknown` -- sorted to the bottom with the
+    purchasers, which is the complaint that started all this. The category
+    only fires on a title naming private equity, equity research, wealth or
+    asset management, so by the time it has fired the posting has placed itself
+    in markets."""
+
+    def test_it_reaches_adjacent_rather_than_unknown(self):
+        for title in ("Investment Analyst, Public Equity",
+                      "Associate, Private Credit",
+                      "Regional Wealth Management Specialist"):
+            with self.subTest(title=title):
+                tags = _tags(title=title)
+                self.assertEqual(tags["relevance"], {"adjacent"})
+
+    def test_the_evidence_still_names_the_category(self):
+        """`list --exclude discretionary_investing` has to keep working."""
+        tags = _tags(title="Investment Analyst, Venture Capital")
+        self.assertIn("discretionary_investing", tags["exclusion_reason"])
+
+
+class SwissVocabularyTest(unittest.TestCase):
+    """Switzerland is the hub with the widest gap between what arrives and what
+    shows, and unlike Denmark and Singapore it is gated by words rather than by
+    a taxonomy -- job-room.ch publishes bare AVAM codes with no labels."""
+
+    def test_the_german_and_french_trades_are_gated(self):
+        for title in ("Bäcker", "Müller", "Speditionskauffrau Seefracht Import 100%",
+                      "immobilienbewirtschafter:in 80-100%", "Responsable de Caisse",
+                      "Agent de comptoir", "Senior Bauleiter (m/w/d)",
+                      "Sachbearbeiterin Kreditoren 60-80%"):
+            with self.subTest(title=title):
+                self.assertIn("off_industry",
+                              _tags(title=title)["exclusion_reason"])
+
+    def test_anlage_is_a_plant_not_an_investment(self):
+        """**The `handel` trap in German.** `Anlage` means both *investment*
+        and *industrial plant*, and in this corpus it is overwhelmingly the
+        second: `anlagenführer` is 212 titles and every one is a machine
+        operator. Translating "investment" into German would have put them all
+        on a markets list."""
+        self.assertIn("off_industry",
+                      _tags(title="Anlagenführer 100%")["exclusion_reason"])
+        self.assertIsNone(
+            lexicon.first(lexicon.normalize("Anlagenführer Toranlagen"),
+                          lexicon.MARKETS))
+
+    def test_an_apprenticeship_is_a_contract_not_a_trade(self):
+        """A `Lehrstelle` cannot be held without being enrolled, which is the
+        same fact as a *duales Studium* and belongs in the same list."""
+        self.assertEqual(lexicon.judge("Lehrstelle Kaufmann EFZ").reason,
+                         "student_only")
+
+    def test_praktikum_is_not_one_of_them(self):
+        """It is German for *internship*, which is a contract rather than a
+        programme -- the call `CLAUDE.md` already records for `vikarie`. Its
+        one positively-rated hit is a posting this reader could take."""
+        self.assertNotEqual(
+            lexicon.judge("Praktikum Private Equity (m/w/d)").reason,
+            "student_only")
+
+
+class WideningMarketsCreatesItsOwnCollisionsTest(unittest.TestCase):
+    """Putting `asset management` and `front office` to work in German and
+    French found ten Swiss cards where both name something ordinary.
+
+    The phrase stays on `MARKETS` -- 209 `front office` titles are genuine
+    desks and `asset management` decides 68 postings correctly -- and the noun
+    beside it is the discriminator, exactly as `shiftleader` was for Scandic.
+    """
+
+    def test_the_swiss_property_and_infrastructure_reading_is_gated(self):
+        for title in ("Leiter/-in Entwicklung Asset Management Nationalstrassen",
+                      "Leiter*in Gruppe Asset Management Kehrichtverwertungsanlage",
+                      "Asset Management Immobilien",
+                      "Leitung Immobilien-Portfolio-Management und Bauprozess-Management",
+                      "Front-Office und Verkauf als Einrichter/in 50%"):
+            with self.subTest(title=title):
+                self.assertIn("off_industry",
+                              _tags(title=title)["exclusion_reason"])
+
+    def test_the_real_desks_are_untouched(self):
+        for title in ("Front Office Python Developer",
+                      "Collateral Management - Senior Associate",
+                      "FX Dealer", "Senior Depositary Analyst"):
+            with self.subTest(title=title):
+                tags = _tags(title=title)
+                self.assertEqual(tags["relevance"], {"adjacent"})
+                self.assertNotIn("off_industry", tags.get("exclusion_reason", set()))
+
+    def test_a_hotels_front_office_staff_member_still_gets_through(self):
+        """`Front Office Mitarbeitender` at the Walliserhof Grand-Hotel is one
+        card and it stays. The only thing separating it from a trading desk is
+        the employer's name, which nothing reads for relevance, and
+        `mitarbeitender` means *employee* -- gating on it is the `medarbetare`
+        mistake this file already records twice. One card is cheaper than a
+        needle that could delete a desk."""
+        self.assertEqual(_tags(title="Front Office Mitarbeitender")["relevance"],
+                         {"adjacent"})

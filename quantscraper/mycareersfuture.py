@@ -1,93 +1,67 @@
 """Layer 4 -- MyCareersFuture, Singapore's statutory job portal.
 
-Singapore is a focus hub, and it is the worst covered of the six: two of its ten
-roster firms produce postings. MyCareersFuture is not an ordinary aggregator.
-Under the **Fair Consideration Framework** an employer must advertise a role on
-this portal, for a minimum run, before it may apply for an Employment Pass. So
-for exactly the roles a foreigner could take, the portal is a register that is
-substantially complete *by law* -- the same property that makes `fi_se` and the
-SEC bulk files worth more than any search box.
+Not an ordinary aggregator: under the **Fair Consideration Framework** an
+employer must advertise a role here, for a minimum run, before it may apply for
+an Employment Pass. So for exactly the roles a foreigner could take, the portal
+is a register substantially complete *by law* -- the property that makes
+`fi_se` and the SEC bulk files worth more than any search box.
 
 No key, no quota, no session cookie.
 
 **Two enumerable surfaces, and the obvious one is the wrong one.**
 
-`POST /v2/search` is what the website calls. It is a query endpoint with facets,
-it advertises 67,272 postings, and it advertises a `_links.last` of page 672 at
-`limit=100`. **That last link is a lie.** Page 99 answers; page 100 and every
-page after it return **HTTP 418** -- an Elasticsearch `max_result_window` of
-10,000 results wearing a joke status code. Believing the advertised `last` would
-have produced a walk that dies 85% of the way short. It is at least loud: 418 is
-an error, not a silent empty page, which is the only reason this was cheap to
-find.
+`POST /v2/search` is what the website calls, and it advertises a `_links.last`
+of page 672. **That link is a lie**: page 99 answers and page 100 onward return
+**HTTP 418** -- an Elasticsearch `max_result_window` of 10,000 wearing a joke
+status code. Believing the advertised `last` produces a walk that dies 85%
+short. It is at least loud, which is the only reason it was cheap to find.
 
-`GET /v2/jobs` is the one to use. Measured against the live API:
+`GET /v2/jobs` is the one to use. Measured against the live API it pages to the
+end with no ceiling, is **bigger** (84,743 postings against search's 67,272),
+carries the **full description** in the list response so this needs no body
+backfill, carries **`metadata.expiryDate`** as a published closing date, and is
+already sorted newest first -- 0 inversions over the first 9,485 rows, which is
+what makes an incremental top-up safe.
 
-  * it pages to the end -- page 847 came back short (39 rows) and page 848
-    empty, with no ceiling and no 418 anywhere;
-  * it is **bigger**: 84,743 postings against search's 67,272;
-  * it carries the **full description** in the list response, so this needs no
-    Layer 3C body backfill the way Workday does;
-  * it carries **`metadata.expiryDate`**, a published closing date;
-  * it is already sorted by posting date, newest first -- 0 inversions over the
-    first 9,485 rows walked, which is what makes an incremental top-up safe;
-  * it honours `?uuids=a,b,...` (100 at a time, exact set returned) and
-    `?categories=<name>`.
+**The search endpoint is worth keeping written down as the fallback.** If
+`/v2/jobs` ever grows a window of its own, the partition that beats it is the
+portal's own category taxonomy, and that partition is *provably* a complete
+cover: the union of all 43 categories is exactly the unfiltered total. The 43rd
+name was nearly missed -- 42 summed 66 short, and the gap was
+`Telecommunications`, which never appeared in a 1,200-row sample. A bogus
+category returns HTTP 400 rather than an empty result, so the endpoint is its
+own oracle for whether a name is real.
 
-So this is an enumeration, not a query. Nothing here is keyword-driven and there
-is no recall ceiling to document.
-
-**The search endpoint is still worth keeping written down, as the fallback.**
-If `/v2/jobs` ever grows a result window of its own, the partition that beats it
-is the portal's own category taxonomy, and that partition is *provably* a
-complete cover -- measured, not assumed:
-
-    union of all 43 categories = 67,272 = the unfiltered total, exactly.
-
-Every posting carries at least one category (0 of 9,485 walked had none), and
-the largest single category is 6,971, comfortably under the 10,000 ceiling. The
-43rd name was nearly missed: 42 categories summed to 67,206 and the 66-posting
-gap was `Telecommunications`, which never appeared in a 1,200-row sample. A
-bogus category name returns HTTP 400 rather than an empty result, so the
-endpoint is its own oracle for whether a name is real -- that is how it was
-found, and how a future name can be.
-
-**Paging guards, per the Workday lesson.** A page-count bound is a silent cap on
-exactly the boards that matter, so `MAX_PAGES` is five times the real length and
-is a backstop against a server that never terminates, not a limit on how big the
-portal may be. The walk stops on a short page, or on a page whose contents
-repeat the previous one -- a server ignoring `page` serves page one forever and
-never returns an empty page.
+**Paging guards, per the Workday lesson.** A page-count bound is a silent cap
+on exactly the boards that matter, so `MAX_PAGES` is five times the real length
+-- a backstop against a server that never terminates, not a limit on how big
+the portal may be. The walk stops on a short page, or on one whose contents
+repeat the previous: a server ignoring `page` serves page one forever and never
+returns an empty page.
 
 **The index moves under the walk, so the sweep audits its own arithmetic.**
-`total` drifted between 84,729 and 84,743 across a single walk and 6 rows in the
-first 10,094 arrived twice. Distinct postings collected are therefore compared
-against the total the portal advertised, and any shortfall is reported rather
-than absorbed: a round number in the output is what a cap looks like from the
-outside, and nothing else would say so.
+`total` drifted by 14 across a single walk and 6 rows in the first 10,094
+arrived twice, so distinct postings collected are compared against the
+advertised total and any shortfall is reported rather than absorbed.
 
 **This board is not one firm's own, so `employer` carries the advertiser name**
--- the same contract JobStream follows. `domain` is NULL for every row, because
-the portal publishes no employer website anywhere in either response. What it
-*does* publish is the **UEN**, Singapore's statutory company number, which is a
-far better identity key than a name and has no column to live in yet.
+-- the same contract JobStream follows. `domain` is NULL for every row: the
+portal publishes no employer website. What it *does* publish is the **UEN**,
+Singapore's statutory company number, which is a far better identity key than a
+name and has no column to live in yet.
 
-**`deadline` is `metadata.expiryDate`, a published field.** Every one of the
-9,485 rows walked had one, and it is not a uniform 30 days -- employers set it,
-and 7-, 14- and 30-day runs all appear. It is the date the advertisement closes,
-which is the thing a reader needs. Note what this means downstream: the board
-pins an approaching deadline above everything else, and this source hands it
-~85,000 dated postings where the rest of the corpus has almost none. That is
-correct data with a large ranking consequence, and it is one line to change.
+**`deadline` is `metadata.expiryDate`, a published field**, set on every row
+walked and genuinely chosen by the employer -- 7-, 14- and 30-day runs all
+appear. Note the downstream consequence: the board pins an approaching deadline
+above everything else, and this source hands it ~85,000 dated postings where the
+rest of the corpus has almost none.
 
 **`department` stays NULL deliberately.** The portal has no department field.
-It does publish `positionLevels` ("Fresh/entry level" ... "Senior Management")
-and `minimumYearsExperience` as an integer, and both are tempting to park in
-`department` -- do not. `tagging.py` folds `department` into the *title* when
-reading rank and role, so a level parked there becomes a third door to seniority
-opened covertly through a field the tagger reads as the job's name. That is the
-`Trading Operations` mistake with a new coat of paint. Those two fields deserve
-columns of their own; until they have them they are dropped, not smuggled.
+It does publish `positionLevels` and `minimumYearsExperience`, and both are
+tempting to park in `department` -- do not. `tagging.py` folds `department` into
+the *title* when reading rank and role, so a level parked there becomes a third
+door to seniority opened covertly through a field the tagger reads as the job's
+name. That is the `Trading Operations` mistake with a new coat of paint.
 """
 
 from __future__ import annotations
@@ -106,8 +80,9 @@ from .models import Job
 NAME = "mycareersfuture"
 TOKEN = "singapore"  # one national portal, so the board identifier is constant
 
+# `/v2/jobs`, not the `/v2/search` the website uses: search answers page 99 and
+# returns HTTP 418 from page 100 on, so it cannot enumerate the portal.
 LIST_URL = "https://api.mycareersfuture.gov.sg/v2/jobs?limit={limit}&page={page}"
-SEARCH_URL = "https://api.mycareersfuture.gov.sg/v2/search?limit={limit}&page={page}"
 
 # 100 is the maximum the API accepts; 200 is HTTP 400. Asserted rather than
 # merely used, so raising it fails here instead of at the far end of a sweep.
@@ -116,10 +91,6 @@ PAGE_SIZE = 100
 # A backstop against a server that never returns a short page, not a limit on
 # how big the portal may be. The real walk ends at page 847.
 MAX_PAGES = 5_000
-
-# `/v2/search` answers page 99 and returns HTTP 418 from page 100 on. Recorded
-# so nobody "simplifies" this module onto the endpoint the website uses.
-SEARCH_PAGE_CEILING = 100
 
 # An implausibly small result is a failure. The portal holds ~85,000 postings;
 # it would have to lose three quarters of them before this stayed quiet. The
@@ -288,28 +259,6 @@ def fetch_page(number: int, *, category: str | None = None) -> tuple[list[dict],
         url += "&categories=" + urllib.parse.quote(category)
     payload = json.loads(http.get_text(url, timeout=90, retries=3))
     return payload.get("results") or [], int(payload.get("total") or 0)
-
-
-def search_total(category: str | None = None) -> int:
-    """What `/v2/search` says the board holds. Used to audit `CATEGORIES`.
-
-    Not a source of postings: the endpoint stops answering at page
-    `SEARCH_PAGE_CEILING` and carries neither a description nor a closing date.
-    """
-    body = {
-        "search": "",
-        "sessionId": "",
-        "postingCompany": [],
-        "flexibleWorkArrangement": [],
-    }
-    if category is not None:
-        body["categories"] = [category]
-    payload = json.loads(
-        http.post_json(
-            SEARCH_URL.format(limit=1, page=0), json.dumps(body).encode(), timeout=90
-        )
-    )
-    return int(payload.get("total") or 0)
 
 
 def walk(

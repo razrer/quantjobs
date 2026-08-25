@@ -649,9 +649,9 @@ def _labels(database: str, files: list[str] | None) -> int:
     # hid the difference.** The tagger reads rank from the title and returns
     # `unknown` when the title states none; the sheet is filled in by a person
     # who has read the body. Those rows are not the tagger being wrong -- they
-    # are the tagger declining to guess, which is the behaviour `PLAN.md`
-    # chose deliberately after a stray *partner* in a diversity paragraph made
-    # an internship a managing director.
+    # are the tagger declining to guess, which was chosen deliberately after a
+    # stray *partner* in a diversity paragraph made an internship a managing
+    # director.
     #
     # Reporting them together made `seniority` look like a broken classifier
     # when most of the gap is a scale that asks a question this tagger does
@@ -690,29 +690,19 @@ def _labels(database: str, files: list[str] | None) -> int:
             if d.evidence:
                 print(f"    on {d.evidence[:96]}")
 
-    # **The criterion gates on relevance and on the hand sheet, and both halves
-    # of that are decisions rather than conveniences.**
+    # **The criterion gates on relevance and on the hand sheet**, and both
+    # halves are decisions rather than conveniences.
     #
-    # *Relevance only.* `seniority` was on the bar and cannot reach it: about a
-    # third of the labelled rows are titles that state no grade at all, where
-    # this tagger answers `unknown` on purpose -- the rule adopted after a
-    # stray *partner* in a diversity paragraph made an internship a managing
-    # director. Closing that gap means letting a body set rank again, which is
-    # a known-bad rule. Seniority is a ranking input; the thing that actually
-    # removes a posting for being too senior is `out_of_reach`, which reads
-    # `_MANAGEMENT` and was right on every hand-labelled row. So it is reported
-    # and no longer gates.
+    # *Relevance only.* Rung agreement cannot reach the bar and should not: a
+    # third of the labelled rows state no grade, where the tagger answers
+    # `unknown` on purpose, and closing that gap means letting a body set rank
+    # again. `containment` below asks the question that has consequences.
     #
     # *The hand sheet.* The machine sheet is scored beside it and is a real
     # diagnostic -- it found the `underwriting` bug, worth 1,834 postings, that
-    # eighty hand rows never could. But it is not the bar: its rubric prefers
-    # the generous label when torn, so it marks `Slack Administrator` and
-    # `Director, GTM AI Enablement` as `adjacent`, and its "false rejections"
-    # contradict the reader's own hand labels rather than the lexicon. Where
-    # the two disagree, the sheet the reader wrote wins.
-    #
-    # The sample-size half of the criterion counts every labelled row, because
-    # that is what it was ever about.
+    # eighty hand rows never could. It is not the bar: its rubric prefers the
+    # generous label when torn, so its "false rejections" contradict the
+    # reader's own hand labels rather than the lexicon.
     hand = [label for path, rows in per_file if path == labels.PATH for label in rows]
     hand_rates, hand_disagreements = (
         labels.score(connection, [l for l in usable if l in set(hand)])
@@ -901,20 +891,17 @@ def _daily(database: str, full: bool, publish: bool) -> int:
     since = None if full else _denmark_since(connection)
     connection.close()
 
-    # **The tagger runs twice, and the second pass is not a belt-and-braces.**
-    # `bodies.targets` queues postings the tagger could not place -- it reads
-    # `job_tags` to find them -- so a posting scraped ten minutes ago is not in
-    # that queue at all: it has no verdict yet. Tag first and it does. Then
-    # `bodies` fetches the descriptions, retires the title-only verdicts it
-    # just invalidated, and the second pass re-reads those postings with the
-    # body in front of it.
+    # **The tagger runs twice, and the second pass is not belt-and-braces.**
+    # `bodies.targets` reads `job_tags` to find postings the tagger could not
+    # place, so a posting scraped ten minutes ago is not in that queue at all
+    # -- it has no verdict yet. Tag first and it does; then `bodies` fetches
+    # the descriptions and retires the title-only verdicts it just
+    # invalidated, and the second pass re-reads them with the body in front of
+    # it. Running `bodies` first is what the sequence used to do, and it meant
+    # every posting spent its first day judged on a six-word title.
     #
-    # Running `bodies` once, before any tagging, is what the sequence used to
-    # do, and it meant every posting spent its first day on the board judged on
-    # a six-word title -- which for a national board is no evidence at all.
-    # Neither extra pass is expensive: `tag` visits only postings with no row
-    # at the current version, so the first pass sees the day's arrivals and the
-    # second sees the few hundred that just gained a body.
+    # Neither pass is expensive: `tag` visits only postings with no row at the
+    # current version.
     steps: list[tuple[str, Callable[[], int]]] = [
         # Cheap (one GET) and unrelated to the rest -- runs first so a Reject
         # clicked on the live board reaches `labels.csv` before this run's

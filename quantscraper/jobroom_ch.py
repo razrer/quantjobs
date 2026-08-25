@@ -1,87 +1,69 @@
 """Layer 4 -- job-room.ch, Switzerland's public employment service.
 
-Switzerland is a focus hub and the second worst covered of the six: two of its
-eleven roster firms produce postings. job-room.ch is SECO's own portal, and it
-is not an ordinary aggregator -- under the **Stellenmeldepflicht** an employer
-must report a vacancy in a high-unemployment occupation to the public
-employment service before advertising it anywhere else. For those occupations
-it is a register that is complete *by law*, the same property that makes
-`fi_se` and the SEC bulk files worth more than any search box. For everything
-else it is a wide net, exactly as Platsbanken turned out to be.
+SECO's own portal, and not an ordinary aggregator: under the
+**Stellenmeldepflicht** an employer must report a vacancy in a high-unemployment
+occupation to the public employment service before advertising it anywhere else.
+For those occupations it is a register complete *by law*; for everything else it
+is a wide net, exactly as Platsbanken turned out to be.
 
-**No key, no account, no session.** `ACTION-REQUIRED.md` recorded this source as
-blocked on a registered API programme, and that was our own bug: the 401 was
-measured against `/api/jobadservice/api/...`, which carries one `/api/` too
-many. The real path is the one the public site itself calls, and it answers a
-bare unauthenticated POST with full postings. The registered API that wants an
-email *is* real and is a different thing -- it lets an employer submit and
-manage its **own** postings, and none of its read endpoints return the register
--- so it would not have served this project even with a key.
+**No key, no account, no session.** This source was recorded as blocked on a
+registered API programme, and that was our own bug: the 401 was measured against
+`/api/jobadservice/api/...`, one `/api/` too many. The real path is the one the
+public site itself calls and it answers a bare unauthenticated POST with full
+postings. The registered API *is* real and is a different thing -- it lets an
+employer manage its **own** postings, and no read endpoint on it returns the
+register.
 
 **The `Link` header advertises a last page that does not exist.** With `size=1`
-the response offers `rel="last"` at page 80,459, and the API returns **HTTP
-412** for any request whose `page * size` reaches 10,000: an Elasticsearch
+it offers `rel="last"` at page 80,459, and the API returns **HTTP 412** for any
+request whose `page * size` reaches 10,000 -- an Elasticsearch
 `max_result_window` wearing a status code. Believing the advertised `last`
-builds a walk that dies 88% short. This is MyCareersFuture's 418 again, one
-country over, and it is loud for the same lucky reason -- an error rather than
-a silent empty page.
+builds a walk that dies 88% short. MyCareersFuture's 418 one country over, and
+loud for the same lucky reason.
 
-**The partition that looks obvious is not a cover, and this was measured
-rather than assumed.** The 26 cantons sum to 78,355 against a total of 80,460:
-`FL` is a 27th code (Liechtenstein) that no list of Swiss cantons contains, and
-roughly 2,100 postings carry no canton at all, which no value of the filter can
-reach. That is the `Telecommunications` lesson with the gap moved somewhere a
-better-spelled list cannot close it. So geography is not used to slice.
+**The partition that looks obvious is not a cover, and this was measured.** The
+26 cantons sum to 78,355 against a total of 80,460: `FL` is a 27th code
+(Liechtenstein) no list of Swiss cantons contains, and ~2,100 postings carry no
+canton at all, which no value of the filter can reach. So geography is not used
+to slice.
 
 **What is used is the two-ended walk.** `sort=date_asc` is the exact reverse of
-`date_desc` -- verified over a whole canton, 938 postings, same set and
-precisely reversed -- so a slice of `T` postings is fully covered by reading the
-first 10,000 forwards and the last `T - 10,000` backwards. That doubles the
-reachable slice to 20,000 for fifteen lines and no extra request on the common
-path, which is what makes a daily poll safe: a single day is ~9,400, only 6%
-under the ceiling, and a day that ran hot would otherwise truncate.
+`date_desc` -- verified over a whole canton, same set precisely reversed -- so a
+slice of `T` postings is covered by reading the first 10,000 forwards and the
+last `T - 10,000` backwards. That doubles the reachable slice to 20,000 for
+fifteen lines and no extra request on the common path, which is what makes a
+daily poll safe: a single day is ~9,400, only 6% under the ceiling.
 
-**Above 20,000 this fails loudly rather than returning most of the answer.** A
-slice too big to reach is reported as a problem, because a round number in the
-output is what a cap looks like from the outside and nothing else here would
-say so.
+**Above 20,000 this fails loudly rather than returning most of the answer**,
+because a round number in the output is what a cap looks like from outside.
 
 **A cold start reaches the last few days, not the whole board, and that is the
-source's shape rather than a shortfall.** `onlineSince` is nested (ads posted
-within the last N days), so the slices are 9,401 at one day and 12,028 at two
--- and 27,403 at a week, past what any walk can read. The board is a rolling
-60-day window, so polling daily converges on all of it within 60 days and then
-holds. Saying so is the point: this is the one number a reader would otherwise
-have to infer from a total that never quite matches.
+source's shape rather than a shortfall.** `onlineSince` is nested, so the slices
+are 9,401 at one day and 12,028 at two -- and 27,403 at a week, past what any
+walk can read. The board is a rolling 60-day window, so polling daily converges
+on all of it within 60 days and then holds.
 
 **`publication.endDate` is not a deadline and must not be written as one.**
 Every ad carries one and it is tempting, because the board pins an approaching
-deadline above everything else. Measured over 2,000 ads: **81% sit at exactly
-30 days after the start date and 12.8% at exactly 60** -- two round defaults,
-which is what a "how long should this run?" dropdown looks like, not a date an
-employer chose. It is when the *advertisement* stops being displayed, not when
-applications close. Writing it would hand ~80,000 Swiss postings a fabricated
-deadline and sort every one of them above the postings that publish a real one.
-Same asymmetry as the roster's `GRASSHOPPER ESCAPEMENT, LLC`, and at scale.
+deadline above everything else. Measured over 2,000 ads: **81% sit exactly 30
+days after the start date and 12.8% exactly 60** -- two round defaults, which is
+a "how long should this run?" dropdown, not a date an employer chose. Writing it
+would hand ~80,000 Swiss postings a fabricated deadline and sort every one above
+the postings publishing a real one.
 
 **`company.website` is usually the recruiter's, and `surrogate` is the tell.**
 The field is present on 19% of ads and the top six domains are all staffing
-agencies -- MediPersonal, fachkraft.ch, stellentreff.ch. `company.surrogate`
-marks a stand-in record, and **372 of 379 websites in a 2,000-ad sample came
-from surrogate rows**; the seven that did not are `post.ch` and `pfister.ch`,
-which are the real employers. So a domain is recorded only from a non-surrogate
-company. That is a handful of rows per thousand and every one of them is right,
-which is the trade this project makes everywhere: a wrong domain mis-attributes
-a posting to a firm that never advertised it.
-
-`employer` still carries the advertiser verbatim either way -- the same contract
-JobStream and MyCareersFuture follow for a board that is not one firm's own.
+agencies. `company.surrogate` marks a stand-in record, and **372 of 379 websites
+in a 2,000-ad sample came from surrogate rows**; the seven that did not are the
+real employers. So a domain is recorded only from a non-surrogate company --
+0.3% of rows, every one correct. `employer` still carries the advertiser
+verbatim either way, the contract every board that is not one firm's own
+follows.
 
 **Removal is not observable here.** The search returns only `PUBLISHED_PUBLIC`
-ads, so a withdrawn one simply stops appearing; there is no removal channel of
-the kind JobStream publishes. Postings therefore go stale the ordinary way --
-the row stays and `last_seen` stops moving, which is the contract `db.upsert_jobs`
-already documents.
+ads, so a withdrawn one simply stops appearing and there is no removal channel
+of the kind JobStream publishes. Postings go stale the ordinary way: the row
+stays and `last_seen` stops moving.
 """
 
 from __future__ import annotations

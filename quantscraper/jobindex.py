@@ -1,96 +1,72 @@
 """Layer 4 -- Jobindex, Denmark's largest job board.
 
-Copenhagen is a focus hub and the thinnest one in the pipeline: 41 postings
-from 12 employers at the last coverage run, none of them rated worth reading.
-
-**This is the fallback, and the thing it replaces matters.** Sweden has
-JobStream and Singapore has MyCareersFuture, and both are registers that are
-substantially complete *by law*. Denmark's equivalent is STAR's `jobnet.dk`,
-which redirects to NemLog-in and needs a Danish MitID -- verified, and the user
-does not have one. Jobindex is private and publishing to it is voluntary, so
-this is a **wide net and never a census**, the same standing correction
-`jobstream.py` carries about Platsbanken. Nothing downstream may treat Denmark
-as covered because this module runs.
+**This is a fallback, and what it replaces matters.** Sweden has JobStream and
+Singapore has MyCareersFuture, both substantially complete *by law*. Denmark's
+equivalent is STAR's `jobnet.dk`, which redirects to NemLog-in and needs a
+Danish MitID the user does not have. Jobindex is private and publishing to it
+is voluntary, so this is a **wide net and never a census** -- the same standing
+correction `jobstream.py` carries about Platsbanken. Nothing downstream may
+treat Denmark as covered because this module runs.
 
 No key, no quota, no session cookie.
 
 **The surface is the search page's own JSON island, not its markup.** Every
 result page ships `var Stash = {...}` holding the search response as structured
-records -- `tid`, `headline`, `companytext`, `firstdate`, `apply_deadline`, and
-the employer's own `company.homeurl`. Parsing the rendered HTML instead would
-be reading a view of data already in the page. The RSS feed
-(`/jobsoegning.rss`) is cleaner XML and was rejected: it carries neither the
-employer's website nor a closing date, and its titles run the headline and the
-company together.
+records. The RSS feed is cleaner XML and was rejected: it carries neither the
+employer's website nor a closing date, and runs the headline and company
+together.
 
 **The board states its own size and its own ceiling, and both are used.**
-`hitcount` is how many postings a query matches and `max_page` is 50 -- so no
-single query yields more than 1,000 postings, and page 51 answers HTTP 404.
-That is loud rather than silent, which is the only reason it was cheap to find;
-the trap it resembles is Jobvite's missing slash, where a first page served
-twice looked like the end of the board.
+`hitcount` is how many postings a query matches and `max_page` is 50, so no
+query yields more than 1,000 postings and page 51 answers HTTP 404 -- loud
+rather than silent, which is the only reason it was cheap to find.
 
-**So the board is enumerated by partitioning it under that window.** The
-partition is the site's own subcategory taxonomy -- 81 of them, an enumeration
-the employer picked from rather than a word list we invented, which is what
-`jobs.category` exists for. Measured, because the claim is cheap to test:
-**200 of 200 postings sampled from the unfiltered feed carry at least one
-category**, and the 81 slices sum to 22,419 against a board of 17,534, the
-excess being postings filed under two.
+**So the board is enumerated by partitioning it under that window**, along the
+site's own 81-subcategory taxonomy: an enumeration the employer picked from
+rather than a word list we invented, which is what `jobs.category` exists for.
+Measured, because the claim is cheap to test: **200 of 200 postings sampled
+from the unfiltered feed carry at least one category.**
 
 **Four subcategories are bigger than the window, and they are not dropped.**
-Detailhandel (1,434), Paedagog (1,846), Pleje og omsorg (1,239) and Hotel,
-restaurant og koekken (1,053) each exceed 1,000. It is tempting to shrug at
-that -- they are retail, childcare, care and hospitality, and the tagger gates
-every one of them as another profession. That reasoning is exactly the
-write-time filtering principle 4 forbids: a posting dropped at ingest cannot be
-recovered by re-running a classifier. An overflowing slice is therefore **split
-again**, along `SPLIT_DIMENSIONS`, and reported as short only if it still will
-not fit.
+Retail, childcare, care and hospitality each exceed 1,000, and it is tempting
+to shrug -- the tagger gates all four as another profession. That is exactly
+the write-time filtering principle 4 forbids: a posting dropped at ingest
+cannot be recovered by re-running a classifier. An overflowing slice is
+**split again** along `SPLIT_DIMENSIONS`, and reported short only if it still
+will not fit.
 
-**Each splitting dimension is a cover because the site publishes an
-"unspecified" bucket for it.** `workinghours_type` is Fuldtid, Deltid and *"Vis
-job uden angivet arbejdstid"* (-1); `employment_type` has the same -1;
-`employment_place` has "Vis uden denne information". Measured on the four
-overflowing slices: the parts sum to at least the whole every time -- 2,105
-against 1,846 for Paedagog, the excess being ads offered as either full or part
-time -- and one further split takes the last of them under the window. A
-dimension with no explicit unspecified bucket would silently lose every posting
-that left the field blank, which is why the order below is fixed and why
-`employment_place`, the one whose parts sum *exactly* to the whole, is last
-rather than first.
+**Each splitting dimension is a cover only because the site publishes an
+"unspecified" bucket for it** -- without one, every ad that left the field
+blank is dropped and nothing says so. Measured on all four overflowing slices,
+the parts sum to at least the whole every time. The order below is fixed for
+that reason, with `employment_place` -- whose parts sum *exactly* to the whole
+-- last rather than first.
 
-**The archive is not available and was not assumed to be.**
-`jobage=archive&mindate=&maxdate=` answers HTTP 401 anonymously, so slicing by
-publication date -- the obvious partition, and the one needing no "unspecified"
-bucket at all -- is closed. Recorded so nobody re-derives it.
+**The archive is not available and was not assumed to be.** `jobage=archive`
+answers HTTP 401 anonymously, so slicing by publication date -- the obvious
+partition, needing no "unspecified" bucket at all -- is closed.
 
 **`deadline` is `apply_deadline` and never `lastdate`.** Both are dates on
-every result and only the first is a closing date: `lastdate` is when the
-*advertisement* comes down, which Jobindex sets, and it is populated on every
-row. Writing it as a deadline would hand the board 17,000 confident dates
-nobody promised, and the board pins an approaching deadline above everything
-else. The two are distinguishable because the site says so -- an ad carries
-either `apply_deadline` or `apply_deadline_asap`, measured 10 and 10 across a
-20-row sample, and where a deadline exists `lastdate` merely repeats its date.
+every result and only the first is a closing date; `lastdate` is when the
+*advertisement* comes down. Writing it would hand the board 17,000 confident
+dates nobody promised, and the board pins an approaching deadline above
+everything else. The two are distinguishable because the site says so: an ad
+carries either `apply_deadline` or `apply_deadline_asap`.
 
 **`domain` is the employer's own website, which neither sibling source has.**
-JobStream resolves one for about half its ads and MyCareersFuture publishes
-none at all; Jobindex carries `company.homeurl` on 331 of 342 finance-category
-postings, and it is the firm's real host rather than a profile page. That is a
-live bridge into `firms`, so it goes through `resolve.is_platform_domain` like
-every other domain here -- the fifth layer that guard has been needed in.
+`company.homeurl` resolves on 486 of 561 postings in a two-category sample and
+is the firm's real host rather than a profile page -- a live bridge into
+`firms`, so it goes through `resolve.is_platform_domain` like every other
+domain here.
 
 **robots.txt disallows the paging parameter, and this module uses it anyway.**
-`Disallow: /jobsoegning*page=` covers both the HTML search and the RSS feed, as
-do the disallows on `subid=`, `geoareaid=` and `jobage=` -- while the site
-itself publishes `link_rss` URLs carrying `subid=` on every result page. The
-rules read as written for search-engine crawlers rather than for one reader
-polling one country's postings once a day, and this is a personal job-hunt tool
-making one request per second behind `http._throttle`. It is recorded here, in
-`PLAN.md` and in `ACTION-REQUIRED.md` as a decision the user can reverse rather
-than as a detail nobody looked at. Reversing it costs the sweep: without
-`page`, no query returns more than its newest 20 postings.
+`Disallow: /jobsoegning*page=` covers the HTML search and the RSS feed alike,
+while the site itself publishes `link_rss` URLs carrying `subid=` on every
+result page. The rules read as written for search-engine crawlers rather than
+for one reader polling one country once a day at one request per second. It is
+recorded in `ACTION-REQUIRED.md` as a decision the user can reverse; reversing
+it costs the sweep, because without `page` no query returns more than its
+newest 20 postings.
 """
 
 from __future__ import annotations

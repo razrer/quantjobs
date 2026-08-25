@@ -1,33 +1,34 @@
-"""Layer 5 -- turning 57,000 postings into something you can rank.
+"""Layer 5 -- turning a corpus of ~295,000 postings into something rankable.
 
-Designed in `TAGGING.md`; this is Layer 1 of that design, the deterministic
-lexicon. It runs over the whole corpus in seconds and is re-runnable, which is
-what makes a lexicon bug cheap to fix rather than expensive to discover.
+A deterministic lexicon: no model, no spend, and re-runnable over the whole
+corpus, which is what makes a lexicon bug cheap to fix rather than expensive to
+discover. `lexicon.py` holds the vocabulary shared with the other layers; this
+file holds the dimensions and the rules that combine them.
 
 **Tags rank, they never delete.** A posting the lexicon rejects keeps its row
-and gets `relevance:rejected` with the span that said so. Every dimension has
-an explicit `unknown`, because a posting with no seniority tag has to be
-distinguishable from one nothing has looked at -- the same hole `ats.py`
-refuses to leave with its untiered state.
+and gets `relevance: rejected` with the span that said so. Every dimension has
+an explicit `unknown`, so a posting nothing decided stays distinguishable from
+one nothing looked at. The board is the only thing that removes, and it does so
+by not rendering -- see `GATES`.
 
-**Most postings are a title and a location, and that is workable.** 92% of the
-corpus carries no description because the list endpoints Workday, BambooHR,
-Personio, Breezy and SmartRecruiters publish return title, location and date
-only. Tagging on that is thinner but not blind: it grades those tags **weak**
-and the ones read out of a body **strong**, so the difference is visible at
-read time rather than averaged away.
+**Many postings are a title and a location, and that is workable.** Workday,
+BambooHR, Personio, Breezy and SmartRecruiters publish list endpoints carrying
+title, location and date only. Tags read from a body are graded **strong** and
+the rest **weak**, so the difference is visible at read time rather than
+averaged away.
 
 **Token boundaries, never substrings.** This corpus contains `Corporate
 Administrator` -- admini*strat*or -- and `Alpha Account Services Data Analyst`,
 because State Street's custody platform is called Alpha. A naive `in` scores
-both as quant roles. Text is folded to spaced tokens and every needle is
-matched with its padding, the same trick `domains.py` uses on firm names.
+both as quant roles. Text is folded to spaced tokens and every needle matched
+with its padding, the same trick `domains.py` uses on firm names.
 """
 
 from __future__ import annotations
 
 import re
 import sqlite3
+from collections import Counter
 from dataclasses import dataclass
 
 from . import db, lexicon
@@ -35,7 +36,7 @@ from . import db, lexicon
 # Bump on every lexicon change: the diff between two versions over the same
 # corpus is a free regression test, and it is the only way to tell "the
 # classifier improved" from "the market moved".
-TAGGER = 46
+TAGGER = 48
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS job_tags (
@@ -52,12 +53,11 @@ CREATE TABLE IF NOT EXISTS job_tags (
 );
 
 CREATE INDEX IF NOT EXISTS job_tags_by_value ON job_tags (dimension, value);
--- `postings()` asks "has this posting been tagged at the current version", as a
--- correlated NOT EXISTS on (ats, token, job_id, tagger). The primary key covers
--- the first three and stops there, so SQLite then walked every row for that
--- posting -- roughly fifteen dimensions per lexicon version, across every
--- version still in the table -- to test `tagger`. Measured: 18 seconds to
--- return 50,529 rows. Putting `tagger` in the index turns that into a seek.
+-- `postings()` asks "is this posting tagged at the current version" as a
+-- correlated NOT EXISTS on (ats, token, job_id, tagger). The primary key stops
+-- after the first three, so without this SQLite walked every row for the
+-- posting -- one per dimension per version still in the table -- to test
+-- `tagger`. Measured: 18 seconds to return 50,529 rows, against a seek.
 CREATE INDEX IF NOT EXISTS job_tags_by_tagger ON job_tags (ats, token, job_id, tagger);
 """
 
@@ -145,39 +145,47 @@ _CONFUSABLES = str.maketrans({
     **{chr(cp): chr(cp - 0xFEE0) for cp in range(0xFF01, 0xFF5F)},
 })
 
+# Applied as one pass. The two tables share no key and neither maps onto the
+# other's input, so merging them is exactly the two `translate` calls it
+# replaces -- and folding is on the hot path of every re-tag.
+_ASCII = {**_CONFUSABLES, **_ACCENTS}
+
+
+_STRIP = re.compile(r"[^a-z0-9+#]+")
+
 
 def fold(*parts: str | None) -> str:
     """Everything folded to lowercase ASCII tokens, padded so needles can be too."""
     text = " ".join(part for part in parts if part)
-    text = _TAGS.sub(" ", text).casefold().translate(_CONFUSABLES).translate(_ACCENTS)
+    text = _TAGS.sub(" ", text).casefold().translate(_ASCII)
     for symbol, replacement in _SYMBOLS:
         text = text.replace(symbol, replacement)
-    return " " + " ".join(re.sub(r"[^a-z0-9+#]+", " ", text).split()) + " "
+    return " " + " ".join(_STRIP.sub(" ", text).split()) + " "
+
+
+def _joined(*folded: str) -> str:
+    """Two already-folded strings as one. Exactly `fold` of the same parts:
+    the join puts a space between them, and no symbol in `_SYMBOLS` spans one."""
+    parts = [part.strip() for part in folded]
+    return " " + " ".join(part for part in parts if part) + " "
 
 
 def _terms(*phrases: str) -> tuple[str, ...]:
     """Fold needles the same way the text is folded, once, at import.
 
-    A needle carrying punctuation or a diacritic can never match otherwise:
-    `fold` strips `ç` and `ß` outright, so a hand-written "français courant"
-    is a needle that cannot fire and looks exactly like one that never
-    matched. Folding both sides is the same discipline `domains.py` learned
-    when it compared a normalized firm name against raw page text.
+    A needle carrying punctuation or a diacritic cannot otherwise match the
+    text it was written for. Same discipline as `domains.py` comparing a
+    normalized firm name against page text.
     """
     return tuple(fold(phrase).strip() for phrase in phrases)
 
 
-def _hit(text: str, needles: tuple[str, ...]) -> str | None:
-    """The first needle present as whole tokens, or None."""
-    for needle in needles:
-        if f" {needle} " in text:
-            return needle
-    return None
-
-
-def _hits(text: str, needles: tuple[str, ...]) -> list[str]:
-    """Every needle present, for the rules that count corroboration."""
-    return [needle for needle in needles if f" {needle} " in text]
+# Matching is `lexicon`'s, so there is one implementation of it rather than
+# two. The *folds* stay separate -- `fold` transliterates to ASCII while
+# `lexicon.normalize` keeps accented Latin -- but a needle list is a needle
+# list, and `lexicon.first` indexes one by first word to skip what cannot match.
+_hit = lexicon.first
+_hits = lexicon.every
 
 
 # --------------------------------------------------------------------------
@@ -192,26 +200,14 @@ def _hits(text: str, needles: tuple[str, ...]) -> list[str]:
 _QUANT_CORE = (
     "quant", "quants", "quantitative", "kvantitativ", "kvantitative",
     "systematic trading", "algorithmic trading", "algo trading",
-    # The noun forms, because the participle ones miss the actual seat:
-    # `Algorithmic Trader` is not "algorithmic trading" and was reading as a
-    # trader with no quant signal at all.
+    # The noun forms too: `Algorithmic Trader` is not "algorithmic trading".
     "algorithmic trader", "algo trader", "systematic trader",
     "statistical arbitrage", "stat arb", "alpha research", "signal research",
     "alpha generation", "execution research", "model validation",
     "risk quant", "kwantitatief", "quantitatif",
-    # **The valuation-adjustment family, at the reader's request.** `lexicon`
-    # has carried `xva`, `cva` and `counterparty credit risk` since it was
-    # written and this list never did, so the two modules disagreed about the
-    # same words: `XVA Analyst` came back `unknown`, `CCR Model Developer` was
-    # *rejected* as pure engineering, and `Counterparty Credit Risk Analyst`
-    # read as a generic risk seat on the word `credit risk` alone.
-    #
-    # Dry-run over all 236,077 live titles and 126,983 bodies: `xva` matches 6
-    # titles and 5 bodies, `counterparty credit risk` 16 and 5, and **every one
-    # of the 27 is a bank markets-quant seat** -- Citi's cross-asset XVA desk,
-    # RBC's counterparty credit risk models, Nordea's model-and-Python
-    # developer. No false positive anywhere in the corpus, which is why these
-    # are here rather than in the title-only list below.
+    # The valuation-adjustment family. Dry-run over every live title and body:
+    # 27 matches, every one a bank markets-quant seat, no false positive --
+    # which is what earns them a place here rather than in the title-only list.
     "xva", "counterparty credit risk", "credit valuation adjustment",
     "wrong way risk", "potential future exposure",
     # Swedish and Danish. `kvantitativ` was already here and carries most of
@@ -221,61 +217,41 @@ _QUANT_CORE = (
     "modellvalidering", "modelvalidering",
 )
 
-# The same list with the bare adjectives removed, for the one branch that reads
-# the body *alone*. `lexicon` learned this first and named the set: "strong
-# quantitative skills" is boilerplate in half the job specs ever written, so a
-# bare `quantitative` decides nothing about a document it appears in once.
-# Above, in a title, the same word is the whole job -- which is why there are
-# two lists rather than one edit to `_QUANT_CORE`.
-#
-# It was reading them. `Cloud Engineer` reached `adjacent` on "body only
-# 'quantitative', once, at 'investment management'" and `Walleye Stock
-# Competition (2026)` on "body only 'quant'" -- both hand-labelled rejections,
-# both rescued by a word their employer's boilerplate happened to contain.
+# The same list without the bare adjectives, for the one branch that reads a
+# body *alone*. "Strong quantitative skills" is in half the job specs ever
+# written, so `quantitative` decides nothing about a document it appears in
+# once -- it made `Cloud Engineer` a quant role. In a *title* the same word is
+# the whole job, which is why this is a second list and not an edit above.
 _QUANT_CORE_BODY = tuple(
     needle for needle in _QUANT_CORE if needle not in lexicon.GENERIC_IN_BODY
 )
 
-# These name the role in a title and are boilerplate in a body. Every finance
-# company's "about us" mentions market and credit risk, which scored
-# `Interest & Product Logic Specialist` and `Insurance Accounting Specialist`
-# as core quant roles. In a title the same words are the job.
-# `research analyst` was here and is now a weak positive instead. `Equity
-# Research Analyst` is sell-side equity research -- an investment-banking job,
-# and the hand-labelled sheet rejected it outright -- while `Quantitative
-# Research Analyst` is caught a line above by the word *quantitative*. Bare
-# "research analyst" is the same shape as bare "trader": the job it names is
-# quant at one firm and something else entirely at the next, so it belongs
-# where the body can still rescue it rather than where it decides on its own.
+# These name the role in a title and are boilerplate in a body: every finance
+# firm's about-us mentions market and credit risk, which made an insurance
+# accounting job a core quant role.
+#
+# `research analyst` is deliberately absent -- it is sell-side equity research
+# at one firm and quant work at the next, so it is a weak positive that a body
+# can rescue rather than a title that decides alone.
 _QUANT_CORE_TITLE = (
     "trader", "trading strategist", "strat", "strats",
     "market risk", "credit risk", "derivatives pricing",
     "portfolio construction", "handelaar", "handlare", "systematisk",
-    # Title-only, and the body is exactly why. In a *title* these are the
-    # valuation-adjustment desk: `AVP Quantitative Analytics CCR Modeler` is
-    # the only `ccr` in 236,077 titles and it is a quant one. In a *body* they
-    # are somebody else's initialism -- `ccr` matched 15 descriptions and most
-    # of them are "Channel and Customer Research", `cva` matched 14 and the
-    # head of those is deal-advisory valuations, and `dva` matched the body of
-    # a *Köksmästare*. Same shape as `strat` inside "administrator", one list
-    # up: an abbreviation is evidence where the whole string is the job title
-    # and noise where it is a paragraph.
-    #
-    # `xva` is not here and is in `_QUANT_CORE` instead: it is the one member
-    # of the family that means nothing else anywhere, in a title or a body.
+    # Title-only, and the body is why: in a title these are the
+    # valuation-adjustment desk, in a body they are somebody else's
+    # initialism -- `ccr` is mostly "Channel and Customer Research" and `dva`
+    # matched a *Köksmästare*. An abbreviation is evidence where the whole
+    # string is a job title and noise where it is a paragraph. `xva` is in
+    # `_QUANT_CORE` instead: it means nothing else anywhere.
     "cva", "ccr",
     # The Nordic domain words, same grade as `market risk` and `credit risk`
     # above and for the same reason: they name the desk, and a qualifier
     # decides whether the seat on it is quantitative.
     "marknadsrisk", "markedsrisiko", "kreditrisk", "kreditrisiko",
     "modellrisk", "modelrisiko", "derivatprissattning", "portfoljkonstruktion",
-    # A latency budget is a markets fact. Dry-run over every live title: 23
-    # carry it and **all 23 are markets firms** -- LSEG, Tudor, Citi, Barclays,
-    # Da Vinci, Tower Research, Eclipse Trading and Jane Street. Outside
-    # finance the phrase belongs to networking and gaming and this corpus has
-    # none of it. `low latency trading` was already in `lexicon.QUANT` and the
-    # bare form was in neither list, so `Low-Latency Engineer` at Jane Street
-    # carried no quant signal at all.
+    # A latency budget is a markets fact here: all 23 live titles carrying it
+    # are markets firms. Elsewhere the phrase belongs to networking and gaming,
+    # and this corpus has none of that.
     "low latency",
 )
 
@@ -310,12 +286,9 @@ _MANAGEMENT = _terms(
     "product manager", "product owner", "programme manager", "program manager",
     "engineering manager", "delivery manager", "people manager", "leader",
     "ceo", "cfo", "coo", "cto", "cio",
-    # Widened at the user's request: a title announcing that somebody else does
-    # the work is not reachable from under a year of experience, whatever the
-    # subject matter. Bare `manager` is in deliberately -- it was the one word
-    # holding the line between `Product Manager` (already here) and `Manager,
-    # Data Science` (not), and there is no version of the second that is a
-    # first job.
+    # Bare `manager` is in deliberately: it held the line between `Product
+    # Manager` and `Manager, Data Science`, and there is no version of the
+    # second that is a first job.
     "manager", "senior manager", "associate manager", "project manager",
     "project leader", "project lead", "team leader", "team lead",
     "scrum master", "agile coach", "chapter lead", "tribe lead",
@@ -326,94 +299,59 @@ _MANAGEMENT = _terms(
     "projektledare", "teamledare", "gruppledare", "verksamhetsledare",
     "gruppchef", "enhetschef", "avdelningschef", "ekonomichef", "platschef",
     "regionchef", "kontorschef", "verkstallande direktor",
-    # Danish, where the manager word is `leder` rather than `chef` and the
-    # officer word is `direktor`. Dry-run over all 236,077 live titles: 161,
-    # 21 and 47 hits, and not one of the three touches a posting the tagger
-    # rates positively.
+    # Danish, where the manager word is `leder` and the officer word is
+    # `direktor`. Dry-run: no hit touches a positively-rated posting.
     "direktor", "leder", "vd", "koncernchef", "forman",
 )
 
-# Swedish builds a manager's title by compounding, and a word list cannot see
-# inside a compound: `ekonomichef` is above but `inköpschef`, `IT-chef` and
-# `hållbarhetschef` are not, and there is no end to that list. The occupational
-# head is the last element, so it is matched as a token suffix -- the trick
-# `lexicon.SWEDISH_HEADS` already uses one module over.
-#
-# Safe here because both heads are long and neither ends an English word: no
-# English title ends in `chef` (the cook is a whole token, and `Chef de Partie`
-# is off-industry anyway) or in `ledare`.
-# `leder` and `direktor` are the Danish halves of the same pair: 668 compounds
-# (`projektleder`, `teamleder`, `afdelingsleder`) and 30 (`vicedirektor`,
-# `kommunaldirektor`), none of them rated positively. No English or Swedish
-# title ends in either without meaning the rank.
+# Swedish and Danish build a manager's title by compounding and a word list
+# cannot see inside one: `ekonomichef` is above but `inköpschef` and
+# `hållbarhetschef` are not, and there is no end to that list. The rank is the
+# last element, so it is matched as a token suffix -- the trick
+# `lexicon.SWEDISH_HEADS` uses one module over. Safe because the heads are long
+# and no English title ends in one meaning something else. Dry-run: none of the
+# compounds caught is rated positively.
 _MANAGER_HEADS = ("chef", "ledare", "leder", "direktor")
 
-# The same trick for occupations rather than ranks. `Elsäljare` is one token, so
-# the needle `saljare` cannot see it, and the board was still carrying
-# `Fältsäljare`, `Mediesäljare`, `Tandsköterska` and `Skadetekniker` after the
-# accent fix -- 48 of them.
+# The same trick for occupations rather than ranks: `Elsäljare` is one token,
+# so the needle `saljare` cannot see it.
 #
-# **Two obvious heads were dropped after the dry-run.** `-arbetare` catches
-# *medarbetare*, which is simply Swedish for "employee" and says nothing about
-# the job; `-assistent` catches *Forskningsassistent*, a research assistant,
-# which is a posting this project might want. Both are the `chef`-is-a-CFO
-# mistake in a new place.
+# Two obvious heads were dropped after the dry-run. `-arbetare` catches
+# *medarbetare*, Swedish for "employee"; `-assistent` catches
+# *Forskningsassistent*, a research assistant this project might want.
 _TRADE_HEADS = (
     "saljare", "skoterska", "larare", "mekaniker", "elektriker",
     "handlaggare", "sekreterare", "tekniker", "montor", "stadare",
     "vaktmastare", "bagare", "chauffor", "forare",
-    # The plural heads, and the Danish ones. Swedish pluralises the head
-    # itself, so `underskoterskor` ends in nothing this list could see, and
-    # `dackmontorer`, `taxichaufforer` and `maskinoperatorer` were all reaching
-    # the board. Danish compounds the same way: `musiklaerer`, `timelaerere`,
-    # `konsultationssygeplejerske`, `klejnsmed`.
+    # The plurals, and the Danish heads. Swedish pluralises the head itself,
+    # so `underskoterskor` ends in nothing the singular list can see.
     "skoterskor", "montorer", "chaufforer", "operatorer", "vaktare",
     "laerer", "laerere", "sygeplejerske", "sygeplejersker", "smed", "terapeut",
-    # A whole-word needle cannot see inside a Swedish compound, and these were
-    # each reaching the board as one: `pizzakock` and `sushikock` past `kock`,
-    # `brevbarare` past nothing at all, `fonsterputsare`, `snoskottare`,
-    # `kottmastare`, `skolpsykolog`, `gravmaskinist`, `reklamutdelare`,
-    # `batbyggare`, `parkourtranare`. A head is worth more than the words it
-    # replaces because it also catches the next compound nobody has seen yet --
-    # which on a board carrying every job in Sweden is the whole problem.
-    #
-    # Dry-run over all 288,498 live titles: none of these touches a posting the
-    # tagger rates positively. **`konsulent` was dropped despite a clean run**
-    # -- it is the ordinary Danish word for a consultant (`IT-konsulent`,
-    # `ERP-konsulent`), so it reads as a trade only in Swedish, and gating it
-    # would delete Danish technology work. `vikarie` was dropped for the
-    # reason already recorded below: a substitute is a contract, not a trade.
+    # A head is worth more than the words it replaces, because it also catches
+    # the next compound nobody has seen -- which on a board carrying every job
+    # in Sweden is the whole problem. Dry-run: none touches a positively-rated
+    # posting. **`konsulent` was dropped despite a clean run** -- it is the
+    # ordinary Danish word for a consultant, so it reads as a trade only in
+    # Swedish and gating it would delete Danish technology work.
     "kock", "barare", "putsare", "skottare", "mastare", "psykolog",
     "maskinist", "utdelare", "byggare", "tranare",
 )
 
-# **Five candidate heads were dropped after the dry-run, and every one is the
-# `-arbetare` mistake in a new language.** `-arbejder` matches *medarbejder*,
-# which is Danish for "employee"; `-medhjaelper` and `-hjaelper` match
-# *studentermedhjælper*, which is a student assistantship and half of them are
-# IT and data work; `-vagt` matches *aftenvagt*, *nattevagt* and *weekendvagt*,
-# which are shifts rather than security guards; and `-assistenter` matches
-# *Forskningsassistenter*, which is why the singular was dropped already. The
-# occupations they were meant to reach are whole words in `_OFF_INDUSTRY`
-# instead.
+# Five candidate heads dropped after the dry-run, each the `-arbetare` mistake
+# in a new language: `-arbejder` is *medarbejder* ("employee"), `-medhjaelper`
+# and `-hjaelper` are *studentermedhjælper* and half of those are IT and data
+# work, `-vagt` is *aftenvagt* -- a shift, not a security guard -- and
+# `-assistenter` is *Forskningsassistenter*. The occupations they were meant to
+# reach are whole words in `_OFF_INDUSTRY` instead.
 _NOT_A_TRADE_HEAD = (
     "arbejder", "medhjaelper", "hjaelper", "vagt", "assistenter",
 )
 
-# **Swedish marks the definite by suffixing the head, so the needle cannot see
-# it.** `Taxiföraren` and `Sök diskaren` both reached the board while
-# `taxiforare` and `diskare` were needles -- the same shape as the plural
-# (`Undersköterskor` against `underskoterska`) one inflection further on.
-# Rather than write each form out, the heads are inflected here: `-n` for the
-# definite singular, `-na` and `-rna` for the definite plural.
-#
-# It is worth seven postings, which is not the argument -- the argument is that
-# it is a *rule* rather than a list, so the next definite form nobody has seen
-# is caught too. Dry-run over all 288,498 live titles: seven newly caught, none
-# rated positively. One of the seven is `Tandhygienist till FTV Bergmästaren`,
-# where the head matched a clinic's proper name; it is a dental posting already
-# gated by `tandhygienist`, so the coincidence costs nothing here -- but it is
-# the reason this list is inflected and `_MANAGER_HEADS` is not.
+# Swedish marks the definite by suffixing the head too, so `Taxiföraren`
+# escaped the needle `taxiforare`. Inflected here rather than spelled out, so
+# the next definite form nobody has seen is caught as well: `-n` singular,
+# `-na` and `-rna` plural. Worth seven postings, none rated positively -- the
+# argument is that it is a rule rather than a list.
 _TRADE_HEADS_INFLECTED = _TRADE_HEADS + tuple(
     head + suffix for head in _TRADE_HEADS for suffix in ("n", "na", "rna")
 )
@@ -453,16 +391,14 @@ def _compound_manager(title: str) -> str | None:
 # something other than a rank.
 #
 # `associate director`, `assistant director` and `deputy director` used to be
-# here, on the grounds that a bank stamps them on a five-year hire, and
-# `PLAN.md` records that argument. The user has since asked for director titles
-# to be removed outright, and the two readings agree for this reader: a bank's
-# five-year Associate Director is exactly as unreachable from under a year as a
-# real one. They now count as management.
+# here, on the grounds that a bank stamps them on a five-year hire. The user has
+# since asked for director titles to go outright, and the two readings agree for
+# this reader: a bank's five-year Associate Director is as unreachable from under
+# a year as a real one. They count as management now.
 #
-# It was not academic. Three `Assistant Director` and `Associate Director`
-# postings reached the labelling sheet after the gate was added, because the
-# protection here sent them to `seniority`, where a body asking for three years
-# read `mid_3_5` and cleared the bar.
+# It was not academic. Three such postings reached the labelling sheet after the
+# gate was added, because the protection here sent them to `seniority`, where a
+# body asking for three years read `mid_3_5` and cleared the bar.
 _NOT_MANAGEMENT = _terms(
     "art director", "creative director", "director of photography",
     "funeral director", "board of directors",
@@ -470,31 +406,18 @@ _NOT_MANAGEMENT = _terms(
 
 # The software specialties, treated harder than the rest of engineering.
 #
-# `lexicon.ENGINEERING` is deliberately two-sided and says so: `Software
-# Engineer, Trading Systems` at Optiver is in scope, `Senior Backend Engineer,
-# Payments Platform` is not, and no one-sided list separates them. These
-# titles are the subset where that ambiguity does not exist -- the specialty
-# *is* the job, and no amount of markets context around it makes it quant
-# work.
+# `lexicon.ENGINEERING` is two-sided on purpose -- `Software Engineer, Trading
+# Systems` at Optiver is in scope and `Senior Backend Engineer, Payments
+# Platform` is not. These titles are the subset where that ambiguity does not
+# exist: the specialty *is* the job, and no markets context around it makes it
+# quant work. Six hand-labelled rejections had all reached `adjacent` on the
+# bare word *trading* -- the platform the engineer maintains, not the work.
 #
-# Six hand-labelled rows, one shape: `Senior Software Engineer, Frontend
-# (Coinbase Advisor - Agentic Trading)`, `Senior DevOps Engineer - Trading
-# Platforms`, `Principal Engineer - Trading Core`, `Cloud Engineer`, `Data
-# Infrastructure Engineer` and `Staff QE`. Every one was rejected by hand, and
-# every one had reached `adjacent` or `unknown` on the bare word *trading* --
-# the name of the platform the engineer maintains, not the work. `CLAUDE.md`
-# had already recorded the shape from `Backend Engineer - Trading & Asset
-# Optimization` and fixed it one list over, in `trading_style`.
-#
-# **Bare `software engineer` and `developer` are deliberately absent.** A
-# quant-dev role often calls itself one, and `CLAUDE.md` is explicit that heavy
-# systems engineering is a down-rank rather than a hard drop. `principal
-# engineer` and `staff engineer` are in because they name the software IC
-# ladder outright, which no quant title does.
-#
-# An unambiguous quant word still wins, exactly as it does for a management
-# title: `Quantitative Developer` and `Quant Platform Engineer` never reach
-# this branch.
+# **Bare `software engineer` and `developer` are deliberately absent**, because
+# a quant-dev role calls itself one and heavy systems engineering is a
+# down-rank rather than a hard drop. `principal engineer` and `staff engineer`
+# are in: they name the software IC ladder, which no quant title does. An
+# unambiguous quant word still wins, as it does over a management title.
 _SOFTWARE_SPECIALTY = _terms(
     "frontend", "front end", "web developer", "mobile developer", "android",
     "ios developer", "react", "angular", "ui engineer", "ux engineer",
@@ -506,18 +429,15 @@ _SOFTWARE_SPECIALTY = _terms(
     "information security", "penetration testing",
     "qa engineer", "quality engineer", "test engineer", "automation engineer",
     "release engineer", "build engineer",
-    # `qe` is two characters and would normally be refused on that alone. It
-    # earns the place by measurement rather than by length: eight titles in the
-    # whole corpus carry it, and the one the tagger rated positively is `Staff
-    # QE` -- the row the sheet rejected as "quality engineering role for
-    # software". In a *body* it would be quantitative easing; this list is read
-    # from the title only.
+    # `qe` is two characters and earns its place by measurement rather than
+    # length: eight titles carry it and the only positively-rated one is
+    # `Staff QE`, a hand rejection. In a body it would be quantitative easing;
+    # this list is read from the title only.
     "qe",
     "it support", "help desk", "helpdesk", "service desk", "desktop support",
     "application support", "technical support",
     "salesforce", "servicenow", "sharepoint",
-    # The Swedish forms. These are one token each, so no English needle above
-    # can see them, and they were reaching the board as `unknown`.
+    # The Swedish forms, one token each, so no English needle above sees them.
     "frontendutvecklare", "webbutvecklare", "systemadministrator",
     "supporttekniker", "driftstekniker", "testautomatiserare", "testare",
     "informationssakerhet", "sakerhetsspecialist", "it tekniker",
@@ -533,15 +453,13 @@ _QUANT_ADJACENT = (
     "maskinlaering", "ekonometri", "ekonometriker",
 )
 
-# What kind of job this is, as **one** value rather than a set.
+# What kind of job this is, as **one** value rather than a set. A multi-valued
+# version said almost nothing: one Schonfeld posting came back as research and
+# trading and quant_dev and risk and portfolio_construction at once, because
+# every one of those words appears somewhere in a long body. Seven values is a
+# word count, not a classification.
 #
-# It replaces `role_family`, which was multi-valued and therefore said almost
-# nothing: a single Schonfeld posting came back as research *and* trading *and*
-# quant_dev *and* risk *and* execution *and* portfolio_construction *and*
-# strategist, because every one of those words appears somewhere in a long
-# body. Seven values is not a classification, it is a word count.
-#
-# Order is the priority and it carries three deliberate decisions:
+# Order is the priority and carries three deliberate decisions:
 #
 # - `quant_dev` runs first so a title naming both halves -- and `Quantitative
 #   Research / Developer` is a real posting, folding to "research developer" --
@@ -567,18 +485,14 @@ _ROLE_CLASS = {
         "model validation", "model risk", "derivatives pricing",
         "pricing models", "quantitative strategies", "financial engineering",
         "econometrics", "econometrician", "statistician",
-        # A *risk quant* is a modelling role and `CLAUDE.md` puts it on the
-        # include list beside quant research. A *risk analyst* is not
-        # necessarily one, and stays in `risk` below -- the qualifier is the
-        # whole difference, exactly as it is for `Credit Risk Operations`.
+        # A *risk quant* is a modelling role; a *risk analyst* is not
+        # necessarily one and stays in `risk` below. The qualifier is the whole
+        # difference, as it is for `Credit Risk Operations`.
         "risk quant", "quant risk", "credit risk quant", "market risk quant",
         "market risk models", "quantitative risk",
-        # The same qualifier argument, and it points the other way here.
-        # *Counterparty* credit risk has no retail-collections reading: it is
-        # derivatives exposure, and modelling it is the work. All 16 titles
-        # carrying the phrase are bank quant seats, so it belongs beside
-        # `credit risk quant` rather than in the generic `risk` bucket that
-        # bare `credit risk` lands in.
+        # Same argument pointing the other way: *counterparty* credit risk has
+        # no retail-collections reading, and all 16 titles carrying it are bank
+        # quant seats. Bare `credit risk` still lands in `risk` below.
         "counterparty credit risk", "xva",
         "researcher", "research analyst", "kvantitativ analytiker",
         "kvantitativ", "forskning", "onderzoek", "recherche",
@@ -595,9 +509,8 @@ _ROLE_CLASS = {
     "trading": _terms(
         "trader", "trading", "market making", "market maker",
         "handelaar", "handlare", "haendler", "portfolio trading",
-        # The compounds only. Bare `handel` is Swedish and Danish for
-        # *commerce* -- e-handel, detaljhandel, dagligvaruhandel -- so it names
-        # a shop as often as a desk, and 57 titles carry it.
+        # The compounds only: bare `handel` is Swedish and Danish for
+        # *commerce*, so it names a shop as often as a desk.
         "aktiehandel", "vardepappershandel", "borshandel", "valutahandel",
         "derivathandel", "algoritmehandel",
     ),
@@ -630,16 +543,13 @@ _ROLE_CLASS = {
 }
 
 # Where the role sits, which the title almost never says and the body almost
-# always does. This is the dimension that separates two postings the title
-# cannot: `Quantitative Trading Associate` reads like a desk seat and its body
-# is market-hours oversight, runbooks, incident response and position
-# reconciliation -- middle office wearing a quant title.
+# always does: `Quantitative Trading Associate` reads like a desk seat and its
+# body is runbooks and position reconciliation -- middle office in a quant
+# title.
 #
-# `front_office` is checked **first** on purpose. A front-office posting names
-# middle-office machinery all the time -- a trading-floor STRAT role asks for a
-# "grasp of trade-lifecycle workflows" -- while the reverse is rare, so the
-# specific claim ("you will sit on the trading floor") has to win over the
-# incidental mention.
+# `front_office` is checked **first**. A front-office posting names
+# middle-office machinery all the time and the reverse is rare, so the specific
+# claim ("you will sit on the trading floor") wins over the incidental mention.
 _DESK = {
     "front_office": _terms(
         "front office", "trading floor", "trading desk", "on the desk",
@@ -662,80 +572,41 @@ _DESK = {
     ),
 }
 
-# **`intern` is no longer a rank**, and one posting is the whole argument.
-# Schonfeld's `Quantitative Research / Developer - Intern` demands "2-3 years
-# buy- or sell-side experience" and converts to full time; it is an internship
-# *contract* wrapped around a mid-level *bar*. The old ladder had `intern` as
-# a seniority value, so it swallowed that posting whole and reported the rank
-# as "intern" while the body asked for three years.
+# The rank the title states, and neither `intern` nor `student_intern` is one.
+# Schonfeld's `Quantitative Research / Developer - Intern` demands "2-3 years":
+# an internship *contract* around a mid-level *bar*, and the two facts are
+# stored separately -- `contract: internship` for the first, this for the
+# second. Being a student is likewise an eligibility fact, carried by
+# `_HARD_GATES["student_only"]` and by `contract`, not a rung.
 #
-# So the two facts are now stored separately, as they always should have been:
+# **`vp` and bare `director` sit on `head_or_md`**, against four hand-labelled
+# rows reading *"filter out becuase VP role"*. At a bank VP is a mid-career
+# grade, which is true and no longer decides anything: `_MANAGEMENT` has gated
+# these titles since the user asked for director roles to go, so the ladder
+# calling them mid-career was one word with two answers.
 #
-# - **is it an internship** -- `contract: internship`, which already existed
-# - **what does it demand** -- `seniority`, which now always carries a level
-#
-# **`student_intern` has left the ladder, at the user's decision.** It was here
-# because a posting demanding a future graduation date is unreachable for
-# someone who has already graduated, which is true and is not a *rank*. Being a
-# student is an eligibility fact and a contract, and both were already recorded
-# elsewhere: `contract: internship` carries it for 1,307 postings, and
-# `lexicon.judge` rejects on `student_only` for the same phrases.
-#
-# It was doing almost no work on this ladder -- 67 postings against those 1,307
-# -- while costing something real. The labelling sheet offered `student_intern`
-# as a seniority value, so every intern-titled row was labelled that way and
-# disagreed with a tagger that reads rank from the title and finds no grade
-# word. The scale asked a question the tagger does not answer.
-#
-# The phrases did not go anywhere: they are `_HARD_GATES["student_only"]` now,
-# which is where a thing you cannot pass belongs, and they still rank.
-# **`vp` and bare `director` moved up to `head_or_md`, and the evidence is
-# four hand-labelled rows saying the same thing four times.** `Credit Risk
-# Sanctioner (VP)`, `Client Portfolio Manager - VP`, `VP, Corporate
-# Development` and `Vice President, Assistant Portfolio Manager` were all
-# labelled `head_or_md` with the note *"filter out becuase VP role"*, against
-# `senior_6_10` here.
-#
-# `PLAN.md` records the argument for the old placement -- at a bank VP is a
-# mid-career grade -- and it is true and no longer decides anything. This list
-# was the only place in the module still saying so: `_MANAGEMENT` has carried
-# `vp`, `vice president` and bare `director` since the user asked for director
-# titles to be removed outright, so the *gate* already treated these postings
-# as unreachable while the *rank* called them mid-career. One word, two lists,
-# two answers -- the shape that has cost this project a bug at every layer.
-#
-# `associate director` and `executive director` stay on `senior_6_10`, and
-# bare `director` would swallow both on a token match -- `_first` takes the
-# first bucket that hits and `head_or_md` is first, so order cannot express
-# this. `_NOT_HEAD_GRADE` below is the guard, and it is the same shape as
-# `_NOT_MANAGEMENT`: the two lists ask different questions of the same word,
-# because seniority is a ladder and management is a gate.
-#
-# `md` was held back as the postal abbreviation for Maryland and the dry-run
-# cleared it: **78 titles in 157,464 carry it and exactly one is rated
-# positively** -- `Financial Institution Credit Risk Management (ED/MD)`, which
-# is an officer seat and belongs here. The state code lives in the *location*
-# column, which this never reads.
+# `associate director` and `executive director` stay `senior_6_10`, which bare
+# `director` would swallow -- `_first` takes the first bucket that hits, so
+# order cannot express it and `_NOT_HEAD_GRADE` below is the guard. `md` was
+# held back as the postal code for Maryland and the dry-run cleared it: 78
+# titles carry it and the one rated positively is an officer seat. The state
+# code lives in `location`, which this never reads.
 _SENIORITY = {
     "head_or_md": _terms(
         "head of", "managing director", "chief", "partner", "global head",
         "director of", "director", "md", "vp", "vice president", "president",
         "direktor", "vd", "koncernchef",
     ),
-    # `leader` was missing while `lead` was here, so `Applied Science / Data
-    # Science Leader` carried no grade word at all and a body asking for three
-    # years read it as `mid_3_5` -- a leadership title arriving one rung above
-    # entry level. `_MANAGEMENT` had `leader` all along; this list did not.
+    # `leader` as well as `lead`, or `Data Science Leader` carries no grade
+    # word and a body asking for three years reads it as `mid_3_5`.
     "lead": _terms("lead", "leader", "principal", "staff engineer", "team lead"),
     "senior_6_10": _terms(
         "senior", "erfaren", "erfarne", "avp", "associate director",
         "executive director",
     ),
-    # `graduate` moved up from `junior_0_2`. In a *title* it names the intake
-    # -- `Graduate Trader`, `Graduate Programme` -- and a graduate scheme is a
-    # different prospect from a job wanting two years, which is exactly the
-    # distinction the ladder exists to draw. Only 168 postings in 55,455 read
-    # `new_grad` before this, against 3,174 `junior_0_2`.
+    # `graduate` is `new_grad`, not `junior_0_2`: in a title it names the
+    # intake, and a graduate scheme is a different prospect from a job wanting
+    # two years -- the distinction the ladder exists to draw.
     "new_grad": _terms(
         "graduate programme", "graduate program", "new grad", "campus hire",
         "traineeprogram", "trainee", "graduate", "graduates", "nyexaminerad",
@@ -745,13 +616,10 @@ _SENIORITY = {
     "mid_3_5": _terms("mid level", "experienced hire"),
 }
 
-# Titles where `director` is not an officer grade. Two kinds, and bare
-# `director` needs both: the ones where the word means something else entirely
-# (`Art Director`, `Funeral Director`), which `_NOT_MANAGEMENT` already guards
-# on the gate side, and the bank grades stamped on a five-year hire
-# (`Associate Director, EQD Quant`), which the ladder must keep at
-# `senior_6_10`. Both are pinned by tests, and both broke the moment bare
-# `director` went in above.
+# Titles where `director` is not an officer grade, and bare `director` needs
+# both kinds: where the word means something else (`Art Director`), and the
+# bank grades stamped on a five-year hire (`Associate Director, EQD Quant`).
+# Both are pinned by tests and both broke when bare `director` went in above.
 _NOT_HEAD_GRADE = _terms(
     "art director", "creative director", "director of photography",
     "funeral director", "board of directors",
@@ -766,17 +634,11 @@ _BELOW_HEAD = {
     if value != "head_or_md"
 }
 
-# A number attached to "years of experience" is the least ambiguous statement a
-# body ever makes, and it is why `PLAN.md`'s "the rank is in the title" rule
-# needs one carve-out rather than an exception.
-#
-# That rule was written against *stray words*: a body saying "you report to the
-# Head of Trading" made `Graduate Trader` a `head_or_md` posting, because the
-# words describe somebody else's rank. A years figure is not that -- it is the
-# posting stating its own bar, and where it disagrees with the title the title
-# is simply wrong. `Quantitative Trading Associate` says associate and asks for
-# "3+ years"; `Quantitative Research / Developer - Intern` says intern and asks
-# for "2-3 years". Both are mid, and only the body knows.
+# A years figure is the one carve-out from "the rank is in the title". That
+# rule guards against *stray words* -- a body saying "you report to the Head of
+# Trading" made `Graduate Trader` an officer posting. A years figure is not
+# that: it is the posting stating its own bar, and `Quantitative Trading
+# Associate` demanding "3+ years" is mid however the title grades itself.
 _YEARS = (
     # "3+ years". `+` survives folding precisely so this can be read.
     re.compile(r" (\d{1,2}) *\+ *(?:years|yrs|year) "),
@@ -828,12 +690,8 @@ _FLOOR_DECIDES = frozenset({"junior_0_2", "mid_3_5", "senior_6_10", "unknown"})
 # came out `mid_3_5`, and a body's smallest number is routinely the *entry* bar
 # on a senior posting ("3+ years required, 8+ preferred" floors at three).
 #
-# Measured on the machine sheet, which is where the volume is: leadership
-# recall was 46.1%, and the misses were `Senior Software Engineer`, `Senior
-# Maintenance Technician` and five `Experienced ... Trader` postings -- every
-# one a title that says senior and a body that demoted it out of
-# `out_of_reach`. That is a leadership posting reaching a board whose reader
-# asked not to see them, which is the direction that costs something.
+# Measured on the machine sheet: leadership recall was 46.1%, and every miss
+# was a title saying senior whose body demoted it out of `out_of_reach`.
 _LADDER = ("junior_0_2", "mid_3_5", "senior_6_10")
 
 # The ladder the user actually cares about. 4 and 5 down-rank, never drop:
@@ -860,15 +718,12 @@ _LANGUAGES = (
     "csharp", "julia", "javascript", "typescript", "dotnet", "fsharp",
 )
 
-# Needles are written pre-folded, because this table is a plain tuple rather
-# than a `_terms(...)` call.
+# Needles are written pre-folded: this table is a plain tuple, not `_terms`.
 #
-# **`ravaror` is deliberately absent and it is the whole warning for this
-# table.** *Råvaror* is the Swedish for commodities and also the Swedish for
-# raw ingredients: it matches 49 bodies in this corpus and every one of them is
-# a kitchen -- *Jobba med Pamoja som kock i skolkök*, *Köksmästare sökes*. The
-# Nordic markets words that survive below are the ones that cannot mean
-# anything else, which in practice means the compounds.
+# **`ravaror` is deliberately absent, and it is the warning for this table.**
+# *Råvaror* is Swedish for commodities and for raw ingredients: it matches 49
+# bodies and every one is a kitchen. The Nordic markets words that survive are
+# the ones that cannot mean anything else, which means the compounds.
 _ASSET_CLASS = {
     "equities": ("equity", "equities", "cash equities", "aktier", "aandelen",
                  "aktiehandel"),
@@ -901,24 +756,14 @@ _HORIZON = {
 # market each gate costs. "Half of Amsterdam wants no sponsorship" is worth
 # knowing as a number, not as an empty result list.
 _HARD_GATES = {
-    # Education is read **only** when a doctorate is compulsory. Everything
-    # softer -- "PhD preferred", "MSc or PhD", "advanced degree a plus" -- is
-    # not a gate and is deliberately not tagged: a degree preference is how
-    # every quantitative posting on earth is written, so tagging it would
-    # produce a dimension that fires on the whole corpus and separates nothing.
-    # Read from title and body alike, and the title forms matter: two
-    # hand-labelled rows were rejected as "perfect fit - but has hard
-    # requirement of phd", and only one of them carried a body phrase this
-    # list could see. The other announces it in the title as `PhD+`, which
-    # `fold` keeps as one token because `+` survives folding.
+    # Only a *compulsory* doctorate. "PhD preferred" is how every quantitative
+    # posting on earth is written, so tagging it would fire on the whole corpus
+    # and separate nothing. Read from title and body alike: one hand-labelled
+    # row announces it as `PhD+`, which survives folding as one token.
     #
-    # **Bare `phd` is deliberately absent, and the dry-run is why.** 220 titles
-    # carry it and 29 are rated positively -- `Campus Quantitative Researcher,
-    # PhD`, `Junior Quantitative Researcher (Ph.D.)`, `2027 Internship -
-    # Quantitative Researcher (PhD)`. Those name the *audience* a posting is
-    # open to, not a bar it sets, and `CLAUDE.md` records that an over-eager
-    # student rule threw away Aquatic Capital's `Quantitative Researcher, PhD`
-    # once already. Only the compulsory phrasings are here.
+    # **Bare `phd` is deliberately absent.** 220 titles carry it and 29 are
+    # rated positively, `Campus Quantitative Researcher, PhD` among them: the
+    # word names the audience a posting is open to, not a bar it sets.
     "phd_required": _terms(
         "phd required", "phd is required", "phd is a requirement",
         "must hold a phd", "must have a phd", "requires a phd",
@@ -932,20 +777,17 @@ _HARD_GATES = {
         "no visa sponsorship", "not able to sponsor", "unable to sponsor",
         "without sponsorship", "must have the right to work",
     ),
-    # Moved off the seniority ladder, where it was pretending to be a rank. A
-    # posting demanding a *future* graduation date is one this reader cannot
-    # pass, which is exactly what a hard gate is. Specific phrases only: a bare
-    # "student" fired on any body that merely welcomes them, and marked a
-    # full-time PhD-level research role at Radix Trading as student-only.
+    # A posting demanding a *future* graduation date is one this reader cannot
+    # pass, which is what a hard gate is -- not a rank. Specific phrases only:
+    # a bare "student" fires on any body that merely welcomes them, and marked
+    # a full-time research role at Radix Trading as student-only.
     "student_only": _terms(
         "currently enrolled", "must be enrolled", "final year student",
         "final year students", "penultimate year", "still studying",
         "graduating in 2027", "graduating in 2028", "graduating in 2029",
         "expected graduation", "pursuing a degree", "studerande vid",
-        # The same specific-phrasing rule as the English half: a bare
-        # `studerande` or `studerende` fires on any body that merely welcomes
-        # students, which is how a full-time research role at Radix Trading was
-        # once marked student-only.
+        # Same specific-phrasing rule: bare `studerande` and `studerende` are
+        # as unsafe as bare "student".
         "du studerar vid", "pagaende studier", "du er studerende",
         "skal vaere studerende", "igangvaerende uddannelse",
     ),
@@ -962,26 +804,16 @@ _PHD_NOT_REQUIRED = _terms(
     "phd is not a requirement", "without a phd", "phd or equivalent experience",
 )
 
-# A soft filter, not a gate. The user reads and writes English and Swedish, so
-# a posting demanding either is not filtered by language at all -- which is why
-# neither appears here, and why the old `local_language_required` gate was
-# wrong: it flagged "flytande svenska" on Stockholm postings, the one hub the
-# project cares most about, as though it were an obstacle.
+# A soft filter, not a gate. English and Swedish are deliberately absent: the
+# reader has both, so demanding them is no obstacle -- the old gate flagged
+# "flytande svenska" on Stockholm postings, the hub that matters most.
+# Multi-valued, because Hong Kong asks for two.
 #
-# Multi-valued, because Hong Kong asks for two. Requirement phrasing only: a
-# posting that merely *offers* language classes is not asking for one.
-# **Built from frames rather than hand-written, because hand-writing it caught
-# 151 postings out of 69,961.** The old list was three phrasings per language --
-# "fluent in X", "X is required", "native X" -- and job advertisements ask for a
-# language in twenty other ways: "proficiency in", "good command of", "written
-# and spoken", "C1", "verhandlungssicher", "i tal och skrift". A requirement the
-# reader would actually hit was being missed roughly nine times in ten.
-#
-# The frames are still *requirement* phrasings. A posting that merely mentions a
-# language, or offers classes in one, is not asking for it -- so `{L} a plus`,
-# `{L} is a bonus` and bare `{L}` are deliberately not frames. This is a soft
-# filter that costs one notch of rank rather than a gate, so the cost of a
-# generous frame is small and the cost of a missing one is a surprise at
+# **Built from frames rather than hand-written**, because three phrasings per
+# language caught 151 postings out of 69,961 -- advertisements also say
+# "proficiency in", "good command of", "C1", "i tal och skrift". Requirement
+# phrasings only: `{L} a plus` and bare `{L}` are deliberately not frames. A
+# generous frame costs a notch of rank; a missing one costs a surprise at
 # interview.
 _FLUENCY_FRAMES = (
     "fluent in {}", "fluency in {}", "fluent {}", "native {}",
@@ -1074,24 +906,19 @@ _CONTRACT = {
 _EXCLUSION = {
     "actuarial": ("actuary", "actuarial", "aktuarie", "actuaris", "aktuar"),
     "insurance_pricing": ("insurance pricing", "skadereglering"),
-    # `underwriting` and `claims` used to sit above, and `insurance_pricing` is
-    # on `_BODY_SAFE_EXCLUSIONS` -- so both were matched against the *body*,
-    # where they are ordinary banking words. Debt underwriting is securities
-    # issuance, not insurance. **1,834 postings were rejected this way on a
-    # clean title**, `Associate, FICC Structuring, Fixed Income` among them.
-    # Exactly the failure `CLAUDE.md` names: boilerplate is the default failure
-    # mode of any body-matched rule. They are a title-only category now.
+    # Its own category because it must be title-only. `insurance_pricing` is
+    # `_BODY_SAFE`, and in a body these are ordinary banking words -- debt
+    # underwriting is securities issuance, not insurance. It rejected 1,834
+    # postings on a clean title, `Associate, FICC Structuring` among them.
     "insurance_underwriting": ("underwriting", "claims", "claims handler"),
     "non_markets_fintech": ("payments", "kyc", "aml", "fraud detection",
                             "lending platform", "penningtvatt", "hvidvask",
                             "betalningar", "betalinger"),
-    # Lending is not markets, and the qualifier is the whole difference -- the
-    # same shape as `Credit Risk Operations` and `discretionary_investing`
-    # below. `lexicon.NON_QUANT_FINANCE` carries these too, and that was not
-    # enough on its own: `judge` runs last, so `Senior Lending Analyst -
-    # Portfolio & Risk Analytics` had already reached `adjacent` on *risk
-    # analytics* before anything asked it. An exclusion outranks a weak
-    # positive, which is the branch order that makes this fire.
+    # Lending is not markets. `lexicon.NON_QUANT_FINANCE` carries these too
+    # and that is not enough on its own: `judge` runs last, so `Senior Lending
+    # Analyst - Portfolio & Risk Analytics` had already reached `adjacent` on
+    # *risk analytics*. An exclusion outranks a weak positive; that ordering
+    # is what makes this fire.
     "lending": _terms(
         "loan analyst", "lending analyst", "distressed loan", "loan servicing",
         "loan officer", "mortgage analyst",
@@ -1101,9 +928,8 @@ _EXCLUSION = {
     "insurance_ops": (
         "insurance accounting", "insurance reporting", "policy administration",
         "skadeforsikring", "forsikring",
-        # Occupations rather than the bare noun. This category is on
-        # `_BODY_SAFE_EXCLUSIONS`, so it is matched against descriptions too,
-        # and bare `forsakring` is a word every Nordic bank writes in passing.
+        # Occupations rather than the bare noun: this category is `_BODY_SAFE`,
+        # and `forsakring` is a word every Nordic bank writes in passing.
         "skadereglerare", "forsakringsradgivare", "skadehandlaggare",
     ),
     "support_function": (
@@ -1112,25 +938,13 @@ _EXCLUSION = {
         "accounting", "bookkeeping", "payroll",
         "rekryterare", "rekrutterer", "marknadsforing", "markedsforing",
         "personaladministrator",
-        # **The Nordic half of the same list, and it was missing entirely.**
-        # The English words here reject an English `HR Business Partner` and
-        # said nothing at all about `HR-ansvarig`, `Kampanjkoordinator`,
-        # `Marknadskoordinator`, `Lönekonsult` or `Bogholder` -- all of which
-        # reached the board through `relevance: unknown` beside the
-        # purchasers. A corporate function is the same job in any language.
-        #
-        # These belong here rather than in `_OFF_INDUSTRY` because that is
-        # where their English equivalents live and the split is deliberate:
-        # `_OFF_INDUSTRY` is another *profession* and gates, while HR,
-        # marketing and payroll are functions every firm including a trading
-        # firm has, so they are an exclusion. Both end in the posting coming
-        # off the board; only the recorded reason differs, and `list --exclude`
-        # is read by reason.
-        #
-        # This category is not on `_BODY_SAFE_EXCLUSIONS`, so every needle
-        # here is matched against the title only -- which is what it needs to
-        # be. Dry-run over all 295,347 live titles: none touches a posting
-        # rated positively.
+        # The Nordic half. A corporate function is the same job in any
+        # language, and the English words said nothing about `HR-ansvarig` or
+        # `Lönekonsult`. They belong here rather than in `_OFF_INDUSTRY`
+        # because HR, marketing and payroll are functions every firm has,
+        # including a trading firm -- not another profession. This category is
+        # not `_BODY_SAFE`, so these are title-only, which is what they need.
+        # Dry-run: none touches a positively-rated posting.
         "hr ansvarig", "hr specialist", "hr konsult", "hr assistent",
         "hr partner", "rekryteringskonsult", "personalkonsulent",
         "lonekonsult", "loneassistent", "redovisningsassistent", "bogholder",
@@ -1142,17 +956,13 @@ _EXCLUSION = {
     ),
     "crypto_web3": ("crypto", "web3", "defi", "blockchain", "nft"),
     "heavy_systems": ("fpga", "verilog", "kernel bypass", "embedded systems"),
-    # Investing done by judgement rather than by model: private equity, sell-
-    # side research, traditional asset management, wealth. The hand-labelled
-    # sheet rejected nine of these in a row -- `Senior Investment Analyst`,
-    # `Portfolio Associate`, `Asset Management Analyst`, `Partner, Private
-    # Equity` -- while the lexicon had `investment analyst` and `portfolio
-    # analyst` filed as weak *positives*.
+    # Investing by judgement rather than by model. The hand-labelled sheet
+    # rejected nine of these in a row while the lexicon had `investment
+    # analyst` and `portfolio analyst` filed as weak *positives*.
     #
-    # Matched on the title only, and read after the core check, so a
-    # `Quantitative Analyst, Private Equity` keeps its quant reading. The
-    # qualifier is the whole difference, exactly as it is for `Credit Risk
-    # Operations`.
+    # Title only, and read after the core check, so `Quantitative Analyst,
+    # Private Equity` keeps its quant reading. It ranks rather than rejects --
+    # see `SOFT` in `tag_posting`.
     "discretionary_investing": _terms(
         "private equity", "venture capital", "investment banking",
         "mergers and acquisitions", "equity research", "fundamental research",
@@ -1166,26 +976,22 @@ _EXCLUSION = {
 # --------------------------------------------------------------------------
 # Stage one: another profession entirely.
 #
-# Every other exclusion in this file *ranks* -- it says a posting is further
-# from the centre, and the posting stays readable. This one is different in
-# kind: a nurse, a welder and a `Medical AI Specialist` are not distant quant
-# roles, they are other jobs, and the board drops them rather than ranking
-# them. That is the only place in the pipeline where a classifier removes
-# something from view, so it is deliberately the narrowest rule here.
+# Every other exclusion here *ranks*. This one is different in kind -- a nurse
+# and a welder are not distant quant roles, they are other jobs, and the board
+# drops them. It is the only place in the pipeline where a classifier removes
+# rather than reorders, so it is deliberately the narrowest rule in the file.
 #
-# It never touches the database. `jobs` keeps every row, the tag records why,
-# and re-running the tagger rebuilds the verdict -- so a term that turns out
-# to be wrong costs one `build_data.py` run, not a re-scrape.
+# It never touches the database: `jobs` keeps the row, the tag records why, and
+# re-running the tagger rebuilds the verdict, so a wrong term costs one
+# `build_data.py` run rather than a re-scrape.
 #
 # Two signals, and the first is much the stronger:
 #
-# 1. **The source's own taxonomy.** JobStream files every Swedish ad under one
-#    of 21 occupation fields. That is an enumeration written by the employer,
-#    not a guess read off a title, and fifteen of the fields can never hold a
-#    quant job. This is why `jobs.category` exists.
-# 2. **Unambiguous occupation words in the title.** Only for the ATS boards,
-#    which publish no taxonomy at all. Every needle below was dry-run over the
-#    whole corpus first and hit nothing in finance.
+# 1. **The source's own taxonomy** -- an enumeration the employer picked from,
+#    not a guess read off a title. This is why `jobs.category` exists.
+# 2. **Unambiguous occupation words in the title**, only for the ATS boards,
+#    which publish no taxonomy at all. Every needle was dry-run over the whole
+#    corpus first and hit nothing in finance.
 _OFF_INDUSTRY_FIELDS = frozenset({
     "Hälso- och sjukvård", "Pedagogik", "Yrken med social inriktning",
     "Transport, distribution, lager", "Hotell, restaurang, storhushåll",
@@ -1202,26 +1008,17 @@ _OFF_INDUSTRY_FIELDS = frozenset({
 # read-time filters handle it. An unrecognised field passes too: a drop list
 # fails towards keeping, which is the direction this project always picks.
 
-# MyCareersFuture's own taxonomy, the same argument the Swedish fields make one
-# comment up: an enumeration the employer picked from beats any word list we
-# would write. It needs its own set because the portal files a posting under
-# *several* categories at once, so this is a subset test rather than equality.
+# MyCareersFuture's taxonomy, same argument. Its own set because the portal
+# files a posting under *several* categories at once, so this is a subset test
+# rather than equality.
 #
-# **Dry-run over the 37,000 postings already swept, and the first attempt was
-# wrong.** A loose probe put `Building and Construction` at the top of the
-# "carries quant titles" list with 619 hits -- which is what happens when the
-# probe matches `risk` and `model`, because construction has risk managers and
-# BIM modellers. Tightened to unambiguous markets and quant words, the
-# categories that genuinely carry them are the ones kept below, and the pick of
-# the evidence is `Junior Quantitative Analyst (Multi-Strategy)` filed under
-# *Banking and Finance*.
-#
-# Kept deliberately, each because the dry-run found real quant work in it:
-# Banking and Finance, Information Technology, Engineering, Risk Management,
-# Sciences / Laboratory / R&D, Insurance, Consulting, Professional Services,
-# Accounting / Auditing / Taxation, Manufacturing, Wholesale Trade,
-# Healthcare / Pharmaceutical (data scientists), Public / Civil Service (GIC
-# and Temasek are roster firms), General Management, Others, Telecommunications.
+# Dry-run over the 37,000 postings swept, and the first attempt was wrong: a
+# loose probe put `Building and Construction` top of the "carries quant titles"
+# list, because construction has risk managers and BIM modellers. Tightened to
+# unambiguous markets words, what stays out is below and everything else --
+# Banking and Finance, IT, Engineering, Risk Management, Sciences, Insurance,
+# Consulting, Accounting, Manufacturing, Healthcare, Public Service, General
+# Management, Others, Telecommunications -- was found to carry real quant work.
 _MCF_OFF_INDUSTRY = frozenset({
     "Admin / Secretarial", "Advertising / Media",
     "Architecture / Interior Design", "Building and Construction",
@@ -1283,17 +1080,13 @@ _JOBINDEX_OFF_INDUSTRY = frozenset({
 def _jobindex_off_industry(category: str | None) -> str | None:
     """Whether every category this Danish posting carries is off-industry.
 
-    A subset test, never equality: one kept category keeps the posting, which
-    is the direction both sibling lists pick and the direction this project
-    always picks. An unrecognised label passes, so a category Jobindex invents
-    reaches the reader rather than vanishing.
+    A subset test, never equality: one kept category keeps the posting, and an
+    unrecognised label passes.
 
-    **Split on the pipe, not the comma.** The Singaporean list one comment down
-    splits on a comma because its labels contain none; two of the Danish ones
-    are `Hotel, restaurant og køkken` and `Landbrug, skov og fiskeri`, so a
-    comma would cut each into halves matching nothing and the gate would stop
-    firing on two of the biggest trades on the board. `jobindex.py` joins with
-    `CATEGORY_SEPARATOR` for exactly this reason.
+    **Split on the pipe, not the comma.** `Hotel, restaurant og køkken` and
+    `Landbrug, skov og fiskeri` both contain commas, so splitting on one would
+    cut two of the board's biggest trades into halves matching nothing.
+    `jobindex.py` joins with `CATEGORY_SEPARATOR` for this reason.
     """
     if not category:
         return None
@@ -1306,10 +1099,9 @@ def _jobindex_off_industry(category: str | None) -> str | None:
 def _mcf_off_industry(category: str | None) -> str | None:
     """Whether every category this posting carries is off-industry.
 
-    A subset test, never equality: the portal files most postings under more
-    than one category, and one kept category is enough to keep the posting.
-    That direction is the same one the Swedish drop list picks -- an
-    unrecognised field passes, and a mixed posting passes.
+    A subset test, never equality: the portal files most postings under several
+    categories and one kept category keeps the posting. An unrecognised field
+    passes too -- a drop list fails towards keeping.
     """
     if not category:
         return None
@@ -1353,26 +1145,13 @@ _OFF_INDUSTRY = _terms(
     # bare English "driver" does not
     "chauffeur", "bus driver",
     # ----------------------------------------------------------------------
-    # Added at the user's request: "accountant, salesperson etc., especially
-    # lacking in Swedish ads". The Swedish half of that complaint had a cause
-    # rather than a gap -- `fold` was deleting `å ä ö`, so every needle above
-    # spelled `sjukskoterska` or `stadare` had never once matched the text it
-    # was written for. That is fixed in `fold`; these are the genuinely missing
-    # occupations, and every one was dry-run over all 69,961 titles first.
-    #
-    # **Four obvious-looking candidates were dropped after that dry-run**, and
-    # each would have eaten markets work: `salesperson` is *Rates Salesperson*
-    # and *Cross Asset Solutions Salesperson*, `sales associate` is *Alternative
-    # Sales Associate, Sales*, `sales representative` is *Jr Equity/Fixed Income
-    # Solutions Sales Representative*, and `controller` is *Hedge Fund
-    # Controller* and *Product Controller*. All four are the wrong *job* rather
-    # than the wrong industry, so they stay where they were -- rejected on
-    # relevance, still on the board, one click away. `administrator` went the
-    # same way on *Database Administrator*.
-    #
-    # `accountant` is here despite being an occupation rather than an industry,
-    # because the user named it: 433 hits, all of them genuinely accountants,
-    # and fund accounting is already an exclusion one layer up.
+    # **Five obvious-looking candidates were dropped after the dry-run**, each
+    # of which would have eaten markets work: `salesperson` is *Rates
+    # Salesperson*, `sales associate` and `sales representative` are equity and
+    # fixed-income sales, `controller` is *Hedge Fund Controller*, and
+    # `administrator` is *Database Administrator*. All are the wrong *job*
+    # rather than the wrong industry, so they stay rejected on relevance --
+    # still on the board, one click away.
     "accountant", "accounting clerk", "bookkeeper",
     "redovisningsekonom", "redovisningskonsult", "ekonomiassistent",
     "loneadministrator", "lonespecialist", "ekonomiadministrator",
@@ -1396,71 +1175,52 @@ _OFF_INDUSTRY = _terms(
     "hotellreceptionist", "pizzabagare", "bagare", "cafebitrade",
     "restaurangbitrade", "diskare", "hovmastare",
     # ----------------------------------------------------------------------
-    # Venue, events and front-of-house, found by machine-labelling 1,000
-    # postings: the largest disagreement was `relevance: unknown` on rows any
-    # reader would reject on sight, and these are what they were. Live Nation
-    # and student-housing operators publish through the same ATS platforms as
-    # the trading firms, so they arrive mixed in.
+    # Venue, events and front-of-house. Live Nation and student-housing
+    # operators publish through the same ATS platforms as the trading firms,
+    # so they arrive mixed in.
     #
-    # Dry-run over all 69,961 titles first, as ever, and the check that decides
-    # it is not the head count but whether a needle touches a posting the
-    # tagger currently rates positively. **None of these touches one.**
-    # `landscape` was dropped for failing exactly that kind of reading -- it
-    # caught `Managing Technical Consultant, Landscape Architecture`, and a
-    # *data* landscape is one usage away.
+    # **The safety check is not the head count but whether a needle touches a
+    # positively-rated posting.** None of these does. `landscape` was dropped
+    # for failing it -- it caught `Managing Technical Consultant, Landscape
+    # Architecture`, and a *data* landscape is one usage away.
     "retail associate", "ticket taker", "usher", "box office", "music hall",
     "production runner", "venue", "greeter", "host", "workplace ambassador",
     "student living", "environmental inspector", "auto appraiser",
     "rental service agent",
     # French and German field sales, which arrive through the same tenants
     "conseiller commercial", "aussendienst",
-    # A second pass over what was left. **`environmental inspector` did not
-    # match `Environmental Inspectors (Field Based)`** -- token matching is
-    # exact and the corpus advertises the plural, which is the same shape as
-    # `Elsäljare` and worth the reminder: check the form the postings actually
-    # use, not the form the dictionary does.
+    # **`environmental inspector` did not match `Environmental Inspectors
+    # (Field Based)`**: token matching is exact and the corpus advertises the
+    # plural. Write the needle against real titles, not the dictionary form.
     "inspector", "inspectors", "project engineer", "design engineer",
     "events support", "promotions", "property associate",
-    # Ten rows of the hand-labelled sheet in one title, all Greystar and all
-    # noted "from the board". A *make-ready* is apartment turnover -- paint,
-    # patch, clean between tenancies -- and the phrase reaches 60 titles here,
-    # none of them rated positively. `leasing consultant`, `property manager`
-    # and `maintenance supervisor` came with it off the same boards.
+    # Ten rows of the hand-labelled sheet in one title, all Greystar. A
+    # *make-ready* is apartment turnover between tenancies: 60 titles, none
+    # rated positively, and the other three came off the same boards.
     "make ready", "leasing consultant", "property manager",
     "maintenance supervisor",
     # ----------------------------------------------------------------------
     # **Swedish and Danish, because the corpus stopped being mostly English.**
-    # Jobbsafari brought 48,173 Swedish postings and publishes no taxonomy, so
-    # unlike Jobindex and MyCareersFuture there is no enumeration to gate on
-    # and the occupation words carry all of it. Danish is here for the same
-    # reason in reverse: `jobindex` *is* gated by its own taxonomy and leaks
-    # only fifteen postings, but a `--since` top-up writes a NULL category and
-    # a NULL category passes the gate -- so these are what stands behind it.
+    # Jobbsafari publishes no taxonomy, so unlike Jobindex and MyCareersFuture
+    # there is no enumeration to gate on and these words carry all of it.
+    # Danish is here in reverse: `jobindex` *is* gated by its taxonomy, but a
+    # `--since` top-up writes a NULL category and a NULL category passes.
     #
-    # **Every needle below was dry-run over all 236,077 live titles, and not
-    # one of them touches a posting the tagger rates positively.** That is the
-    # check, not the head count -- `landscape` was dropped on exactly this test
-    # one block up.
+    # Three shapes leak that a plain occupation list does not cover:
     #
-    # Three shapes are new here and each was a leak that reached the board:
+    # - **The plural** -- `Undersköterskor` past the needle `underskoterska`,
+    #   269 times, the same exactness `Environmental Inspectors` showed.
+    # - **The workplace, where it is the only thing naming the profession** --
+    #   `äldreboende`, `hemtjänsten`, `förskola`.
+    # - **The assignment** -- 33 postings headed *Veteraner till städuppdrag!*
+    #   name no occupation at all.
     #
-    # - **The plural.** `underskoterska` was a needle and `Undersköterskor` was
-    #   on the board, 269 of them, because token matching is exact -- the same
-    #   thing `Environmental Inspectors` taught in English.
-    # - **The workplace, where it names the profession.** `äldreboende`,
-    #   `ungdomsboende`, `hemtjänsten`, `förskola`: "Timvikarier till Sjövägens
-    #   barn och ungdomsboende" says what the work is only through the place.
-    # - **The assignment.** `städuppdrag` and `trädgårdsuppdrag` -- 33 postings
-    #   headed *Veteraner till städuppdrag!*, which names no occupation at all.
-    #
-    # **`vikarie` and `souschef` were dropped after the dry-run**, and for
-    # opposite reasons. A *vikarie* is a fixed-term contract rather than a
-    # profession, so gating on it would delete a temporary quant role on
-    # evidence about its length; it is in `_CONTRACT` instead. A *souschef* is
-    # a deputy manager in Danish as often as a sous-chef in Swedish, and
-    # `_MANAGER_HEADS` already reads it as the rank it usually is. `stad` went
-    # too: `städ` (cleaning) and `stad` (city) fold to the same four letters,
-    # so it would have gated every posting at *Stockholms stad*.
+    # **Three were dropped after the dry-run.** A *vikarie* is a fixed-term
+    # contract rather than a profession, so gating it would delete a temporary
+    # quant role on evidence about its length -- it is in `_CONTRACT`. A
+    # *souschef* is a deputy manager in Danish as often as a sous-chef in
+    # Swedish. And `städ` (cleaning) folds to `stad` (city), which would gate
+    # every posting at *Stockholms stad*.
     "personliga assistenter", "underskoterskor", "sjukskoterskor",
     "tandskoterskor", "frisorer", "herrfrisor", "barberare", "hushallerska",
     "hemstadning", "staduppdrag", "stadning", "tradgardsuppdrag", "hemtjanst",
@@ -1496,28 +1256,19 @@ _OFF_INDUSTRY = _terms(
     # ----------------------------------------------------------------------
     # **Read off the board itself, which is the frame that matters.** A fresh
     # Jobbsafari sweep put 585 Swedish postings in front of the reader and they
-    # were babysitters, taxi drivers, postmen and pizza chefs. The words are
-    # here; the *shape* of the gap is that a national board advertises jobs no
-    # ATS in this project has ever carried, so the occupation vocabulary was
-    # written against the wrong corpus.
+    # were babysitters, taxi drivers, postmen and pizza chefs -- a national
+    # board advertises jobs no ATS here has ever carried, so the occupation
+    # vocabulary had been written against the wrong corpus.
     #
-    # Every needle dry-run over all 288,498 live titles, and the check is the
-    # standing one: does it touch a posting the tagger rates positively.
+    # **Three were kept *because* they touch a positively-rated posting**, each
+    # confirmed by hand as a tagger false keep: `postdoktor` reaches two
+    # biophysics postdocs rated `relevant` on the word *kvantitativ*, and
+    # `okonomimedarbejder` a municipal accounts clerk.
     #
-    # **Three were kept *because* they touch one**, each a tagger false keep
-    # that reading it by hand confirms: `postdoktor` reaches two university
-    # postdocs rated `relevant` on the word *kvantitativ* -- multivalent
-    # binding and lipid nanoparticles, biophysics rather than markets -- and
-    # `okonomimedarbejder` reaches an accounts clerk in a municipal children's
-    # and culture department, rated `relevant`. Academic and municipal
-    # accounting are not this line of work, and `accountant` is already gated
-    # one block up at the user's own request.
-    #
-    # **Two were dropped.** `handlare` has exactly one hit in the whole corpus
-    # and it is rated `less_relevant` -- a village shopkeeper -- but a Swedish
-    # markets posting could reasonably be titled *Handlare*, and one row on the
-    # board is cheaper than a rule that could delete a trader. `taxi` was kept
-    # only after checking it cannot reach `robotaxi`, which is one token.
+    # **`handlare` was dropped.** Its one hit is a village shopkeeper, but a
+    # Swedish markets posting could reasonably be titled *Handlare*, and one
+    # row on the board is cheaper than a rule that could delete a trader.
+    # `taxi` was kept only after checking it cannot reach `robotaxi`.
     "barnvakt", "barnvakter", "babysitter", "babysitters", "barnflicka",
     "barnpassning", "laxhjalp", "ledsagare", "anestesiolog", "gynekolog",
     "urolog", "farmaceut", "farmaceuter", "receptarie", "skolpsykolog",
@@ -1548,20 +1299,18 @@ _OFF_INDUSTRY = _terms(
     "sagsbehandler", "ejendomsadministrator", "okonomimedarbejder",
     "studiejob", "kontorelev", "salgselev", "serviceassistent",
     # A second reading, of what the *re-tag* left rated positively rather than
-    # of what reached the board -- a different frame and it finds different
-    # things. Each of the first three removes a posting the tagger had rated
-    # positively, which is the strongest evidence a needle can have:
+    # of what reached the board. A different frame finds different things, and
+    # the first three each remove a posting the tagger had rated positively --
+    # the strongest evidence a needle can have:
     #
-    # - **`tekniker` was a compound head and never a word**, so `servicetekniker`
-    #   was gated while a bare `Tekniker` was not -- `_compound` wants nine
-    #   characters and the word is eight. 492 hits, and the one rated
-    #   positively is `Tekniker till Quant Service i Ludvika`, where *Quant* is
-    #   the name of an electrical contractor. `citadel.com` all over again.
+    # - **`tekniker` was a compound head and never a word**, so
+    #   `servicetekniker` gated and a bare `Tekniker` did not: `_compound`
+    #   wants nine characters and the word is eight. Its positively-rated hit
+    #   is `Tekniker till Quant Service i Ludvika`, an electrical contractor
+    #   called Quant. `citadel.com` all over again.
     # - **`bilbranschen` and `bilindustrin` are car sales wearing a markets
-    #   word.** `Intresserad av bilbranschen och försäljning? Bli Junior Trader`
-    #   and `Trader till växande företag inom bilindustrin` -- three hits each
-    #   in the whole corpus, and the board pinned both near the top because
-    #   *Trader* is the strongest title word there is.
+    #   word** -- `Trader till växande företag inom bilindustrin`, pinned near
+    #   the top because *Trader* is the strongest title word there is.
     "tekniker", "bilbranschen", "bilindustrin", "biltvatt", "bilrekondare",
     "fordonssaljare", "montage", "lagerarbete",
     # The last of the residual, read off the rebuilt board. **`kassa` was
@@ -1570,34 +1319,28 @@ _OFF_INDUSTRY = _terms(
     # today and a Swedish liquidity role would be the first thing it ate.
     "diskaren", "servicepersonal", "hotellreceptionister", "postanstalld",
     "fardtjanst", "sjukresor", "forestry", "turism", "fastighetsformedling",
-    "baka pizza", "farskvaror",    # ----------------------------------------------------------------------
-    # **Switzerland, the third focus hub with a national board.** 22,903 Swiss
-    # postings arrived and only 50 of them reach the board -- the German,
-    # Dutch and French words `lexicon.UNRELATED` already carried do most of
-    # it -- but the fifty are `Zimmerreinigung`, `Masseurin`, `Kosmetikerin`,
-    # `Dachdecker` and `Verkäuferin Tankstellenshop`, so the gap is a dozen
-    # trades rather than a category.
+    "baka pizza", "farskvaror",
+    # ----------------------------------------------------------------------
+    # **Switzerland, the third focus hub with a national board.** Of 22,903
+    # Swiss postings only 50 reach the board -- `lexicon.UNRELATED`'s German
+    # and French words do most of it -- and those 50 are `Zimmerreinigung`,
+    # `Masseurin` and `Dachdecker`, so the gap is a dozen trades.
     #
-    # job-room.ch publishes its *own* taxonomy and it cannot be used: the
-    # occupation object carries bare AVAM codes and no labels, and the
-    # reference service that would name them is not open. `jobroom_ch.py`
-    # records that, and it is why Switzerland is gated by words where Denmark
-    # and Singapore are gated by an enumeration.
+    # job-room.ch publishes its own taxonomy and it cannot be used: the
+    # occupation object carries bare AVAM codes with no labels, and the
+    # reference service that would name them is not open. That is why
+    # Switzerland is gated by words where Denmark and Singapore are gated by an
+    # enumeration.
     #
-    # Dry-run over every live title, as ever, and none of these touches a
-    # posting rated positively. `macon` was read by hand and kept: it is a
-    # French mason fifteen times and Macon, Georgia never -- and it is safe
-    # for a second reason, since this list is matched against the title and
-    # never the location.
+    # `macon` was read by hand and kept: a French mason fifteen times and
+    # Macon, Georgia never -- and safe twice over, since this list is matched
+    # against the title and never the location.
     #
-    # **`gartner` was dropped even though its dry-run was clean.** It is a
-    # Danish gardener 155 times and the research firm zero times, so the
-    # measurement says keep it -- but all 155 arrive through Jobindex and are
-    # already gated by its own taxonomy, so the needle buys nothing, while
-    # `Gartner Research Analyst` is a title that exists in the world and would
-    # be removed as a landscaping job. Nothing to gain and something to lose
-    # is the whole test; `landscape` was dropped one block up on the same
-    # reasoning.
+    # **`gartner` was dropped even though its dry-run was clean.** All 155
+    # Danish gardeners arrive through Jobindex and are already gated by its
+    # taxonomy, so the needle buys nothing -- while `Gartner Research Analyst`
+    # is a title that exists and would be removed as landscaping. Nothing to
+    # gain and something to lose is the whole test.
     "zimmerreinigung", "masseurin", "masseur", "kosmetikerin", "kosmetiker",
     "dachdecker", "parqueteur", "verkauferin", "tankstellenshop",
     "produktionsmitarbeiter", "pflegefachfrau", "pflegefachmann",
@@ -1618,32 +1361,23 @@ _OFF_INDUSTRY = _terms(
     "assistante dentaire", "operatore socio sanitario", "infermiere", "cuoco",
     "cameriere", "muratore", "elettricista", "idraulico", "magazziniere",
     # ----------------------------------------------------------------------
-    # **Read off the Swedish and Danish board, which the reader named.** The
-    # complaint was "too much junk, e.g. inköpare, and too little jobs", and
-    # the two halves turned out to be one fault: 176 of the 199 Nordic cards
-    # were `relevance: unknown`, which is the bucket holding both the
-    # purchasers and the real markets seats, so they sorted together. This is
-    # the half that empties it from below. `Inköpare` alone was thirteen of
-    # those cards, from six different consultancies advertising the same
-    # `UBW Inköpssupport` seat.
+    # **Read off the Swedish and Danish board.** The complaint was "too much
+    # junk, e.g. inköpare, and too little jobs", and both halves were one
+    # fault: 176 of the 199 Nordic cards were `relevance: unknown`, the bucket
+    # holding the purchasers *and* the real markets seats, so they sorted
+    # together. This is the half that empties it from below.
     #
-    # Dry-run over all 295,347 live titles, and the check is the standing one:
-    # does a needle touch a posting the tagger rates positively. **One does,
-    # and it is kept after reading it by hand** -- `indkøber` reaches
-    # `Indkøber - Trading` at a Danish firm called Kompetent, rated `adjacent`
-    # on the word *trading*, which there means commerce. Same shape as
-    # `Tekniker till Quant Service` and `Trader till växande företag inom
-    # bilindustrin` two blocks up: a purchaser at a trading company is a
-    # purchaser.
+    # One needle touches a positively-rated posting and is kept after reading
+    # it: `indkøber` reaches `Indkøber - Trading` at a firm called Kompetent,
+    # rated `adjacent` on *trading*, which there means commerce. A purchaser at
+    # a trading company is a purchaser.
     #
-    # **`förvaltare` is deliberately not here and must not be added.** The
-    # Swedish word is a property caretaker in `Teknisk förvaltare` and a
-    # portfolio manager in `Ränteförvaltare till Swedbank Robur`, and the
-    # second is a posting this board exists to find. The qualified compounds
-    # go on `lexicon.MARKETS` instead; only the property ones are gated here.
+    # **`förvaltare` is deliberately not here and must not be added.** It is a
+    # property caretaker in `Teknisk förvaltare` and a portfolio manager in
+    # `Ränteförvaltare till Swedbank Robur` -- the qualified compounds go on
+    # `lexicon.MARKETS` and only the property ones are gated here.
     # `controller`, `analytiker` and `specialist` are absent for the reason
-    # recorded further up -- they are the wrong *job* rather than the wrong
-    # industry, and they rank rather than gate.
+    # above: the wrong *job* rather than the wrong industry, so they rank.
     #
     # purchasing and procurement, which is what the reader pointed at
     "inkopare", "inkop", "inkopsansvarig", "inkopsassistent", "inkopschef",
@@ -1667,32 +1401,22 @@ _OFF_INDUSTRY = _terms(
     "landskapsarkitekt", "planarkitekt", "stadsarkitekt", "byplanarkitekt",
     "planeringsarkitekt", "indretningsarkitekt",
     # **A hotel's front office is a reception desk**, and `front office` is one
-    # of the strongest words on `lexicon.MARKETS`. `Shiftleader Front Office,
-    # Scandic Spectrum` and `Shiftleader Front Office, Scandic Kødbyen` were
-    # promoted onto the Copenhagen board by the new markets-title branch --
-    # which is what that branch is for and also exactly the collision to
-    # expect from it. Removing `front office` is not the answer: 209 titles
-    # carry it and all but these are genuine desks, from Marex's `Front Office
-    # Python Developer` to State Street's `Front-Office Trading Specialist`.
-    # The shift word is the discriminator, and it is clean -- `shiftleader` is
-    # two Scandic postings, `shift leader` is 72 baristas, pub staff and data
-    # centre crews, `receptionschef` is 18 hotels and campsites, none of them
-    # anywhere near finance.
+    # of the strongest words on `lexicon.MARKETS`. Removing it is not the
+    # answer -- 209 titles carry it and all but these are genuine desks. The
+    # *shift* word is the discriminator and it is clean: `shift leader` is 72
+    # baristas and data centre crews, `receptionschef` 18 hotels, none of them
+    # near finance.
     "shiftleader", "shift leader", "receptionschef", "hotel front office",
-    # **The second pass over the same board, and the shape of the residue is
-    # `Erfaren <trade>`.** With the purchasers gone the largest remaining
-    # family was Swedish postings the lists simply had no word for --
-    # `Erfaren Guldsmed / Juvelfattare`, `Erfaren Kantpressare`, `Erfaren
-    # bilskadereparatör`, `Erfaren växeltelefonist`, `Erfaren arkivarie`.
-    # All 37 dry-run over all 295,347 live titles; none touches a posting the
-    # tagger rates positively.
+    # **The second pass, and the residue is shaped `Erfaren <trade>`.** With
+    # the purchasers gone the largest remaining family was Swedish postings the
+    # lists had no word for -- `Erfaren Guldsmed`, `Erfaren Kantpressare`,
+    # `Erfaren växeltelefonist`.
     #
     # **The `-ingenjör` compounds are named individually and the suffix is
-    # still refused**, which is the alternative this file's own note about it
-    # proposes: the head reaches `Softwareingeniør`, and `software engineer`
-    # and `developer` are deliberately absent from `_SOFTWARE_SPECIALTY`
-    # because a quant-dev posting calls itself one. `automationsingenjör` and
-    # `processingenjör` cannot reach anything of the sort.
+    # still refused**: the head would reach `Softwareingeniør`, and bare
+    # `software engineer` is deliberately absent from `_SOFTWARE_SPECIALTY`
+    # because a quant-dev posting calls itself one. `automationsingenjör`
+    # cannot reach anything of the sort.
     "entreprenadingenjor", "processingenjor", "projektingenjor",
     "matningsingenjor", "byggnadsingenjor", "automationsingenjor",
     "elingenjor", "produktionsingenjor", "kvalitetsingenjor",
@@ -1703,16 +1427,70 @@ _OFF_INDUSTRY = _terms(
     "beredskapssamordnare", "informationssakerhetssamordnare",
     "molekylarbiolog", "cellbiolog", "biomedicinsk analytiker", "logoped",
     "dietist",
-    # Law, in the Nordic spelling. **The compounds are what was escaping**:
-    # bare `jurist` is already on `lexicon.CORPORATE` and was rejecting 182
-    # titles, but `jurist` is not one of `lexicon.SWEDISH_HEADS`, so
-    # `Bolagsjurist` and `Erfaren dataskyddsjurist` were single tokens nothing
-    # could see inside and both came back `undecided`. The bare noun is
-    # repeated here so the reason recorded for a lawyer is the same one
-    # recorded for a lawyer's compound; it changes which gate fires and not
-    # whether one does.
+    # Law, in the Nordic spelling. **The compounds are what escaped**: bare
+    # `jurist` is on `lexicon.CORPORATE`, but it is not a `SWEDISH_HEADS` head,
+    # so `Bolagsjurist` was one token nothing could see inside. The bare noun
+    # is repeated so a lawyer and a lawyer's compound record the same reason.
     "jurist", "bolagsjurist", "dataskyddsjurist", "myndighetsjurist",
     "affarsjurist", "skatteradgivare",
+    # ----------------------------------------------------------------------
+    # **Switzerland, read off its own board the way Sweden's was.** Switzerland
+    # is the hub with the widest gap between what arrives and what shows -- 28k
+    # postings, 182 cards -- and unlike Denmark and Singapore it is gated by
+    # *words* rather than by a taxonomy, because job-room.ch publishes bare
+    # AVAM occupation codes and no labels. So the German and French occupation
+    # vocabulary carries all of it, and it was a dozen trades deep.
+    #
+    # The residue that reached the board was `Bäcker`, `Müller`,
+    # `Speditionskauffrau Seefracht`, `Responsable de Caisse`, `Agent de
+    # comptoir`, `immobilienbewirtschafter:in` and `Apparel Merchandising
+    # Coordinator`. Dry-run over all 295,347 live titles.
+    #
+    # **`Anlage` is the trap this hub hides, and it is `handel` in German.**
+    # It means both *investment* and *industrial plant*, and in this corpus it
+    # is overwhelmingly the second: `anlagenführer` is 212 titles and every one
+    # is a machine operator, with `Toranlagen`, `Aufzugsanlagen`,
+    # `Krananlagen` and `Photovoltaikanlagen` behind it. Translating
+    # "investment" into German and adding the stem would have put 212 plant
+    # operators on a markets list. The operator forms are gated here; nothing
+    # from that family goes anywhere near `MARKETS`.
+    #
+    # **`sachbearbeiter` is kept despite one positive**, read by hand as the
+    # rule requires: its one positively-rated hit is a permits clerk that
+    # reached `adjacent` on *front office* -- the Scandic collision in German.
+    "backer", "muller", "speditionskauffrau", "speditionskaufmann",
+    "immobilienbewirtschafter", "immobilienbewirtschafterin",
+    "immobilienbewirtschaftung", "bauleiter", "baufuhrer", "polier",
+    "sachbearbeiter", "sachbearbeiterin", "kreditorensachbearbeiter",
+    "kaufmann", "kauffrau", "hauswartin", "servicetechniker",
+    "maschinenfuhrer", "anlagenfuhrer", "anlagefuhrer",
+    "mitarbeiter verkauf", "verkaufsberater", "filialleiter",
+    "merchandising", "merchandiser",
+    # French-speaking Switzerland and Romandy, same reading
+    "responsable de caisse", "charge de clientele", "agent de comptoir",
+    "responsable qualite", "gerant", "vendeur", "caissier", "caissiere",
+    "serveur", "cuisinier", "aide de cuisine", "agent de securite",
+    "chauffeur livreur", "educateur", "assistant medical",
+    # ----------------------------------------------------------------------
+    # **Read off the Swiss board *after* the markets vocabulary went in**, the
+    # only frame that could find these. `asset management` and `front office`
+    # name something ordinary in German: the Federal Roads Office, a waste
+    # incineration plant, property, and the Walliserhof Grand-Hotel. Ten of
+    # Switzerland's 39 ranked cards. The `Shiftleader Front Office` collision
+    # one language over, with the same answer -- the phrase stays on `MARKETS`
+    # and the noun beside it discriminates.
+    #
+    # **Note what "clean" means for this batch.** The standing check asks
+    # whether a needle touches a positively-rated posting, assuming those
+    # ratings are right. Here they are the bug, and every needle was *chosen*
+    # because it touches one. When fixing a false keep, a dry-run flagging hits
+    # is the confirmation rather than the objection -- read them, do not count
+    # them.
+    "immobilien", "immobilier", "immobiliare", "liegenschaften",
+    "nationalstrassen", "kehrichtverwertungsanlage", "entsorgung",
+    "recycling", "bauprozess", "einrichter", "wohnen",
+    "facility management", "gebaudetechnik", "hausdienst",
+    "hotellerie", "empfang", "rezeption", "telefonie",
 )
 
 # Deliberately absent, each after matching something real in the corpus:
@@ -1721,54 +1499,34 @@ _OFF_INDUSTRY = _terms(
 # DBS's *Data Translator*; `interpreter` is *Parts Interpreter*. Every one of
 # them is a job this project might want, under a word that looks like a trade.
 
-# A location field that names no place. Workday publishes `2 Locations` for
-# every multi-site posting and 6,281 rows carry one, so reading them as `other`
-# claimed we had looked and found somewhere else. `unknown` is the true answer,
-# and it matters now that geography gates: `other` is dropped from the board
-# and `unknown` is not, because a posting that could be in Amsterdam must not
-# disappear for failing to say so.
-# **A region that spans several countries names no city, so it is `unknown`
-# rather than `other`.** Jobbsafari files 1,392 postings under *De nordiska
-# länderna* -- the Nordic countries, which contain two of the six focus hubs.
-# Reading that as `other` says "we looked and it was somewhere else", and the
-# board then deletes it. Same call as Workday's `2 Locations`, and it fails
-# towards keeping.
+# A location field that names no place, which is `unknown` and never `other`.
+# Workday publishes `2 Locations` on 6,281 multi-site postings and Jobbsafari
+# files 1,392 under *De nordiska länderna* -- which contains two focus hubs.
+# Reading either as `other` claims we looked and found somewhere else, and the
+# board then deletes it; `unknown` survives the gate, so this fails towards
+# keeping.
 _NO_PLACE = re.compile(
     r"^\s*(\d+\s+locations?|remote|multiple locations|various"
     r"|de nordiska l(ä|a)nderna|norden|nordics|the nordics"
     r"|europe|europa|eu|emea|global|worldwide)\s*$",
     re.IGNORECASE)
 
-# `Cincinnati, OH` and `Waltham, MA` are the United States, which is
-# semi-target and therefore kept -- and 5,987 of them were being gated as
-# somewhere else, because no US city list is ever finished. The state code is
-# the reliable handle.
+# **A national board writes the *administrative* place, and each country picks
+# a different one** -- Jobindex a postcode, Jobbsafari a municipality,
+# job-room.ch a town and a canton code (`Wallisellen, ZH`). 18,562 Swiss
+# postings in a focus hub read as `other` before this, and 5,987 US ones read
+# as elsewhere while the US is semi-target.
 #
-# **It cannot go in `_HUBS`.** Hub matching runs over `fold(location, title)`,
-# so a two-letter needle would fire on the title: `IN`, `OR`, `ME`, `HI`, `OK`
-# and `DE` are all English words and all state codes. Matched here instead,
-# against the **location alone**, and anchored to the `, XX` shape a US address
-# actually takes -- which no European location in this corpus does.
-# **A canton code is the Swiss equivalent of a US state code, and the same
-# 18,562 postings taught it.** job-room.ch writes `Meisterschwanden, AG` and
-# `Wallisellen, ZH` -- the town and the two-letter canton, never the city --
-# so eighteen thousand postings in a *focus hub* read as `other` and were gated
-# off the board for being somewhere they are not. Third country, third time:
-# Jobindex writes a postcode, Jobbsafari writes a municipality, job-room.ch
-# writes a canton.
-#
-# Matched against the **location alone**, for exactly the reason `_US_STATE` is:
-# `SO`, `BE`, `AG`, `UR` and `GE` are all ordinary words in a job title.
+# **Neither can go in `_HUBS`**, which matches `fold(location, title)`: `IN`,
+# `OR` and `DE` are English words as well as states, and `SO`, `BE` and `GE`
+# are ordinary words in a title. Matched here against the **location alone**,
+# anchored to the `, XX` shape an address takes.
 #
 # **Three cantons are missing and were measured rather than forgotten.** `AR`,
-# `NE` and `FL` are also Arkansas, Nebraska and Florida, and both readings are
-# live in this corpus -- 174 Appenzell Ausserrhoden against 17 Arkansas, 219
-# Neuchâtel against 40 Nebraska, and 42 Liechtenstein against 549 Florida. No
-# text rule separates them. Both readings are on the board either way, since
-# `deprioritized` and `switzerland` are both kept, so the choice is only which
-# label is wrong -- and a false hit in a focus hub is worse than a false miss,
-# which is the asymmetry this project picks every time. The 393 Swiss postings
-# affected stay on the board reading `deprioritized`.
+# `NE` and `FL` are also Arkansas, Nebraska and Florida and both readings are
+# live here, with no text rule between them. Both labels stay on the board
+# either way, so the only question is which one is wrong -- and a false hit in
+# a focus hub is worse than a false miss.
 _CH_CANTON = re.compile(
     r",\s*(AG|AI|BL|BS|BE|FR|GE|GL|GR|JU|LU|NW|OW|SG|SH|SO|SZ|TG|TI|UR|VD|VS|ZG|ZH)"
     r"\s*$"
@@ -1779,28 +1537,22 @@ _US_STATE = re.compile(
     r"N[CDEHJMVY]|OH|OK|OR|PA|RI|S[CD]|T[NX]|UT|V[AT]|W[AIVY]|DC)\b",
     re.IGNORECASE)
 
-# **City before country, and the difference is a posting.** `sweden` used to sit
-# in the `stockholm` tuple, so every Swedish advertisement read Stockholm --
-# Kiruna, Lund, Visby and Kalmar included, 180 of them. That was survivable
-# while geography only ranked. It is not survivable now that the board drops
-# what is out of area, because the label would be deleting postings for being
-# somewhere they are not and keeping them for being somewhere they are not.
+# **City before country.** `sweden` used to sit in the `stockholm` tuple, so
+# every Swedish advertisement read Stockholm -- Kiruna and Visby included.
+# Survivable while geography only ranked; not once the board drops what is out
+# of area, since the label would then delete postings for being somewhere they
+# are not.
 #
-# So a focus hub is the city and the distance somebody would actually commute,
-# and the rest of the same country gets its own value. Those are gated by
-# default and one line in `web/build_data.py` brings any of them back.
-#
-# Switzerland stays national on purpose: the roster is national, the country is
-# small, and no Swiss city dominates it the way Stockholm dominates Sweden.
+# So a focus hub is the city plus a real commuting belt, and the rest of the
+# country gets its own value, gated by default and one line in
+# `web/build_data.py` from coming back. Switzerland stays national on purpose:
+# the roster is national and no Swiss city dominates it the way Stockholm does.
 _HUBS = {
-    # The belt, drawn the same way Copenhagen's is: the municipalities of
-    # Stockholms län within about forty kilometres, which is what the existing
-    # list already implied. Södertälje moved *up* into it -- 35 km and on the
-    # commuter rail, so by the rule that put Køge (39 km) in the Copenhagen
-    # belt it belongs here rather than in `sweden_other`. Norrtälje (70),
-    # Nynäshamn (58) and Nykvarn (50) stay out, and `salem` is deliberately in
-    # neither list: it reaches 38 postings of which 22 are Salem, Oregon and
-    # Winston-Salem, North Carolina.
+    # The belt: municipalities of Stockholms län within about forty kilometres.
+    # Södertälje (35 km, on the commuter rail) is in by the same rule that puts
+    # Køge in Copenhagen's; Norrtälje (70), Nynäshamn (58) and Nykvarn (50) are
+    # out. `salem` is in neither list -- 22 of its 38 postings are Salem,
+    # Oregon and Winston-Salem, North Carolina.
     "stockholm": (
         "stockholm", "stockholms lan", "solna", "sundbyberg", "kista",
         "bromma", "nacka", "danderyd", "sollentuna", "taby", "huddinge",
@@ -1810,17 +1562,11 @@ _HUBS = {
         "osteraker", "ekero", "vaxholm",
     ),
     # The belt, not the municipality. Jobindex writes a *postcode and town* --
-    # `2650 Hvidovre` -- and never the word København, so before these went in
-    # **1,444 Greater Copenhagen postings read as `other` and were gated off the
-    # board for being somewhere else**. The list below is the towns that
-    # actually appeared, ranked by volume, each dry-run over all 187,960
-    # postings: every one matches Danish rows only, and the handful arriving
-    # through another source are Nordea and Danish Teamtailor boards.
-    #
-    # The distance rule is the one the list already implied: Roskilde is 32 km
-    # out and Hillerød 35, so Farum (25), Birkerød (24), Allerød (30), Ølstykke
-    # (35), Frederikssund (40) and Køge (39) belong with them. Helsingør at 45
-    # is `denmark_other`.
+    # `2650 Hvidovre` -- and never the word København, so 1,444 Greater
+    # Copenhagen postings read as `other` and were gated off the board. These
+    # are the towns that actually appeared, each dry-run: every one matches
+    # Danish rows only. Same forty-kilometre rule, so Køge (39) is in and
+    # Helsingør (45) is `denmark_other`.
     "copenhagen": (
         "copenhagen", "kobenhavn", "kobenhavns", "kbh", "storkobenhavn",
         "frederiksberg", "gentofte", "lyngby", "glostrup", "soborg",
@@ -1876,25 +1622,20 @@ _HUBS = {
     # The right country, the wrong city. Named rather than lumped into `other`
     # so the board can say what it dropped and why, and so turning Gothenburg
     # or Aarhus back on is a one-line change rather than a lexicon edit.
-    # **Sweden arrived and 16,153 of its postings read `other`.** Exactly the
-    # shape Jobindex found one country over: `other` means "we read the place
-    # and it was Bangalore", so answering "where did Sweden go?" with it is a
-    # lie the board tells on every build -- and under a gate it deletes them.
-    # Twenty-eight names covered a country of 290 municipalities.
+    # **Sweden arrived and 16,153 of its postings read `other`**, because 28
+    # names covered a country of 290 municipalities. `other` means "we read the
+    # place and it was Bangalore", so under a gate it deletes them.
     #
-    # The list is **Jobbsafari's own area taxonomy**, 22 counties and 315
-    # municipalities, which is an enumeration the board publishes rather than
-    # a word list written from memory -- the same argument `jobs.category`
-    # exists for. Everything in it was dry-run over all 236,077 live postings,
-    # and seven names were thrown out because the fold makes them somebody
-    # else's word: **`Åre` folds to `are`, which is the ISO code for the
-    # United Arab Emirates and reaches 83 Workday postings in Dubai and Abu
-    # Dhabi**; `Eda` is electronic design automation; `Vara` is Dubai's
-    # virtual-asset regulator; `Sala` is a Venetian waiter (*Commis di Sala*);
-    # `Malå` is Sichuan food; `Mark` is Singapore's Green Mark and a Colorado
-    # street address; `Salem` is Oregon. Anything the taxonomy does *not*
-    # carry is not Sweden, which is what kept `Island`, `Bangalore` and
-    # `Paris` out -- all three are places this board advertises.
+    # The list is **Jobbsafari's own area taxonomy** -- an enumeration the
+    # board publishes rather than a word list written from memory, the same
+    # argument `jobs.category` exists for. Seven names were thrown out because
+    # the fold makes them somebody else's word: **`Åre` folds to `are`, the ISO
+    # code for the UAE, and reaches 83 Workday postings in Dubai**; `Eda` is
+    # electronic design automation, `Vara` is Dubai's virtual-asset regulator,
+    # `Sala` is a Venetian waiter, `Malå` is Sichuan food, `Mark` is
+    # Singapore's Green Mark, `Salem` is Oregon. Anything the taxonomy does not
+    # carry is not Sweden -- which is what kept `Island`, `Bangalore` and
+    # `Paris` out, all three places this board advertises.
     "sweden_other": (
         "sweden", "sverige", "goteborg", "gothenburg", "malmo", "lund",
         "uppsala", "linkoping", "vasteras", "orebro", "helsingborg",
@@ -1989,20 +1730,17 @@ _FOCUS_HUBS = frozenset(
     {"stockholm", "copenhagen", "amsterdam", "switzerland", "hong_kong", "singapore"}
 )
 
-# A country bucket is the *complement* of its focus hub, not a second place.
-# Once `hub` became multi-valued, "Stockholm, Sverige" -- which is one job, and
-# what Jobbsafari writes for a Stockholm posting open across the region --
-# matched both `stockholm` and `sweden_other`, and those two values contradict
-# each other: the second one means "in Sweden and not in Stockholm".
+# A country bucket is the *complement* of its focus hub, not a second place:
+# `sweden_other` means "in Sweden and not Stockholm", so "Stockholm, Sverige"
+# matching both is a contradiction.
 #
 # **The word that causes it is the country's own name, and only that word.**
-# Collapsing on the bucket instead would throw away a real second city:
-# "Copenhagen, Aarhus" is two places and genuinely belongs in both, and losing
-# Aarhus would be the multi-location bug this whole change exists to fix,
-# arriving through the back door. So a residual is dropped only when every
-# needle it matched on was the containing country.
+# Collapsing on the bucket instead would throw away a real second city --
+# "Copenhagen, Aarhus" belongs in both -- which is the multi-location bug this
+# change exists to fix, arriving by the back door. So a residual is dropped
+# only when every needle it matched was the containing country.
 #
-# `deprioritized` is deliberately not here: it spans five countries and is
+# `deprioritized` is deliberately absent: it spans five countries and is
 # nobody's complement, so a posting in Amsterdam and Frankfurt keeps both.
 _RESIDUAL_OF = {
     "sweden_other": "stockholm",
@@ -2043,24 +1781,21 @@ def _residual(found: list[tuple[str, str]], where: str) -> list[tuple[str, str]]
     return kept
 
 # Ranks the reader cannot reach from under a year of experience. `mid_3_5` is
-# deliberately *not* here: a three-year bar is a stretch rather than a wall,
-# and `experience_floor` already carries the number for anyone who wants to
-# filter harder. `unknown` is not here either, which is the point -- the gate
-# fires on a rank that was read, never on one that was missing.
+# deliberately absent -- a three-year bar is a stretch rather than a wall, and
+# `experience_floor` carries the number for anyone filtering harder. So is
+# `unknown`, which is the point: the gate fires on a rank that was read, never
+# on one that was missing.
 #
 # **`senior_6_10` came out at the reader's decision, and the Nordics are why.**
-# It was gating 9,914 postings, 947 of them in Stockholm and Copenhagen, and
-# what it removed there was not leadership: `Senior Data Scientist` at Nordea,
-# `Senior quantitative analyst within credit risk` at Swedbank, `Senior
-# Engineer - Systematic Equity` at Lynx. A Nordic bank stamps *Senior* on a
-# three-to-five-year grade the way it stamps *Associate Director* on one, and
-# `_NOT_HEAD_GRADE` already records that argument for the rung above.
+# It gated 9,914 postings, 947 in Stockholm and Copenhagen, and what it removed
+# there was not leadership -- `Senior quantitative analyst within credit risk`
+# at Swedbank, `Senior Engineer - Systematic Equity` at Lynx. A Nordic bank
+# stamps *Senior* on a three-to-five-year grade, the argument `_NOT_HEAD_GRADE`
+# already makes about `Associate Director`.
 #
-# The word still sets `seniority`, so it ranks -- the board sorts it below
-# everything else and `list --seniority senior_6_10` still finds it. What
-# changed is only that it no longer *removes*. Real leadership is a separate
-# rule and is untouched: `_MANAGEMENT` catches Head of, Chief, Director,
-# Manager and Team Lead by title, and `lead` and `head_or_md` stay here.
+# The word still sets `seniority`, so it still ranks last; it no longer
+# *removes*. Real leadership is untouched -- `_MANAGEMENT` catches Head of,
+# Chief, Director, Manager and Team Lead by title.
 _OUT_OF_REACH = frozenset({"lead", "head_or_md"})
 
 # What the board will show. Everything else is gated -- see `_off_location` and
@@ -2071,13 +1806,12 @@ BOARD_HUBS = _FOCUS_HUBS | {"deprioritized", "unknown"}
 # The exclusion reasons that *remove* a posting rather than ranking it.
 # Everything else in `job_tags` ranks.
 #
-# **One definition, because two consumers.** `web/build_data.py` uses it to
-# decide what reaches the board, and `labels.py` uses it to decide what is
-# worth a person's hour -- and those must agree. They did not: the sheet went
-# on offering VP roles in Kiruna after the board had stopped showing them,
-# which is a labelling fixture measuring a classifier nobody reads.
+# **One definition, because two consumers.** `web/build_data.py` decides what
+# reaches the board with it and `labels.py` decides what is worth a person's
+# hour, and those must agree -- the sheet went on offering VP roles in Kiruna
+# after the board had stopped showing them.
 #
-# Deleting a line here puts those postings back on the next build, with no
+# Deleting a line here puts those postings back on the next build with no
 # re-tag: the tags are written either way.
 GATES = {
     "off_industry": "another profession entirely",
@@ -2094,11 +1828,10 @@ GATES = {
 # What language the advertisement is written in
 # --------------------------------------------------------------------------
 #
-# `TAGGING.md` dimension 11, and it earns its place twice: it routes the
-# lexicon, and it is itself a signal -- a Swedish-language posting at a
-# Stockholm firm is a local hire and an English one at the same firm is often
-# the international desk. It is also what keeps a French production-line
-# advertisement off a hand-labelling sheet.
+# It earns its place twice: it routes the lexicon, and it is itself a signal --
+# a Swedish-language posting at a Stockholm firm is a local hire and an English
+# one at the same firm is often the international desk. It is also what keeps a
+# French production-line advertisement off a hand-labelling sheet.
 #
 # **This cannot use `fold`.** `fold` strips every character outside `a-z0-9+#`,
 # so "är" becomes "r" and "och" survives but "från" does not -- and the whole
@@ -2132,6 +1865,17 @@ _STOPWORDS = {
     "fi": frozenset("ja on ei että sekä kanssa me sinä tai kuin voit työ".split()),
 }
 
+# Inverted, so scoring is one pass over the tokens rather than one per language.
+def _stopword_languages() -> dict[str, tuple[str, ...]]:
+    index: dict[str, tuple[str, ...]] = {}
+    for code, words in _STOPWORDS.items():
+        for word in words:
+            index[word] = index.get(word, ()) + (code,)
+    return index
+
+
+_STOPWORD_LANGUAGES = _stopword_languages()
+
 # Han, kana and Hangul. A script is decisive where a stopword list is not.
 _CJK = re.compile(r"[぀-ヿ一-鿿가-힯]")
 
@@ -2154,43 +1898,43 @@ def posting_language(*parts: str | None) -> tuple[str, str | None]:
         return "unknown", None
     text = _TAGS.sub(" ", text)[:20_000]
 
-    letters = sum(1 for character in text if character.isalpha())
-    cjk = len(_CJK.findall(text))
     # A script beats a word list, but only when it is carrying the sentence --
     # `Land Acquisition Manager, Data Center アクイジション` is an English title
-    # with a Japanese fragment glued on the end.
-    if letters and cjk / letters > 0.30:
-        return "cjk", f"{cjk} CJK characters"
+    # with a Japanese fragment glued on the end. Counting letters is the
+    # expensive half and is only needed when there is CJK to weigh against it.
+    cjk = len(_CJK.findall(text))
+    if cjk:
+        letters = sum(1 for character in text if character.isalpha())
+        if letters and cjk / letters > 0.30:
+            return "cjk", f"{cjk} CJK characters"
 
     tokens = _WORD.findall(text.casefold())
     if not tokens:
         return "unknown", None
-    seen = set(tokens)
-    scores = {
-        code: sum(1 for token in tokens if token in words)
-        for code, words in _STOPWORDS.items()
-    }
-    best = max(scores, key=lambda code: (scores[code], code == "en"))
+    scores = Counter()
+    for token, count in Counter(tokens).items():
+        for code in _STOPWORD_LANGUAGES.get(token, ()):
+            scores[code] += count
+    best = max(_STOPWORDS, key=lambda code: (scores[code], code == "en"))
     if scores[best] < MIN_STOPWORDS:
         return "unknown", None
-    hits = sorted(seen & _STOPWORDS[best])[:4]
+    hits = sorted(set(tokens) & _STOPWORDS[best])[:4]
     return best, f"{scores[best]}x {', '.join(hits)}"
 
+
 # Exclusions safe to read out of a body. Everything absent from this set is
-# matched against the title only, because it is ordinary job-specification
-# language wherever else it appears -- *communications*, *marketing*,
-# *accounting*, *recruitment*, *payroll*. These are not: no quant posting
-# mentions an actuary, a blockchain or an FPGA in passing.
+# title-only, because it is ordinary job-specification language wherever else
+# it appears -- *communications*, *marketing*, *payroll*. These are not: no
+# quant posting mentions an actuary, a blockchain or an FPGA in passing.
 _BODY_SAFE_EXCLUSIONS = frozenset(
     {"actuarial", "insurance_pricing", "insurance_ops", "crypto_web3", "heavy_systems"}
 )
 
-# Distance from the user's centre, which is modelling and research. The three
-# groups are what turn a `role_class` into a `relevance`, and they are separate
-# from it on purpose: the class says which direction a posting lies in, and
-# the relevance says how far. One scale carrying both is what made `adjacent`
-# mean two opposite things in the first hand-labelled sample.
-_CENTRE = frozenset({"quant_research", "data_science", "portfolio_management"})
+# Distance from the user's centre, which is modelling and research. These turn
+# a `role_class` into a `relevance` and are separate from it on purpose: the
+# class says which *direction* a posting lies in and the relevance says how
+# far. One scale carrying both made `adjacent` mean two opposite things in the
+# first hand-labelled sample. Anything in neither set is at the centre.
 _NEAR = frozenset({"trading", "quant_dev", "risk"})
 _FAR = frozenset({"operations", "engineering"})
 
@@ -2306,8 +2050,6 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
     "not looked at" and "looked at, nothing found" stay different facts.
     """
     body = row["description"] or ""
-    text = fold(row["title"], body, row["department"])
-    where = fold(row["location"], row["title"])
     # A body was read, so its tags are evidence. A title alone is a guess that
     # happens to be usually right, which is what `weak` has always meant here.
     grade = "strong" if len(body) > 200 else "weak"
@@ -2319,20 +2061,23 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
         tags.append(Tag(*key, dimension, value, confidence or grade, evidence))
 
     # **The title decides what the role is; the body decides everything else.**
-    # Body text is boilerplate on this question -- "strong quantitative
-    # skills" appears in the description of an insurance accounting job, and
-    # every bank's about-us paragraph names market and credit risk. Scoring
-    # relevance over the body made `Insurance Accounting & Reporting
-    # Specialist` a core quant role three times over.
+    # Body text is boilerplate on that question -- "strong quantitative skills"
+    # is in the description of an insurance accounting job, and every bank's
+    # about-us names market and credit risk.
     #
-    # This is not classifying on the title alone, which `CLAUDE.md` forbids:
-    # a title carrying no signal at all still falls through to the body, and
-    # seniority, gates, languages and asset class are read from the body
-    # throughout. It is the title winning where the two disagree about what
-    # the job *is*.
-    title = fold(row["title"], row["department"])
+    # This is not classifying on the title alone: a title carrying no signal
+    # falls through to the body, and seniority, gates, languages and asset
+    # class are read from the body throughout. It is the title winning where
+    # the two disagree about what the job *is*.
+    #
+    # Each field is folded once and the combinations composed, because folding
+    # a 200 KB description twice was the largest cost left in a re-tag.
     just_title = fold(row["title"])
     just_body = fold(body)
+    department = fold(row["department"])
+    title = _joined(just_title, department)
+    text = _joined(just_title, just_body, department)
+    where = _joined(fold(row["location"]), just_title)
 
     # Stage one, before anything else looks at this posting. A hospital hiring
     # a statistician is still a hospital, so this outranks a quant title
@@ -2358,11 +2103,8 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
 
     # Exclusions are read from the **title**, and from the body only for the
     # handful of words that are never boilerplate. A Schonfeld quant posting
-    # was tagged `support_function` on the word *communications*, from the
-    # line "maintain strong stakeholder communications" -- a sentence in every
-    # job specification ever written. `marketing`, `accounting`, `recruitment`
-    # and `payroll` fail the same way; `actuary`, `crypto` and `fpga` do not,
-    # because no quant posting mentions them in passing.
+    # was tagged `support_function` on "maintain strong stakeholder
+    # communications" -- a sentence in every job specification ever written.
     exclusions = _every(_EXCLUSION, title)
     named = {value for value, _ in exclusions}
     exclusions += [
@@ -2373,50 +2115,29 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
     # Which of them the *title* said, because one of the two soft categories
     # is read differently depending on where it appeared -- see `hard` below.
     from_title = named
-    # **`heavy_systems` in a *body* must never reject, and it was rejecting 295
-    # postings.** `CLAUDE.md`'s role scope says heavy systems engineering is a
-    # *down-rank rather than a hard-drop*, because a quant-dev posting listing
-    # C++ as secondary still fits -- and the filter here said so, for the branch
-    # it governs, while a second branch further down read `exclusions` instead
-    # and put both soft categories straight back. `Senior Software Engineer,
-    # C++` at Flow Traders and `Low-Latency Engineer` at **Jane Street** were
-    # off the board because the word `fpga` appeared somewhere in a body. One
-    # word, two lists, two answers -- the failure this file has now hit four
-    # times.
+    # The three categories that rank instead of rejecting, and each for its own
+    # reason.
     #
-    # **In a title it is the job, and the hand-labelled sheet says so.**
-    # `Junior FPGA Engineer` at Eagle Seven is a real prop-trading firm and a
-    # real rejection -- the reader's own note reads "electronics work". So the
-    # split is the one this file makes everywhere else: the title decides, and
-    # a body-only match ranks. That keeps all three rows right, where excluding
-    # `heavy_systems` outright cost the FPGA one.
+    # **`heavy_systems` reads differently in a title and a body, and both
+    # halves are load-bearing.** In a *body* it must not reject: `fpga` in a
+    # paragraph about the stack was removing 295 postings, `Senior Software
+    # Engineer, C++` at Flow Traders and `Low-Latency Engineer` at **Jane
+    # Street** among them. In a *title* it must: `Junior FPGA Engineer` at
+    # Eagle Seven is a hand rejection whose note reads "electronics work". So
+    # `hard` below keeps it only when the title said it.
     #
-    # `crypto_web3` is the asymmetric half: it stays out of *this* list so it
-    # cannot outrank a weak positive, and it stays hard below, because crypto
-    # is on the exclude list outright and Kraken's 306 postings are correctly
-    # gone.
-    # **`discretionary_investing` ranks now instead of rejecting, at the
-    # reader's decision**, and it had two faults rather than one.
+    # **`crypto_web3` is the asymmetric half**: soft here so it cannot outrank
+    # a weak positive, hard below, because crypto is on the exclude list
+    # outright.
     #
-    # The first is the reader's call and overrides what the hand-labelled
-    # sheet says: nine discretionary rows in a row were labelled `rejected`
-    # there, and the instruction now is that a markets seat at a markets firm
-    # belongs on the board ranked below the quant work rather than off it.
-    # `Rates Sales - SEK Focus` and `Commodities Sales to FICC Markets` at
-    # Nordea and SEB are the postings that decided it.
-    #
-    # The second is a plain defect and would matter whatever the reader chose.
-    # Its own comment where the needles are defined says "matched on the title
-    # only" -- and `title` here is `fold(row["title"], row["department"])`, so
-    # it was reading the department too. `Rates Sales - SEK Focus` sits in a
-    # department called *Investment banking / Institutional banking / Markets*
-    # and was rejected on `investment banking`, which is the desk's name and
-    # not the job's. That is the same failure `CLAUDE.md` records twice
-    # already, for desk support and for seniority, and this is the third
-    # place: **whenever a needle list says "title only", check what text it is
-    # actually handed.**
-    #
-    # Kept out of `hard` as well, so a body cannot reintroduce the rejection.
+    # **`discretionary_investing` ranks at the reader's decision**, overriding
+    # a hand sheet that rejected nine such rows in a row: a markets seat at a
+    # markets firm belongs on the board below the quant work rather than off
+    # it. It also had a plain defect -- its own comment says "title only" while
+    # `title` here carries the department, so `Rates Sales - SEK Focus` was
+    # rejected on `investment banking`, the desk's name and not the job's.
+    # **Whenever a needle list says "title only", check what text it is handed.**
+    # Re-matched against `just_title` below, and kept out of `hard` entirely.
     SOFT = ("crypto_web3", "heavy_systems", "discretionary_investing")
     exclusions = [
         (value, evidence) for value, evidence in exclusions
@@ -2442,51 +2163,36 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
     adjacent = _hit(title, _QUANT_ADJACENT)
     # **From the job title alone, never the department.** `Senior Trading
     # Associate` sits in a department called *Trading Operations* and was
-    # rejected outright as desk support -- the first false rejection the
-    # hand-labelled sheet found, and the exact failure this rule was written
-    # to prevent. The desk's name is not the role's name, and a department is
-    # nothing but the desk's name.
-    desk = _hit(fold(row["title"]), _DESK_ADJACENT)
+    # rejected as desk support -- the first false rejection the hand sheet
+    # found. A department is nothing but the desk's name.
+    desk = _hit(just_title, _DESK_ADJACENT)
 
-    # A management title outranks a weak positive, the same way an exclusion
-    # does. `Director of Trading`, `Head of Managed Accounts`, `Applied Science
-    # Leader` and `Product Manager - B2C Credit` all reached `adjacent` on one
-    # ordinary word -- *trading*, *data science*, *model validation* -- while
-    # the thing the title actually announces is that somebody else does the
-    # work. An unambiguous quant word still wins: `Head of Quantitative
-    # Research` is a quant role with a management grade, and the seniority
-    # dimension is what says so.
-    # Read from the job title alone, for the same reason as `desk` above and
-    # the same reason `judge` uses `just_title` for its officer test:
-    # `Associate - Fund Governance` sits in a department called *Director
-    # Services*, and a department is not a grade. That posting is named in the
-    # seniority comments already, and it was still being rejected here.
-    # **A student rung outranks a management word, because the applicant's
-    # grade is the one the title states about *them*.** `Student Client Credit
-    # Manager to Stockholm` sits in a department called "Internships / Student
-    # positions" at Nordea, and it was rejected outright on the word *manager*
-    # -- which there names the book, not the reports. `Intern, AI Solutions for
-    # External Manager Selection` and `Early Career Intern - Fundamental
-    # Equities COO Office` failed the same way: a management word in an intern
-    # title is the office the intern sits in.
+    # A management title outranks a weak positive, the way an exclusion does:
+    # `Director of Trading` and `Product Manager - B2C Credit` reached
+    # `adjacent` on one ordinary word while announcing that somebody else does
+    # the work. An unambiguous quant word still wins -- `Head of Quantitative
+    # Research` is a quant role, and its *seniority* says it is out of reach.
     #
-    # 95 titles carry both and the majority are Greystar's `Student Living`
-    # apartment brand, where *student* is the tenant rather than the applicant.
-    # Those are untouched by this: `student living` is already in
-    # `_OFF_INDUSTRY`, and `off_industry` is the first gate `build_data.py`
-    # tries, so they never depended on this rule to be removed.
+    # Title alone, for the same reason as `desk`: `Associate - Fund Governance`
+    # sits in a department called *Director Services*, and a department is not
+    # a grade.
+    #
+    # **A student rung outranks a management word**, because that is the grade
+    # the title states about the applicant. Nordea's `Student Client Credit
+    # Manager to Stockholm` was rejected on *manager*, which there names the
+    # book rather than the reports. The 95 titles carrying both are mostly
+    # Greystar's `Student Living` brand, where *student* is the tenant -- and
+    # those never depended on this rule, `student living` being `_OFF_INDUSTRY`.
     student_rung = lexicon.first(lexicon.normalize(row["title"]), lexicon.INTERN_TITLE)
     management = (
         _hit(just_title, _MANAGEMENT)
         if not (_hit(just_title, _NOT_MANAGEMENT) or student_rung) else None
     )
 
-    # A software-specialty title outranks a weak positive, for the same reason
-    # a management title does: the title has already said what the job is, and
-    # the quant-sounding word beside it is the name of the system rather than
-    # the work. Read from the job title alone, like `desk` and `management`
-    # above -- `Data Infrastructure Engineer` sits in a department called
-    # *Engineering*, and a department is not a role. See `_SOFTWARE_SPECIALTY`.
+    # A software-specialty title outranks a weak positive for the same reason a
+    # management title does: the title has said what the job is, and the
+    # quant-sounding word beside it names the system rather than the work.
+    # Title alone, like `desk` and `management`. See `_SOFTWARE_SPECIALTY`.
     software = _hit(just_title, _SOFTWARE_SPECIALTY)
 
     # One value, and from the title first. `_ROLE_CLASS` replaced the
@@ -2501,24 +2207,16 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
     add("role_class", role[0] if role else "unknown", f"{role[1]!r}" if role else None)
 
     # **Most trading postings are not quant trading**, and the difference is
-    # one word in the title. `Quantitative Trader` and `Energy Trader` are
-    # both `role_class: trading` and only one of them is the job -- so the
-    # split gets its own dimension rather than a rank.
+    # one word in the title -- so the split is its own dimension rather than a
+    # rank. Feeding it into `_relevance_of` looked obviously right and measured
+    # at one row out of eighty; see that function for why the sheet cannot
+    # settle it.
     #
-    # **A dimension rather than a rank, and that was re-tested rather than
-    # assumed.** Feeding this into `_relevance_of` looked obviously right and
-    # measured at one row out of eighty; see that function for why the sheet
-    # cannot settle it.
-    #
-    # Read from the **title alone**, deliberately. `role_class` falls back to
-    # the body, and over a Kraken posting body that fallback files SOX
-    # auditors and product designers as trading. A dimension whose whole
-    # purpose is to be precise about traders cannot inherit that.
-    # The seat, not the word. `_ROLE_CLASS["trading"]` includes bare
-    # *trading*, which is the name of a department and appears in `Backend
-    # Engineer - Trading & Asset Optimization` and `Account Manager (Wholesale
-    # & Trading)`. Both came back as pure traders. Only the nouns for the job
-    # itself count here.
+    # Title alone, and the *seat* rather than the word. `role_class` falls back
+    # to the body, which over a Kraken posting files SOX auditors as trading,
+    # and `_ROLE_CLASS["trading"]` includes bare *trading* -- a department's
+    # name, which made `Backend Engineer - Trading & Asset Optimization` a pure
+    # trader. Only the nouns for the job itself count here.
     seat = _hit(title, _TRADER_SEAT)
     if seat:
         add("trading_style", "quant" if certain else "pure",
@@ -2602,22 +2300,15 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
     ):
         # Nothing in the title said anything, so the body is all there is --
         # and **one phrase in a body is not a quant role.** `Data Management
-        # Analyst - Data Governance` says "model validation" once, in the way
-        # every governance document does, and came back as research work.
-        #
-        # A second, distinct phrase is what makes it evidence. That is the rule
-        # `domains.py` arrived at for the same reason one layer down: a
-        # fragment needs a corroborating word before it counts, because a
-        # single ordinary phrase proves nothing about the document it sits in.
+        # Analyst - Data Governance` says "model validation" once, the way
+        # every governance document does, and came back as research work. A
+        # second distinct phrase is what makes it evidence, the corroboration
+        # rule `domains.py` uses one layer down.
         #
         # **Which phrases are read matters as much as how many.** This counted
-        # bare `quantitative` until the hand-labelled sheet caught it, and a
-        # bare adjective is the one word every employer writes about every
-        # role -- so `_QUANT_CORE_BODY` drops them and the count is over
-        # phrases that mean something. Two of those still beat one, because
-        # the corroboration here is one body against itself; `judge`, below,
-        # asks the stronger question of whether the posting is in markets at
-        # all.
+        # bare `quantitative` until the hand sheet caught it -- the one word
+        # every employer writes about every role -- so `_QUANT_CORE_BODY`
+        # drops the adjectives.
         if len(found) >= 2:
             add("relevance", _relevance_of(role),
                 f"body only {found[0]!r} + {found[1]!r}", "weak")
@@ -2633,58 +2324,54 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
         # FPGA is the one exclusion that may not remove a posting.
         add("relevance", "rejected", f"{hard[0]}")
     elif (call := lexicon.judge(row["title"], row["department"], body)).verdict == "reject":
-        # **The last word goes to the module written to say what a posting is
-        # not**, and until now nothing asked it. `lexicon.judge` carries the
-        # long occupation lists -- wealth advisers, counsel, directors, named
-        # trades -- while `_EXCLUSION` above carries seven categories, so a
-        # `Wealth Advisor` or an `Alliance Director` fell through both and was
-        # reported as `unknown`: "nothing looked at this", when in fact three
-        # rules had and none of them covered it.
+        # **The last word on relevance.** `lexicon.judge` carries the long
+        # occupation lists -- wealth advisers, counsel, named trades -- where
+        # `_EXCLUSION` above carries seven categories, so a `Wealth Advisor`
+        # fell through both and was reported `unknown`: "nothing looked at
+        # this", when three rules had.
         #
-        # It runs **last on purpose**. It can only ever convert an `unknown`,
-        # never overturn a positive, so a title that already said *quant* is
-        # out of its reach and it cannot manufacture a false rejection in the
-        # rows that matter.
+        # It runs **last on purpose**: it can only convert an `unknown`, never
+        # overturn a positive, so it cannot manufacture a false rejection in
+        # the rows that matter.
         add("relevance", "rejected", f"{call.reason}: {call.evidence or 'no signal'}")
-    elif desk_named := lexicon.first(
-        lexicon.normalize(f"{row['title'] or ''} {_field(row, 'department') or ''}"),
-        lexicon.MARKETS,
+    elif desk_named := (
+        lexicon.first(
+            lexicon.normalize(f"{row['title'] or ''} {_field(row, 'department') or ''}"),
+            lexicon.MARKETS,
+        )
+        # **An investing title is a markets title.** Stopping a rejection is
+        # not the same as conferring a reading: when
+        # `discretionary_investing` came off the reject list, 201 of the 342
+        # postings that reached the board arrived at `relevance: unknown` and
+        # sorted to the bottom with the purchasers -- `Investment Analyst,
+        # Public Equity` ranking below `Bäcker`. The category only fires on a
+        # title naming private equity, wealth or asset management, so by then
+        # the posting has placed itself in markets as firmly as `MARKETS` does.
+        or next((f"investing title: {e}" for v, e in exclusions
+                 if v == "discretionary_investing"), None)
     ):
-        # **A title that names a markets desk is not a posting nothing looked
-        # at, and until now the two were the same answer.** `Commodities Sales
-        # to FICC Markets`, `Market Data Specialist`, `Backoffice
-        # Administrator - Mutual Funds`, `APO to Group Treasury` and `.Net
-        # developer to the Portfolio Solutions and Derivatives Clearing Tech
-        # team` all came back `unknown` -- the same verdict as `Inköpare för
-        # UBW Inköp support`, and on a board that sorts by fit they sat in the
-        # same block. That is what "too much junk and too little jobs" looks
-        # like from the outside: not two faults but one, a bucket holding
+        # **A title naming a markets desk is not a posting nothing looked at.**
+        # `Commodities Sales to FICC Markets`, `Market Data Specialist` and
+        # `APO to Group Treasury` all came back `unknown` -- the same verdict
+        # as `Inköpare för UBW Inköp support`, sorted into the same block. That
+        # is what "too much junk and too little jobs" is: one bucket holding
         # everything the tagger could not read.
         #
-        # It runs **last, after `judge`**, which is what makes it safe. It can
-        # only ever convert an `unknown` -- every exclusion, every hard gate
-        # and the whole occupation lexicon have already had their say, so this
-        # cannot rescue a wealth adviser or overturn a rejection. It is the
-        # same placement rule `judge` itself is held to one branch up.
-        #
-        # `adjacent` and not better: a markets word says *where* the posting
-        # is, never what the work is. `_fit` caps that at `plausible`, so
-        # these rank below every genuine quant title and above the residue.
-        #
-        # Read from title and department only. A body naming markets is the
-        # employer describing itself, which is the failure mode this file
-        # records against every body-matched rule.
+        # It runs **last, after `judge`**, which is what makes it safe: it can
+        # only convert an `unknown`, so it cannot rescue a wealth adviser.
+        # `adjacent` and no better, because a markets word says *where* the
+        # posting is and never what the work is -- `_fit` caps it at
+        # `plausible`. Title and department only; a body naming markets is the
+        # employer describing itself.
         add("relevance", "adjacent", f"markets title {desk_named!r}", "weak")
     else:
         add("relevance", "unknown", None)
 
-    # Asset class from the title first, and from the body only as a fallback
-    # graded `weak`. Schonfeld's every posting listed `rates` because the
-    # "Who We Are" paragraph names the firm's four strategies -- "Quant,
-    # Tactical, Fundamental Equity and Discretionary Macro & Fixed Income" --
-    # which describes the employer and not the desk. The body reading is kept
-    # rather than dropped, because for the 81% of postings with no body at all
-    # it is the only reading there is; it just no longer claims to be evidence.
+    # Title first, body only as a fallback graded `weak`. Every Schonfeld
+    # posting listed `rates`, because the "Who We Are" paragraph names the
+    # firm's four strategies -- the employer, not the desk. The body reading is
+    # kept rather than dropped, since for a posting with no title signal it is
+    # the only reading there is; it just no longer claims to be evidence.
     named_assets = _every(_ASSET_CLASS, title)
     for value, evidence in named_assets:
         add("asset_class", value, f"title {evidence!r}")
@@ -2695,7 +2382,7 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
         if not from_body:
             add("asset_class", "unstated", None)
 
-    hard: set[str] = set()
+    gates: set[str] = set()
     for dimension, mapping in (("horizon", _HORIZON), ("hard_gates", _HARD_GATES)):
         found = _every(mapping, text)
         if dimension == "hard_gates" and _hit(text, _PHD_NOT_REQUIRED):
@@ -2705,28 +2392,21 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
         for value, evidence in found:
             add(dimension, value, f"{evidence!r}")
             if dimension == "hard_gates":
-                hard.add(value)
+                gates.add(value)
         if not found:
             add(dimension, "unknown", None)
 
     # **A compulsory doctorate is an eligibility fact, and it gates.** Two
-    # hand-labelled rows say so: `Quantitative Researcher (Full-Time - PhD+)`
-    # and `PhD Degree Required - Quantitative Analyst/Programmer` were both
-    # labelled `rejected`, with the note *"perfect fit - but has hard
-    # requirement of phd"*.
+    # hand-labelled rows read *"perfect fit - but has hard requirement of
+    # phd"*, and *perfect fit* is the half that decides where it belongs: the
+    # relevance stays `relevant`, because saying otherwise would put an
+    # eligibility fact on a scale that measures subject matter. Same call as
+    # `student_intern` leaving the seniority ladder.
     #
-    # "Perfect fit" is the important half. The *relevance* of those postings is
-    # `relevant` and stays `relevant` -- the role is exactly this line of work,
-    # and saying otherwise would put an eligibility fact on a scale that
-    # measures subject matter. That is the mistake this file finished unwinding
-    # for `student_intern`, at the user's own decision, and `student_only`
-    # lives in `hard_gates` for the same reason.
-    #
-    # So it comes off the *board* rather than out of the *verdict*, which is
-    # what a gate is for: the row stays in `jobs`, the tag keeps its evidence,
-    # and `list --exclude phd_required` shows what it ate. One line in `GATES`
-    # puts them back, with no re-tag.
-    if "phd_required" in hard:
+    # So it comes off the *board* rather than out of the *verdict*: the row
+    # stays in `jobs`, the tag keeps its evidence, and one line in `GATES` puts
+    # it back with no re-tag.
+    if "phd_required" in gates:
         add("exclusion_reason", "phd_required",
             _hit(text, _HARD_GATES["phd_required"]) or "doctorate compulsory")
 
@@ -2747,35 +2427,21 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
     written, why = posting_language(row["title"], body, row["department"])
     add("posting_language", written, why)
 
-    # Seniority follows the same rule as relevance, and for the same reason.
-    # A body saying "you will report to the Head of Trading" made *Graduate
-    # Trader* a `head_or_md` posting, and one saying "work with senior
-    # colleagues" made it `senior_6_10`. The rank is in the title.
+    # **The rank is in the title**, for the same reason relevance is. In a body
+    # every authority word is furniture: a *partner* in Schonfeld's diversity
+    # paragraph made an internship a `head_or_md` posting and moved it off the
+    # shortlist. Losing a "Senior" mentioned only in a body costs an
+    # over-rating; inventing a managing director costs the posting.
     #
-    # **Title only, and the body now reaches rank through one door**: an
-    # explicit years figure. The student gate was the second door and it has
-    # been closed -- being a student is an eligibility fact rather than a
-    # grade, so it is `hard_gates: student_only` now. See `_SENIORITY`.
+    # The body reaches rank through **one door**, an explicit years figure --
+    # see `_YEARS`. The student gate was the second and is closed: being a
+    # student is `hard_gates: student_only`, not a grade.
     #
-    # The old fall-through to the body was the same bug `PLAN.md` recorded and
-    # only half fixed. It said "the rank is in the title" and then, whenever a
-    # title carried no grade word at all, read the body anyway -- where every
-    # authority word is furniture. Schonfeld's `Quantitative Research /
-    # Developer - Intern` came back `head_or_md` on the word *partner*, from
-    # the diversity paragraph at the bottom of the advertisement, and that one
-    # tag moved it from the shortlist to `stretch`.
-    #
-    # Losing a real "Senior" mentioned only in a body costs an over-rating,
-    # which is the cheap direction. Inventing a managing director costs the
-    # posting.
-    # **`just_title`, not `title`.** Every comment in this block says the rank
-    # is read from the title alone, and the argument was made twice over -- and
-    # the code passed `fold(title, department)`, which is the title *and the
-    # department*. It went unnoticed while the needles were words like `head
-    # of` that a department rarely carries. Bare `director` is not one of
-    # those: `Associate - Fund Governance` sits in a department called
-    # *Director Services*, and that posting is named in the comments here
-    # already as the case this must not get wrong.
+    # **`just_title`, not `title`.** The code passed `fold(title, department)`
+    # here for a long time, which went unnoticed while the needles were phrases
+    # like `head of` that a department rarely carries. Bare `director` is not
+    # one of those -- `Associate - Fund Governance` sits in a department called
+    # *Director Services*.
     rank = _first(_SENIORITY, just_title)
     if rank and rank[0] == "head_or_md" and _hit(just_title, _NOT_HEAD_GRADE):
         # The officer word belongs to a phrase that is not an officer grade.
@@ -2830,16 +2496,11 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
         # `list --exclude off_industry` is how you audit what a gate ate.
         add("exclusion_reason", "off_industry", off_industry)
 
-    # **A rank nobody reaches from under a year of experience.** Read from the
-    # title only, exactly as `seniority` is, and gated on a *positive* reading:
-    # a posting whose title carries no grade word at all comes back `unknown`
-    # and stays on the board. That asymmetry is the whole safety property --
-    # the gate can only fire on evidence, never on the absence of it.
-    #
-    # `vice president` is here now and `PLAN.md` records the argument for
-    # keeping it out: at a bank it is a mid-career grade rather than an officer
-    # title. Both halves are true, and they point the same way for this reader
-    # -- a bank's five-year VP hire is as far out of reach as a real one.
+    # **A rank nobody reaches from under a year of experience.** Title only,
+    # like `seniority`, and gated on a *positive* reading: a title carrying no
+    # grade word comes back `unknown` and stays on the board. **A gate must
+    # fire on evidence, never on the absence of it** -- that asymmetry is what
+    # stops a widened lexicon quietly emptying the page.
     out_of_reach = None
     if management:
         out_of_reach = f"management title: {management!r}"
@@ -2854,18 +2515,14 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
     if out_of_reach:
         add("exclusion_reason", "out_of_reach", out_of_reach)
 
-    # `other` and `unknown` are different facts and the difference is the whole
-    # discipline: `other` is a place we read and it was Bangalore, Pune or
-    # Massachusetts; `unknown` is a posting with no location at all. Collapsing
-    # them reported 92% of the corpus as ungeolocated when most of it is simply
-    # somewhere else.
+    # `other` and `unknown` are different facts, and the difference is the
+    # whole discipline: `other` is a place we read and it was Bangalore,
+    # `unknown` is a posting naming no place. Only the first is gated.
+    #
     # **Every place the posting names, not the first one.** A seat open in
-    # Amsterdam *and* London is one row in `jobs` and two chances for the
-    # reader, and taking `_first` here answered a question nobody asked: which
-    # of a posting's cities the lexicon happens to list earliest. `hub` is
-    # multi-valued now -- the board ships a list, the Place facet counts the
-    # posting under each, and `off_location` fires only when *none* of them is
-    # somewhere the reader would go.
+    # Amsterdam *and* London is one row and two chances for the reader, so
+    # `hub` is multi-valued and `off_location` fires only when *none* of the
+    # places is somewhere they would go.
     places = _residual(_every(_HUBS, where), where)
     raw = (row["location"] or "").strip()
     if places:
@@ -2888,23 +2545,19 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
         hubs = ["unknown"]
         add("hub", "unknown", f"{raw[:40]!r}" if raw else None, "strong")
 
-    # **Geography gates now, and this is a deliberate departure from a rule
-    # written all over this repo.** "Geography ranks, it never gates" is about
-    # the *universe*: a firm or a posting is never dropped from the database
-    # for being out of area, and it still is not -- the row keeps its place in
-    # `jobs`, this tag records the reason, and re-running rebuilds it. What
-    # changed is the reader's own instruction about the reader's own board: a
-    # job in Kiruna, Barcelona or Paris is not one they will take, so ranking
-    # it below Amsterdam is answering a question they did not ask.
+    # **Geography gates the board, at the reader's instruction, and this is the
+    # one departure from "geography ranks, it never gates".** That rule is
+    # about the *universe* and is unchanged: the row keeps its place in `jobs`
+    # and re-running rebuilds the verdict. What changed is the board -- a job
+    # in Kiruna or Paris is not one this reader will take.
     #
-    # It stays inside principle 4 the same way `off_industry` does, and it is
-    # the reason `_HUBS` had to become city-precise first. A gate on a label
-    # that says "Stockholm" when it means "somewhere in Sweden" deletes exactly
+    # It is why `_HUBS` had to become city-precise first: a gate on a label
+    # saying "Stockholm" when it means "somewhere in Sweden" deletes exactly
     # the wrong postings.
     #
-    # **One place on the board is enough.** A posting open in Zurich and Milan
-    # is a posting in Zurich; gating it because Milan is also named would be
-    # the gate firing on a fact that argues for keeping the row.
+    # **One place on the board is enough.** Gating a Zurich-and-Milan posting
+    # because Milan is named would be the gate firing on a fact that argues
+    # for keeping the row.
     if not set(hubs) & BOARD_HUBS:
         add("exclusion_reason", "off_location", f"{'/'.join(hubs)}: {raw[:40]!r}")
 
@@ -2926,11 +2579,9 @@ def _fit(tags: list[Tag]) -> Tag:
     seniority = single.get("seniority", "unknown")
     relevance = single.get("relevance", "unknown")
     depth = single.get("code_depth", "unknown")
-    # Multi-valued since the board started showing a two-city posting under
-    # both cities. Read as a set, and named for the evidence string by the
-    # first one the lexicon lists -- which is its priority order, so a posting
-    # in Stockholm and Frankfurt says "stockholm" rather than whichever tag
-    # happened to be appended last.
+    # Multi-valued. Named for the evidence string by the first one `_HUBS`
+    # lists, which is its priority order, so a posting in Stockholm and
+    # Frankfurt says "stockholm" rather than whichever tag came last.
     hubs = {tag.value for tag in tags if tag.dimension == "hub"} or {"unknown"}
     hub = next((name for name in _HUBS if name in hubs), sorted(hubs)[0])
     gates = {tag.value for tag in tags if tag.dimension == "exclusion_reason"}
@@ -2945,10 +2596,8 @@ def _fit(tags: list[Tag]) -> Tag:
     key = (tags[0].ats, tags[0].token, tags[0].job_id)
     _CAP = {"apply_now": "strong", "strong": "plausible", "plausible": "stretch"}
 
-    # Every soft filter is a notch, and they compose. None of them rejects:
-    # each is a reason a posting is further away rather than a reason it is
-    # not a posting, which is the same call `PLAN.md` made about geography and
-    # the same asymmetry the whole project runs on.
+    # Every soft filter is a notch, and they compose. None rejects: each is a
+    # reason a posting is further away, not a reason it is not a posting.
     notches: list[str] = []
     # A relevance read out of the body because the title said nothing is the
     # weakest evidence here: `Executive Assistant` and `Full Stack Engineer`
@@ -2957,12 +2606,10 @@ def _fit(tags: list[Tag]) -> Tag:
     if any(tag.dimension == "relevance" and (tag.evidence or "").startswith("body only")
            for tag in tags):
         notches.append("title said nothing")
-    # Geography ranks results; it never gates them. A core quant role in São
-    # Paulo is a real posting and keeps its row, but it should not outrank one
-    # in Amsterdam -- and it did: Santander's global board filled the shortlist
-    # from `hub: other` while Stockholm showed one entry.
-    # One focus hub among several is enough to keep the notch off: a posting
-    # open in Amsterdam and Milan is an Amsterdam posting to this reader.
+    # A core quant role in São Paulo keeps its row but should not outrank one
+    # in Amsterdam -- Santander's global board once filled the shortlist from
+    # `hub: other` while Stockholm showed one entry. One focus hub among
+    # several keeps the notch off.
     if not hubs & _FOCUS_HUBS:
         notches.append("outside the focus hubs")
     if "phd_required" in hard:
@@ -2986,18 +2633,16 @@ def _fit(tags: list[Tag]) -> Tag:
         return make("out_of_scope", "requires a future graduation date")
     if relevance == "rejected":
         return make("out_of_scope", f"excluded: {'/'.join(sorted(gates)) or 'no quant signal'}")
-    # Under a year of experience: a senior posting is a stretch however well
-    # the subject matter fits, and saying so is the whole point of the
-    # dimension. `CLAUDE.md` puts "too senior" on the exclude list.
-    # **A rank the reader cannot reach caps a posting they would otherwise
-    # want. It must not *promote* one nobody has read.** `stretch` outranks
-    # `unknown` on the board (`FIT_RANK` in `index.html`), so while
-    # `senior_6_10` was a gate this branch could never be reached by a posting
-    # with no verdict -- they were removed before the board saw them. Taking
-    # the gate off made it reachable, and 290 of the 466 Nordic cards became
-    # `Senior <IT consultant>` sitting above every genuine markets posting
-    # still sitting at `unknown`. The word *senior* is not evidence about the
-    # subject matter, and this dimension is about the subject matter.
+    # A senior posting is a stretch however well the subject matter fits.
+    #
+    # **But a rank the reader cannot reach caps a posting they would otherwise
+    # want; it must not *promote* one nobody has read.** `stretch` outranks
+    # `unknown` in `index.html`'s `FIT_RANK`, so while `senior_6_10` was a gate
+    # this branch was unreachable without a verdict. Removing the gate made it
+    # reachable, and 290 of 466 Nordic cards became `Senior <IT consultant>`
+    # above every genuine markets posting still at `unknown`. *Senior* is not
+    # evidence about subject matter, and this dimension is about subject
+    # matter -- so the cap needs a relevance to cap.
     if seniority in ("head_or_md", "lead", "senior_6_10") and relevance != "unknown":
         return make("stretch", f"seniority {seniority}")
     if relevance == "relevant" and seniority in ("junior_0_2", "new_grad"):
@@ -3091,15 +2736,13 @@ def search(
 ):
     """Postings matching every `require` and none of `exclude`.
 
-    This is where filtering belongs. Nothing is dropped at ingest -- principle
-    4, and it has earned itself here repeatedly: every lexicon bug found so far
-    was fixed by re-running over stored rows, which a write-time filter would
-    have thrown away. Reading is the reversible end.
+    This is where filtering belongs -- principle 4. Every lexicon bug found so
+    far was fixed by re-running over stored rows, which a write-time filter
+    would have thrown away.
 
     `require` is AND across dimensions and OR within one, which is what a
-    person actually means: hub in (amsterdam, stockholm) *and* fit in
-    (apply_now, strong). `exclude` drops a posting carrying any listed value,
-    so one `crypto_web3` tag is enough to lose it.
+    person means: hub in (amsterdam, stockholm) *and* fit in (apply_now,
+    strong). `exclude` drops a posting carrying any listed value.
     """
     where = ["j.removed_at IS NULL"]
     params: list[object] = []
@@ -3209,30 +2852,21 @@ def stale_taggers(connection: sqlite3.Connection) -> list[tuple[int, int]]:
 def prune(connection: sqlite3.Connection) -> int:
     """Delete every tag written by a superseded lexicon. Returns rows removed.
 
-    **This is deleting data, so the argument for it has to be better than "the
-    table is big".** It is: the retention those rows represent does not exist.
-    `job_tags` is keyed on `(ats, token, job_id, dimension, value)` with **no
-    `tagger` in the key**, so `INSERT OR REPLACE` overwrites the previous
-    version's row whenever a posting keeps the same value in the same
-    dimension. Only rows whose value *changed* survive a re-tag, which is the
-    opposite of a diff -- 34 dead versions were holding 297,056 rows between
-    them, and lexicon 15 had already been erased outright.
+    **This deletes data, so the argument has to be better than "the table is
+    big".** It is: the retention those rows represent does not exist. The
+    primary key omits `tagger`, so `INSERT OR REPLACE` overwrites the previous
+    version's row whenever a posting keeps the same value -- only rows whose
+    value *changed* survive, which is the opposite of a diff. The table was
+    storing whichever fragments of thirty-four versions happened not to be
+    overwritten, and those are harmful: an unpinned `COUNT(*)` once read 49,808
+    postings in a bucket that had already been split out.
 
-    So the table was not storing history. It was storing whichever fragments of
-    thirty-four versions happened not to be overwritten, and those fragments
-    are actively harmful: `CLAUDE.md` records an unpinned `COUNT(*)` reading
-    49,808 postings in a bucket that had already been split out, because six
-    earlier taggers still said so.
+    Safe because `job_tags` is derived -- principle 5, and re-running `tag`
+    reconstructs the current version in full.
 
-    Safe because `job_tags` is derived. Principle 5: raw tables are
-    append-only, derived tables rebuild from scratch on demand. Re-running
-    `tag` reconstructs the current version in full.
-
-    The **current** version is never touched, and this is deliberately a
-    separate command rather than a step inside `run`: a prune that fires
-    automatically at the end of a re-tag would delete the previous version at
-    the exact moment a mistaken lexicon change is most likely to need backing
-    out.
+    Deliberately a separate command rather than a step in `run`: an automatic
+    prune would delete the previous version at the moment a mistaken lexicon
+    change is most likely to need backing out.
     """
     connection.executescript(SCHEMA)
     with connection:

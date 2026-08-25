@@ -1,57 +1,41 @@
 # The firms with no recruiting pipeline
 
-Notes for curiosity, not for the scraper. **Nothing here is read by any code.**
-`seed.py` reads `registries/seed_firms.csv` and nothing else, so a name can sit
-in this file indefinitely without touching the employer universe. That is the
-point: these are names I could not verify well enough to put in the pipeline,
-kept where they cost nothing.
+Notes for curiosity. **Nothing here is read by any code** — `seed.py` reads
+`registries/seed_firms.csv` and nothing else, so a name can sit in this file
+indefinitely without touching the employer universe. That is the point: these
+are names I could not verify well enough to put in the pipeline.
 
 The premise comes from a practitioner forum thread describing a tier of firm
-that reportedly pays above Citadel and Jane Street with better hours, but has
-no campus milkround, no recruiter relationships and no job board — so the
-applicant pool stays small and the bar, in relative terms, is easier to clear.
-Whether that is true is exactly what is hard to establish, because a firm with
-no recruiting pipeline also leaves no recruiting evidence.
+that reportedly pays above Citadel and Jane Street with better hours, but has no
+campus milkround, no recruiter relationships and no job board — so the applicant
+pool stays small. Whether that is true is exactly what is hard to establish,
+because a firm with no recruiting pipeline also leaves no recruiting evidence.
 
 ## The four unverifiable names
 
-These surfaced together in one comment and nowhere else:
+**QBR**, **Tricore Financial**, **MQI** and **Mostrum** surfaced together in one
+comment and nowhere else. Three independent checks, all negative: web search
+returns unrelated companies, the 79,000-row employer universe holds none of
+them, and US Department of Labor LCA disclosures (`h1bdata.info`, queryable by
+employer) return zero for all four.
 
-| Name | Web presence | In any registry we hold | US visa filings |
-|---|---|---|---|
-| QBR | none | none | 0 |
-| Tricore Financial | none (name collides with a New Mexico medical lab) | none | 0 |
-| MQI | none | none | 0 |
-| Mostrum | none | none | 0 |
+**But zero LCA records does not mean a firm is fictional**, and the same query
+returns zero for *Headlands Technologies*, *Aquatic Capital* and *Domeyard* —
+all three unambiguously real and in our own database. A firm that hires only
+citizens and green-card holders never files. So the honest reading is not "these
+four do not exist"; it is **"if they exist, they leave no trace any tool can
+follow"**, which for a job hunt amounts to the same thing. Two of the four read
+like internal initialisms, which would explain a name that circulates verbally
+and appears nowhere else.
 
-Three independent checks, all negative:
-
-1. **Web search** — every query returns unrelated companies.
-2. **The 79,000-row employer universe** — 13 registries including the full SEC
-   adviser and broker-dealer files. Nothing.
-3. **US Department of Labor LCA disclosures** (`h1bdata.info`, queryable by
-   employer) — the strongest test, because any firm sponsoring a foreign hire
-   must file a public wage record. Zero for all four.
-
-**But zero LCA records does not mean a firm is fictional**, and it is worth
-being precise about that, because the same query returns zero for *Headlands
-Technologies*, *Aquatic Capital* and *Domeyard* — all three unambiguously real,
-all three sitting in our own database. A firm that hires only citizens and
-green-card holders never files. So the honest reading is not "these four do not
-exist"; it is **"if they exist, they leave no trace any tool can follow"** —
-which for a job hunt amounts to the same thing. You cannot apply to a company
-you cannot find. Two of the four (QBR, MQI) read like internal initialisms,
-which would explain a name that circulates verbally and appears nowhere else.
-
-I left them out of `seed_firms.csv` deliberately. A row there costs a domain
-probe and returns no listings forever; the file's job is firms the pipeline can
-eventually reach.
+They are deliberately out of `seed_firms.csv`: a row there costs a domain probe
+and returns no listings forever.
 
 ## The tier that *is* real, and is nearly as quiet
 
-More interesting, because it is checkable. These are genuinely tiny shops —
-some under ten people — that do appear in wage disclosures. The pattern is
-consistent: one or two offices, a handful of filings, no graduate programme.
+More interesting, because it is checkable — genuinely tiny shops, some under ten
+people, that do appear in wage disclosures. One or two offices, a handful of
+filings, no graduate programme.
 
 | Firm | Records | Median base | Where |
 |---|---|---|---|
@@ -67,51 +51,35 @@ consistent: one or two offices, a handful of filings, no graduate programme.
 | Tanius Technology | 24 | $100,000 | Alamo, California |
 
 **These are base-salary floors, not total compensation.** An LCA states the
-offered wage; at these firms the bonus is usually the larger half and is not
-disclosed anywhere. So TGS at $275,000 base is not in tension with forum
-claims of seven-figure total comp — the two numbers measure different things.
-Read the column as a ranking signal, not an offer.
+offered wage; at these firms the bonus is usually the larger half and is
+disclosed nowhere. Read the column as a ranking signal, not an offer.
 
-A few observations worth the detour:
-
-- **Tanius Technology files from Alamo, California** — a town of about 14,000
-  in the East Bay hills, no financial district anywhere near it. Twenty-four
-  filings from there is the clearest single illustration of what this tier
-  looks like: a serious quant employer operating somewhere nobody would think
-  to look, at a nominal base that undersells it.
-- **Evergreen Statistical Trading files from Washington state**, not Chicago,
-  despite being a Radix spinout. Spinouts scatter geographically far more than
-  the parent firms do.
-- **Radix's 17 filings across three cities** make it the most visible firm on
-  this list, which is a useful calibration: if 17 is "visible", the shops
-  filing one or two are effectively invisible, and the ones filing zero are
-  beyond reach entirely.
+Two details worth the detour. **Tanius files from Alamo, California** — a town
+of 14,000 in the East Bay hills with no financial district anywhere near it,
+which is the clearest illustration of what this tier looks like. And **Radix's
+17 filings across three cities make it the most visible firm on the list**,
+which is the calibration: if 17 is "visible", the shops filing one or two are
+effectively invisible and the ones filing zero are beyond reach entirely.
 
 ## Why this tier is structurally hard to find
 
-It is the same reason the scraper needs a hand-written seed file at all. A firm
+The same reason the scraper needs a hand-written seed file at all. A firm
 becomes enumerable when something forces it into a public list — a licence, an
 exchange membership, a securities registration. A small partnership trading its
-own capital triggers none of those. It has no clients, so no regulator
-registers it; it trades through someone else's membership, so no exchange names
-it; it hires by referral, so no job board indexes it.
+own capital triggers none of those: no clients, so no regulator registers it; it
+trades through someone else's membership, so no exchange names it; it hires by
+referral, so no job board indexes it.
 
-The practical consequence for a job hunt: **this tier is reached through people,
-not through search.** Every automated route — including this scraper — is
-structurally blind to it. The scraper's job is to exhaustively cover the firms
-that *are* reachable, so that whatever time you spend on networking is spent on
-the ones that aren't.
+The practical consequence: **this tier is reached through people, not through
+search.** Every automated route including this scraper is structurally blind to
+it, which is what makes exhaustive coverage of the *reachable* firms worth the
+effort — so that whatever time goes on networking goes on the ones that are not.
 
-## If you want to chase the four anyway
-
-The one route that might work is asking someone who would know, in a venue
-where the answer is cheap to give — the same forums the names came from. A
-reply naming the actual legal entity would be enough; with a legal name, the
-LCA database and the SEC files both become searchable, and the firm either
-appears or is settled as folklore.
-
-Worth knowing that some of these names do turn out to be folklore. The
-methodology file already records the cost of a false positive: a bare
-`Grasshopper` in the audit roster matched an unrelated `GRASSHOPPER ESCAPEMENT,
-LLC` and reported a hub better covered than it was. A firm that does not exist,
-believed in, is worse than one you never heard of.
+If you want to chase the four, the one route that might work is asking someone
+who would know, in the same forums the names came from. A reply naming the
+actual legal entity would be enough: with a legal name, the LCA database and the
+SEC files both become searchable and the firm either appears or is settled as
+folklore. Some of these names do turn out to be folklore, and a firm that does
+not exist but is believed in is worse than one you never heard of — the same
+asymmetry as a bare `Grasshopper` in the audit roster matching `GRASSHOPPER
+ESCAPEMENT, LLC`.

@@ -110,15 +110,14 @@ _CORROBORATION_POSTINGS = 25
 _CORROBORATION_CHARS = 4_000
 
 # Three, not four, and the difference is 165 postings. A four-character floor
-# was written here on the reasoning that `_needles` will not build a needle
-# shorter than four -- but that governs the *needle*, not the token, and the
-# two are different strings. IMC's board is `imc` and its needle is
-# `imc trading`, which is eleven characters and perfectly checkable. What
-# actually stops a short token claiming a board is corroboration, not length.
+# was written on the reasoning that `_needles` will not build a shorter needle
+# -- but that governs the *needle*, not the token. IMC's board is `imc` and its
+# needle is `imc trading`, which is perfectly checkable. **What stops a short
+# token claiming a board is corroboration, not length.**
 #
 # A single-word firm whose whole name is three characters still cannot be
 # verified, because then the needle is three characters too and `_needles`
-# drops it. That case fails closed, which is the right direction.
+# drops it. That fails closed, which is the right direction.
 _MIN_TOKEN = 3
 
 # Distinct tokens tried per firm, and requests across all of them.
@@ -128,7 +127,6 @@ _MIN_TOKEN = 3
 # rate limit. The same kind of budget as `ats._MAX_FETCHES`, for the same
 # reason -- the queue is longer than the patience available.
 _MAX_TOKENS = 6
-_MAX_PROBES = _MAX_TOKENS * len(DISCOVERABLE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,16 +175,13 @@ def token_candidates(normalized: str) -> list[str]:
     for label in _labels(normalized):
         add(label)
 
-    # `_labels` refuses any label of three characters or fewer, and for a
-    # *domain* that is right -- a three-letter guess is overwhelmingly somebody
-    # else's company, and `domains.py` has to be careful because a wrong domain
-    # is a silently empty feed. A three-letter *board token* is a different
-    # bet: it is only ever accepted if the postings behind it name the firm,
-    # and IMC's board is `imc`, worth 165 postings.
+    # `_labels` refuses a label of three characters or fewer, and for a
+    # *domain* that is right: a wrong domain is a silently empty feed. A
+    # three-letter *board token* is a different bet, accepted only if the
+    # postings behind it name the firm.
     #
-    # Only a *distinctive* word earns this. Without that guard "Capital Fund
-    # Management" would offer the token `capital`, which is not a guess about
-    # any particular firm.
+    # Only a *distinctive* word earns it, or "Capital Fund Management" would
+    # offer the token `capital`.
     _, distinctive = _token_sets([token for token in normalized.split() if token])
     if distinctive:
         add("".join(distinctive))
@@ -405,13 +400,11 @@ def record(connection: sqlite3.Connection, found: list[Discovery]) -> None:
             [(d.query, d.domain, d.ats, d.token, d.evidence, timestamp) for d in found],
         )
         # **Never overwrite a board that already works.** The domain attached
-        # to a discovery comes from matching a roster name against the firm
-        # universe, and that match is fuzzy by design -- "Millennium" finds
-        # *Millennium New Horizons Management*, a different firm with a
-        # different domain. A wrong domain here would mis-attribute the
-        # postings, which is cheap; replacing a live tier-A board with them
-        # would lose a feed, which is not. The `WHERE` is the difference, and
-        # it is the same bias as principle 3: a false split over a false merge.
+        # to a discovery comes from a fuzzy roster match -- "Millennium" finds
+        # *Millennium New Horizons Management*, a venture firm. A wrong domain
+        # mis-attributes postings, which is cheap; replacing a live tier-A
+        # board loses a feed, which is not. The `WHERE` is the difference, and
+        # the same bias as principle 3.
         connection.executemany(
             "INSERT INTO ats_resolution"
             " (domain, careers_url, ats, token, tier, evidence, checked_at)"

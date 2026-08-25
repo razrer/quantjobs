@@ -6,9 +6,8 @@ Probing the thirteen misses by hand found that most of them run no applicant
 tracking system at all: AP4 publishes five openings as ordinary links under
 `/karriar/lediga-tjanster/`, Brummer & Partners publishes one as a paragraph on
 its careers page, and Nordea serves 110 through a JSON endpoint on its own
-domain. There is no vendor to fingerprint and no feed to guess. `PLAN.md` has
-carried "per-firm adapters for the top ~50" as deferred work since Stage 13;
-this is that work, opened by a measurement rather than by enthusiasm.
+domain. There is no vendor to fingerprint and no feed to guess, so the answer
+is a per-firm reader -- opened by a measurement rather than by enthusiasm.
 
 **A firm earns a reader here only by being on the roster and having no ATS.**
 The moment a firm migrates to a vendor `ats.py` recognises, its `ats_resolution`

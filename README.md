@@ -1,51 +1,46 @@
 # quant-scraper
 
-Exhaustive quant-job aggregation, built employer-first: enumerate the firms
+Exhaustive quant-job aggregation, built **employer-first**: enumerate the firms
 that could hire a quant from registries that are complete by law, resolve each
-to its own careers feed, and poll that. Aggregators and national job boards
-are a discovery net for employers the registries miss, never the primary
-source.
+to its own careers feed, and poll that. Aggregators and national job boards are
+a discovery net for employers the registries miss, never the primary source.
 
-The board this produces is live at **https://quantjobs.spawned.app**.
+The board is live at **https://quantjobs.spawned.app**.
 
-Full methodology: `C:\Users\razre\.claude\plans\snoopy-growing-hoare.md`.
-Execution order and exit criteria: [PLAN.md](PLAN.md). Guidance for Claude
-Code working in this repo, including every documented gotcha: [CLAUDE.md](CLAUDE.md).
+No dependencies — standard library only, so there is nothing to install.
 
-## Quick reference: updating the live board
+- Working notes and every documented gotcha: [CLAUDE.md](CLAUDE.md)
+- Stage log and what is next: [PLAN.md](PLAN.md)
+- Tag dimensions and the labelling method: [TAGGING.md](TAGGING.md)
+- Blocked on the user: [ACTION-REQUIRED.md](ACTION-REQUIRED.md)
 
-Two different things can be "out of date," and they're fixed differently.
+## Updating the live board
 
-**1. New job listings** (fetch everything and push it live):
+Two things can be out of date and they are fixed differently.
+
+**New listings** — sweep every source, re-tag, rebuild and upload:
 
 ```bash
 ./run.ps1 daily --full --publish
 ```
 
-One command — sweeps every source, re-tags, rebuilds the board, and uploads
-the new data. Takes a while (the re-tag alone is several minutes). Run it from
-the repo root; on this machine it's PowerShell, so `./run.ps1`, not `./run.sh`.
-
-**2. A code change** (e.g. you edited `web/index.html`):
+**A code change** to the board itself — commit and push; a GitHub Action
+re-uploads `index.html` and `robots.txt` automatically:
 
 ```bash
-git add web/index.html
-git commit -m "describe the change"
 git push quantjobs master
 ```
 
-Just commit and push to `master` — a GitHub Action re-uploads `index.html` /
-`robots.txt` to the live site automatically. No manual publish step for code.
-
-(Full details, including infrastructure changes, are in
-[Pushing and publishing](#pushing-and-publishing) below.)
+`web/data.js` never goes through git. It is gitignored, built from the local
+SQLite database that exists only on this machine, and CI has no copy — so a data
+refresh is always a local `daily --publish`. `infra.json` (one private bucket,
+one CloudFront distribution) changes approximately never; `spawned apply
+quantjobs` applies it.
 
 ## Running it
 
-No dependencies — standard library only, so there is nothing to install.
-`run.sh` / `run.ps1` wrap the commands below with the right interpreter (see
-[the environment gotcha](#one-environment-gotcha)) — `./run.sh fetch` is the
-same as the first command below.
+`run.sh` / `run.ps1` wrap these with the right interpreter — see the
+[environment gotcha](#one-environment-gotcha).
 
 **Layer 1 — the employer universe**
 
@@ -59,16 +54,16 @@ python -m quantscraper audit      # check the universe against the named roster
 **Layer 2 — resolve each firm to a careers feed**
 
 ```bash
-python -m quantscraper domains --limit 1000   # resolve firm names to domains
+python -m quantscraper domains --limit 1000   # firm name -> domain, guessed then verified
 python -m quantscraper fca --limit 300        # enrich domains from the FCA register (needs .env)
 python -m quantscraper ats --limit 800        # fingerprint careers hosts to an ATS
 python -m quantscraper discover --roster      # find boards no careers page named
 ```
 
-**Layer 3/3B — poll the feeds**
+**Layers 3 and 3B — poll the feeds**
 
 ```bash
-python -m quantscraper jobs --limit 100       # pull postings from resolved boards
+python -m quantscraper jobs --limit 100       # postings from resolved boards
 python -m quantscraper pages --limit 500      # watch tier-B careers pages
 ```
 
@@ -82,38 +77,39 @@ python -m quantscraper denmark                # Jobindex, every category
 python -m quantscraper denmark --since 2026-08-18   # daily top-up, one query
 ```
 
-**Layer 5/6 — classify and read the results**
+**Layers 5 and 6 — classify and read**
 
 ```bash
 python -m quantscraper tag                    # classify postings into tags
-python -m quantscraper list --fit apply_now --hub amsterdam   # filter the tags
+python -m quantscraper list --fit apply_now --hub amsterdam
 python -m quantscraper list --dimensions      # every filterable value
 python -m quantscraper coverage               # how much of the market we see
 python -m quantscraper sample --limit 100     # draw postings to hand-label
 python -m quantscraper labels                 # score the lexicon against them
-python -m quantscraper corrections            # pull Reject/relevance/seniority
-                                               # clicks made on the live board
+python -m quantscraper corrections            # pull reclassify clicks off the live board
 ```
 
-The live board has no server of its own, so a correction made there posts to
-a small Lambda (`functions/correction_writer`) instead of straight to
-`labels.csv`. `corrections` reads that back and upserts it in, same as
-`web/serve.py` already does for corrections made while running the board
-locally. It's also the first step of `daily`, so a normal day picks these up
-automatically — run it on its own only if you want a click to land sooner.
+The deployed board has no server, so a correction clicked there posts to a small
+Lambda (`functions/correction_writer`) which appends to one JSON blob in the
+bucket. `corrections` reads that back and upserts it into `labels.csv`, exactly
+as `web/serve.py` does for a board run locally. It is the first step of `daily`,
+so a normal day picks these up on its own.
 
 **The standing sequence**
 
 ```bash
-python -m quantscraper daily                  # sweden, denmark, switzerland, jobstream,
-                                               # jobs, pages, bodies, tag, alerts, rebuild
+python -m quantscraper daily                  # corrections, the four national boards,
+                                              # jobs, pages, bodies, tag, alerts, rebuild
 python -m quantscraper daily --full --publish # weekly: every category, then push live
 python -m quantscraper alerts                 # which source went quiet, on its own
 ```
 
-`daily` is deliberately manual — see CLAUDE.md for why nothing schedules it.
-A step failing does not stop the run; `alerts` says which source broke and the
-exit code says whether any did.
+`daily` is deliberately manual — the search is the expensive half, it is free
+here and billable anywhere else, so nothing schedules it. What is deployed is
+the *output*, not the scraper. A failing step does not stop the run, because a
+board redesigned underneath us should cost its own postings and not the other
+eight sources'; `alerts` says which one went quiet and the exit code says
+whether any did.
 
 ```bash
 python -m unittest discover -s tests          # regression tests
@@ -121,316 +117,209 @@ python -m unittest discover -s tests          # regression tests
 
 ### One environment gotcha
 
-Bare `python` on this machine resolves to the msys2 build, which ships
-**without a CA bundle**, so every HTTPS request fails with
-`CERTIFICATE_VERIFY_FAILED`. Use the Windows Python — `run.sh`/`run.ps1`
-already do this for you:
+Bare `python` on this machine resolves to the msys2 build, which ships **without
+a CA bundle**, so every HTTPS request fails with `CERTIFICATE_VERIFY_FAILED`.
+Use the Windows Python — `run.sh` / `run.ps1` already do:
 
 ```bash
 "/c/Users/razre/AppData/Local/Programs/Python/Python313/python" -m quantscraper fetch
 ```
 
-or point msys2's OpenSSL at the bundle it already has:
-
-```bash
-export SSL_CERT_FILE=C:/msys64/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
-```
-
 Also set `PYTHONIOENCODING=utf-8` when printing firm names, or non-ASCII names
 raise `UnicodeEncodeError` on this console.
 
-## Pushing and publishing
-
-Two different things move on a `git push`, and only one of them is automatic.
-
-**Code** (this repo) pushes to the `quantjobs` remote, `master` branch:
-
-```bash
-git push quantjobs master
-```
-
-If that push touches `web/index.html` or `web/robots.txt`,
-[`.github/workflows/publish-board-static.yml`](.github/workflows/publish-board-static.yml)
-re-uploads just those files to the live bucket automatically — an HTML/CSS
-tweak to the board goes live with no extra step.
-
-**Data** (`web/data.js`, the actual job listings) never goes through git — it
-is gitignored, built from the local SQLite database that only exists on this
-machine, and CI has no copy of that database. Publishing a fresh set of
-listings is still a manual, local step:
-
-```bash
-python -m quantscraper daily --publish   # or: python web/publish.py
-```
-
-**Infrastructure** (`infra.json` — the bucket and CDN) changes almost never,
-and applying it is manual too:
-
-```bash
-spawned apply quantjobs
-```
-
-See CLAUDE.md's "Publishing it" section for the full story, including why git
-was tried as the data delivery mechanism first and dropped.
-
 ## What it collects
 
-| Registry | Jurisdiction | Firms | Notes |
-|---|---|---|---|
-| `finanstilsynet_dk` | DK | ~26,500 | Danish FSA; swept by letter, see the design note |
-| `sec_adv` | US | ~23,300 | SEC Form ADV monthly bulk CSV, registered + exempt reporting |
-| `esma_eea` | EU | ~12,300 | EEA-wide investment firms, AIFMs and UCITS managers; 75% carry an LEI |
-| `afm_nl` | NL | ~3,700 | AFM investment firms, fund managers, and both AIFM registers |
-| `sfc_hk` | HK | ~3,600 | SFC licensed corporations, by regulated activity |
-| `sec_bd` | US | ~3,300 | SEC active broker-dealers; this is where the US prop firms are |
-| `mas_sg` | SG | ~2,000 | MAS Financial Institutions Directory, by category |
-| `fi_se` | SE | ~660 | Finansinspektionen, enumerated by regulatory category |
-| `eurex` | EU | ~330 | Eurex admitted exchange participants, via CSV |
-| `euronext` | EU | ~280 | Euronext trading members (AMS/BRU/DUB/LIS/MIL/OSL/PAR) |
-| `cboe_europe` | EU | 52 | Cboe Europe equities trading participants |
-| `fia_epta` | EU | 20 | European Principal Traders Association members |
-| `seed` | manual | 16 | Firms no public register carries; hand-maintained CSV |
+Fourteen registries, ~79,000 employer rows resolving to ~70,000 firms; run
+`python -m quantscraper stats` for the current split.
 
-About 76,100 employers in total, resolving to 67,500 firms.
+| Registry | Jurisdiction | Notes |
+|---|---|---|
+| `finanstilsynet_dk` | DK | Danish FSA; no enumerable endpoint, so it is swept by letter |
+| `sec_adv` | US | Form ADV monthly bulk CSV, registered + exempt reporting |
+| `esma_eea` | EU | EEA-wide investment firms, AIFMs and UCITS managers |
+| `afm_nl` | NL | AFM investment firms, fund managers, both AIFM registers |
+| `sfc_hk` | HK | SFC licensed corporations, by regulated activity |
+| `sec_bd` | US | SEC active broker-dealers — where the US prop firms are |
+| `finma_ch` | CH | FINMA authorised institutions |
+| `mas_sg` | SG | MAS Financial Institutions Directory, by category |
+| `fi_se` | SE | Finansinspektionen, by regulatory category |
+| `eurex`, `euronext`, `cboe_europe` | EU | admitted exchange participants |
+| `fia_epta` | EU | European Principal Traders Association members |
+| `seed` | manual | firms no public register carries; hand-maintained CSV |
 
-`sec_adv` supplies a website for ~92% of its firms and `euronext` for ~36% of
-its own, which is most of Layer 2's domain resolution for free.
-
-The two exchange lists are small but do work nothing else does: **365 firms are
-reachable only through exchange membership**, among them 3Red Partners,
-AlphaGrep, ABC Arbitrage, Transtrend and Mint Tower Capital. See the gap note
-on licence-exempt firms for why.
-
-All seven focus hubs now hold every firm on the audit roster — see
-[Coverage audit](#coverage-audit) for what that does and does not mean.
+`sec_adv` supplies a website for ~92% of its firms, which is most of Layer 2's
+domain resolution for free. The exchange lists are small and do work nothing
+else does: hundreds of firms are reachable only through membership, among them
+3Red Partners, AlphaGrep, ABC Arbitrage, Transtrend and Mint Tower.
 
 ## Design notes
 
 **Enumerate, never query.** FI is walked category by category, MAS by category,
-SFC by regulated activity, ESMA by a Solr query that returns the whole set,
-rather than searched — coverage should not depend on guessing the right keyword.
-
-**ESMA is the highest-leverage source here, and not for its size.** Three
-quarters of its records carry an **LEI**, and no national register we hold
-publishes one. LEI is the strongest key entity resolution has, so it merges
-firms already held under names that match nothing: cross-registry firms went
-from 2,595 to 4,234 when it landed.
+SFC by regulated activity, ESMA by a Solr query returning the whole set. A
+search endpoint only returns what you thought to ask for, which is a hard
+ceiling on recall; a category listing has no such ceiling.
 
 Denmark is the exception that proves the rule. Finanstilsynet exposes six
-service operations and none of them lists anything; its own "list extract" page
-renders an empty shell. So `finanstilsynet_dk` sweeps: its search matches a
-**substring**, so querying "a" returns every name containing an "a", and the
-union over the alphabet is the whole register. The union **saturates** part way
-through — the digits and Danish letters that follow add nothing — and that is
-the evidence it is complete rather than capped.
+service operations and none of them lists anything — its own "list extract" page
+renders an empty shell. So `finanstilsynet_dk` sweeps: the search matches a
+**substring**, so querying "a" returns every name containing one, and the union
+over the alphabet is the register. It **saturates** part way through, and that
+saturation is the evidence of completeness rather than of a cap.
 
-**Never filter membership.** Every firm a registry returns is kept forever, and
-rows are never deleted. `category` is stored verbatim so later layers can use
-it to set *polling frequency* — a mis-tuned heuristic should cost latency, not
+**ESMA is the highest-leverage source, and not for its size.** Three quarters of
+its records carry an **LEI** and no national register we hold publishes one. LEI
+is the strongest key entity resolution has, so it merges firms held under names
+that match nothing: cross-registry firms went from 2,595 to 4,234 when it landed.
+
+**Never filter membership.** Every firm a registry returns is kept forever and
+rows are never deleted. `category` is stored verbatim so later layers can set
+*polling frequency* from it — a mis-tuned heuristic must cost latency, not
 coverage.
 
 **An implausibly small result is a failure.** Each registry declares
-`MIN_EXPECTED`; returning fewer rows raises rather than quietly writing a near
-empty table. A scraper that breaks and returns zero rows with HTTP 200 is far
-more dangerous than one that crashes, because nothing announces it. Every fetch
-also appends a row to `runs`, which is the volume history that per-source
-anomaly detection will need.
-
-## Known coverage gaps
-
-Found while verifying this layer against the plan's audit roster. All are real
-holes, not bugs:
-
-- **Own-account prop firms can appear in no register at all.** A firm dealing
-  exclusively on its own account is exempt from investment-firm licensing under
-  MiFID II Art. 2(1)(d), so it need not appear in any regulator's register.
-  `eurex` and `euronext` were added to cover this, and they help — 365 firms
-  come from exchange membership alone. But **Da Vinci Derivatives, the firm that
-  prompted the fix, is still missing**: it is in neither AFM register, neither
-  EPTA, and is a direct member of neither venue, most likely trading via
-  sponsored access under someone else's membership. Sponsored-access firms are
-  a residual hole that no public list closes. **Partly closed since:**
-  `cboe_europe` adds the 52 Cboe European trading participants, and `seed`
-  carries a hand-maintained file (`registries/seed_firms.csv`) that Da Vinci and
-  five other Amsterdam shops now come from. The structural hole remains — the
-  seed file only contains firms someone thought to name.
-- **State-registered US advisers are absent.** The ADV bulk file is SEC
-  registrants only (`Firm Type` is uniformly `Registered`); advisers under
-  roughly $110M AUM register with their state. This resolves the plan's open
-  verification question — the answer is no, and the sub-$110M US tail needs a
-  separate source.
-- **AP1–AP4 and AP6 appear in no FI category.** Only AP7 is FI-supervised; the
-  other buffer funds are governed by their own act. **Closed since** — they come
-  from `seed`.
-- **Sovereign wealth funds appear in no financial register.** ADIA, ADQ,
-  Mubadala, GIC and Temasek are all significant quant employers and none is
-  reachable by any registry, anywhere. **Closed** via the seed file, which is
-  the only realistic route and will stay that way.
-- **Dubai has no local register.** The DFSA puts its public register behind a
-  reCAPTCHA, so it is not reachable here. Dubai reads 7/7 present but 3 local:
-  Emirates NBD is visible only through its *Singapore* banking licence. This is
-  the one open item in `ACTION-REQUIRED.md`.
-- **Switzerland has no local register.** 11/11 present, 6 local — the rest come
-  from Dutch, Danish and US registrations. FINMA would fix it and is not built.
-- **Denmark carries no company type or city.** The Danish register gives a name
-  and a GUID; type and city need one request per company, which is 26,000
-  requests for a register enumerable in 39. Deferred deliberately — the rows are
-  in the universe and the attribute can be backfilled without re-scraping.
-- **Corporate pension foundations are excluded** (807 Swedish ones). An asset
-  pool ring-fencing one employer's pension liability is not a firm; its capital
-  is managed under mandate by managers already listed. Same rule as funds.
-
-Two gaps listed here previously turned out to be wrong, which is worth recording
-because both were plausible:
-
-- **"Dutch pension managers are DNB-supervised."** They are not, and DNB's
-  register does not contain PGGM at all. The real cause was `afm_nl` reading
-  only AFM's two CSV exports while the AIFM manager registers are published as
-  spreadsheets on the same page. Fixed.
-- **"Julius Baer is missing because there is no Swiss register."** It was never
-  missing — `Bank Julius Bär & Co. AG` had been in `eurex` from the start. The
-  audit's matching was anchored to the start of the name, and the registry name
-  begins with "Bank". Fixed in `audit.py`, not by adding a source.
-- **IPM is absent, and that is correct** — the firm wound down. The plan's
-  named roster is slightly stale here.
-- **The UK is not covered.** Every FCA route — register API, bulk download —
-  returns 401/403 without an API key, and the key needs an account you have to
-  register for yourself. Worse, the API has no "list all firms" endpoint, only
-  per-firm lookups, so even with a key it cannot enumerate a universe. FCA is
-  therefore an *enrichment* source (checking the `dealing in investments as
-  principal` permission on firms found elsewhere), not a registry. London is
-  currently reachable only via `sec_adv`/`fia_epta` entities.
-
-- **Thousands of Form ADV filers give a social page as their website.** Over
-  4,000 list a LinkedIn URL in the `Website Address` field, plus ~2,000 more on
-  Facebook, X and Instagram. They are kept as-is in `employers` (raw data is
-  never edited) but they are useless for Layer 2 domain resolution, and they are
-  excluded from identity matching — see `resolve.py`.
+`MIN_EXPECTED` and raises rather than quietly writing a near-empty table. A
+scraper that breaks and returns zero rows with HTTP 200 is far more dangerous
+than one that crashes, because nothing announces it. Every fetch appends to
+`runs`, which is the volume history `alerts` reads.
 
 ## Firm identity
 
-`employers` holds raw registry rows; one company can occupy several. `resolve`
-groups them into `firms` using deterministic keys — LEI, SEC CRD, domain,
-normalized name — plus a small hand-curated table for corporate groups whose
-legal names share nothing, like Tower Research trading as `LATOUR TRADING LLC`.
+`employers` holds raw registry rows and one company can occupy several.
+`resolve` groups them into `firms` on deterministic keys — LEI, SEC CRD, domain,
+normalized name — plus a small curated table for groups whose legal names share
+nothing, like Tower Research trading as `LATOUR TRADING LLC`.
 
-Normalization strips legal forms (`AB`, `B.V.`, `LLC`) and **nothing else**, and
-the curated prefixes are deliberately specific, because the expensive mistake
-here is a false merge: a duplicate costs a second of reading, a wrong merge
-silently deletes an employer. Citadel and Citadel Securities are kept separate
-for exactly this reason — different employers, different careers pages.
-
-Current state: 76,056 rows → 67,509 firms. The collapse is modest because most
-rows carry no website; Stage 4 (domain resolution) is what will improve it, and
-`firms` is rebuilt from scratch on demand so re-running then is free.
+Normalization strips legal forms (`AB`, `B.V.`, `LLC`) and **nothing else**,
+because the expensive mistake is a false merge: a duplicate costs a second of
+reading, a wrong merge silently deletes an employer. Citadel and Citadel
+Securities stay separate for exactly that reason.
 
 ## Coverage audit
 
-`python -m quantscraper audit` checks the universe against the methodology's
-named roster — 163 entries across 11 hubs, checked in as
-`quantscraper/roster.csv`. **The roster measures coverage; it never defines it.**
-A firm's absence from that file says nothing about whether it belongs in the
-universe, and the audit reads no table it can write to.
+`python -m quantscraper audit` checks the universe against a hand-named roster
+in `quantscraper/roster.csv`. **The roster measures coverage; it never defines
+it.** A firm's absence from it says nothing, and the audit reads no table it can
+write to.
 
-Two numbers per hub, because the first one is easy to overstate:
+Two numbers per hub, because the first is easy to overstate:
 
 | | |
 |---|---|
 | **present** | the firm is in the universe under some name |
 | **local** | some row places the firm in that hub's country |
 
-Hong Kong is why both are reported. All nine of its roster firms are *present*
-and exactly one is *local*: the rest are visible only through US registrations,
-so a single number would have claimed Hong Kong was solved when no HK register
-has been ingested at all.
+Hong Kong is why both are reported: at one point all nine of its roster firms
+were *present* and exactly one was *local*, the rest visible only through US
+registrations. A single number would have claimed Hong Kong was solved before
+any HK register had been ingested.
 
-Current focus-hub results — every hub holds every roster firm, and *local* is
-now where the remaining work is:
+Every miss carries a written reason in the roster's `note` column and the audit
+prints it, so a miss is never just a blank. Firms that have ceased to exist
+(IPM, AP1, AP6) are marked `stale` and excluded from the rates.
 
-| Hub | Present | Local |
-|---|---|---|
-| Stockholm | 20/20 | 20 |
-| Copenhagen | 7/7 | 7 |
-| Amsterdam | 13/13 | 13 |
-| Singapore | 10/10 | 7 |
-| Hong Kong | 9/9 | 8 |
-| Switzerland | 11/11 | 6 |
-| Dubai | 7/7 | 3 |
+**The audit measures the employer universe, not the job pipeline**, and the two
+had drifted completely apart — every focus hub read 100% present while 147 of
+163 roster firms produced no postings at all. `audit --pipeline` asks the second
+question. When a coverage number looks finished, ask which table it counted.
 
-Every miss carries a written reason in the roster's `note` column, and the audit
-prints it, so a miss is never just a blank. Stale entries (IPM, wound down in
-2021) and entries that never named a real firm (AP5 — there is no *Femte
-AP-fonden*) are marked and excluded from the rates, so they stop reading as bugs.
-
-**A recorded reason is a hypothesis until someone checks it.** Two of the
-reasons written during Stage 2 were wrong — see the last two bullets under
-[Known coverage gaps](#known-coverage-gaps). Both are kept in the file, corrected
-rather than deleted.
-
-Matching is **token-aligned anywhere in the name**, not anchored to the start.
-Registries prepend qualifiers to legal names — `Bank Julius Bär & Co. AG`,
-`Fondsmæglerselskabet Maj Invest A/S` — and anchoring silently loses them.
-
-**A false hit is the failure this guards against**, because it hides a miss.
-`-v` prints the employer names each entry actually matched: a bare
-`Grasshopper` matching `GRASSHOPPER ESCAPEMENT, LLC` reported Singapore as
-covered when it was not, and was only visible because the matched name is shown.
+Matching is **token-aligned anywhere in the name**, never anchored to the start:
+registries prepend qualifiers (`Bank Julius Bär & Co. AG`,
+`Fondsmæglerselskabet Maj Invest A/S`) and anchoring silently loses them.
+**A false hit is the failure this guards against**, because it hides a miss —
+`-v` prints what each entry actually matched.
 
 ## Domain resolution
 
-A firm name has to become a careers feed. **The focus-region registries publish
-no websites at all** — not one of `fi_se`, `afm_nl`, `finanstilsynet_dk`,
-`mas_sg` or `sfc_hk` carries a single URL. Of the 34,047 firms they report, 2.3%
-had a domain, and 95% of even those came from a US registration rather than a
-local one. So the domains have to be derived.
-
-`domains.py` builds candidate domains from the firm's name and accepts one only
+A firm name has to become a careers feed, and **the focus-region registries
+publish no websites at all** — not one of `fi_se`, `afm_nl`,
+`finanstilsynet_dk`, `mas_sg` or `sfc_hk` carries a single URL. So the domains
+are derived: `domains.py` builds candidates from the name and accepts one only
 if the page that answers **names the firm**. A live host proves only that
 somebody owns the name.
 
-**An unverified guess is worse than no domain.** It points Layer 3 at someone
-else's careers page, and the result is a silently empty feed rather than a
-visible error. So matches are graded:
+**An unverified guess is worse than no domain**, because it points Layer 3 at
+someone else's careers page and the result is a silently empty feed rather than
+a visible error. Matches are graded:
 
-| Grade | Bar | Counted? |
+| grade | bar | counted? |
 |---|---|---|
 | `registry` | the register published it | yes |
-| `name-strong` | page contains the full name, or its first two identity-bearing words | yes |
-| `name-weak` | page contains only one word of a multi-word name | **no** |
+| `name-strong` | the page carries the full name, or its first two identity-bearing words | yes |
+| `name-weak` | the page carries one word of a multi-word name | **no** |
 | `unresolved` | nothing verified | no |
 
 Weak matches are kept with their evidence rather than discarded — `nomura.com`
 really is right for *Nomura Financial Products Europe GmbH* — but nothing
-downstream may use one until it is confirmed.
+downstream may use one until it is confirmed. Four false positives shaped these
+rules: `australia.com` (the tourism board) for *Australia and New Zealand
+Banking Group*, `societe.com` for *Societe Generale*, `citadel.com` for *Citadel
+Securities* — a different employer with a different careers page — and
+`marketfrance.com`, which "proved" itself by printing the domain we had guessed.
+Matching is on spaced phrases only, so evidence cannot be circular.
 
-Four false positives shaped those rules, and all four are instructive:
+The cache is keyed on the firm's **name**, not its id, because `firms` rebuilds
+from scratch on demand and ids are not a durable handle. Failures are cached
+too: most firms are unresolvable, and re-probing them every run is the bulk of
+the cost.
 
-- `australia.com`, the **tourism board**, for *Australia and New Zealand Banking
-  Group* — one word out of six is not evidence.
-- `societe.com` for *Societe Generale*, the same way.
-- `citadel.com` for *Citadel Securities* — a different employer with a different
-  careers page, and exactly the merge the roster is careful to keep apart. It
-  happened because the bare first word was tried before `citadelsecurities`.
-- `marketfrance.com` for *Market Securities France SA*, which "proved" itself by
-  printing its own domain on the page. The domain was what we guessed, so the
-  evidence was circular. Matching is on spaced phrases only for this reason.
+## Known coverage gaps
 
-The cache is keyed on the firm's **name**, not its id, because `firms` is
-rebuilt from scratch on demand and ids are not a durable handle. Failures are
-cached too — most firms are unresolvable, and re-probing them every run is the
-bulk of the cost.
+Real holes, not bugs.
+
+- **Own-account prop firms can appear in no register at all.** A firm dealing
+  exclusively on its own account is exempt from investment-firm licensing under
+  MiFID II Art. 2(1)(d). Exchange participant lists cover most of them; a firm
+  trading via **sponsored access** under someone else's membership is covered by
+  nothing public. Da Vinci Derivatives is the standing example and reaches the
+  universe only through `seed`.
+- **State-registered US advisers are absent.** The ADV bulk file is SEC
+  registrants only; advisers under roughly $110M AUM register with their state.
+- **Sovereign wealth funds appear in no financial register.** ADIA, ADQ,
+  Mubadala, GIC and Temasek are significant quant employers reachable by no
+  registry anywhere. The seed file is the only realistic route.
+- **Dubai has no reachable register** — the DFSA's is behind a reCAPTCHA.
+- **Most small Hong Kong funds run no public board.** All 51 roster firms were
+  probed by name across every discoverable ATS and the sweep found two. The rest
+  hire through recruiters and personal networks, which no scraper reaches. This
+  is a finding, not a gap.
+- **A few large firms simply refuse us.** ABN AMRO answers 503, Nasdaq times
+  out, Citadel Securities and Jyske Bank answer 403; `curl` with a browser UA
+  reaches all four. Julius Baer refuses `curl` too, so there is no header that
+  reaches it.
+- **Denmark carries no company type or city.** The register gives a name and a
+  GUID; type and city need one request per company, which is 26,000 requests for
+  a register enumerable in 39. Deferred deliberately — the rows are in the
+  universe and the attribute backfills without re-scraping.
+- **Corporate pension foundations are excluded** (807 Swedish ones). An asset
+  pool ring-fencing one employer's pension liability is not a firm; its capital
+  is managed under mandate by managers already listed.
+- **Thousands of Form ADV filers give a social page as their website.** Over
+  4,000 list a LinkedIn URL, plus ~2,000 on other platforms. Kept as-is in
+  `employers` — raw data is never edited — and excluded from identity matching
+  by `resolve.is_platform_domain`.
+- **The UK is deprioritized and would not enumerate anyway.** FCA has no "list
+  all firms" endpoint and no bulk download, so it is enrichment only.
+
+Two gaps listed here previously were wrong, which is worth recording because
+both were plausible. "Dutch pension managers are DNB-supervised" — they are not,
+and the real cause was `afm_nl` reading only AFM's CSV exports while the AIFM
+registers are published as spreadsheets on the same page. "Julius Baer is
+missing because there is no Swiss register" — it was in `eurex` from the start,
+and the audit's matching was anchored to the start of the name.
 
 ## Adding a registry
 
 Drop a module in `quantscraper/registries/` exposing `NAME`, `JURISDICTION`,
 `MIN_EXPECTED` and `fetch() -> list[Employer]`, then add it to `REGISTRIES` in
-that package's `__init__.py`. Nothing else needs to change.
+that package's `__init__.py`. Nothing else changes.
 
-`PLAN.md` holds the build order and the geographic priority. In short: focus is
-**Stockholm, Copenhagen, Amsterdam, Switzerland, Dubai, Hong Kong, Singapore**;
-Germany, the US, London and China are deprioritized. That governs what gets
-built next, never what gets ingested — collected data is never dropped for
-being out of area.
+Prefer sources you can **enumerate** over sources you must **query**, and verify
+against the real endpoint before writing the adapter — several sources here
+published formats nothing like what their documentation implied.
 
-Next sources, in order: Finanstilsynet (DK), FINMA (CH), SFC (HK), MAS (SG),
-DFSA/FSRA (UAE), then the Nasdaq Stockholm and Cboe Europe participant lists.
+Focus hubs are **Stockholm, Copenhagen, Amsterdam, Switzerland, Hong Kong,
+Singapore**; Germany, the US, London, China and Dubai are deprioritized. That
+governs what gets built next, never what gets ingested — collected data is never
+dropped for being out of area. The one exception is the *board*, which gates on
+geography at the user's instruction; see `web/build_data.py`.

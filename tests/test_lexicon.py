@@ -414,11 +414,40 @@ class BoardProfile(unittest.TestCase):
         distinguishable from a confident wrong one."""
         self.assertIsNone(lexicon.board_profile(0, 0, 3))
 
-    def test_undecided_counts_towards_relevance(self):
+    def test_undecided_counts_towards_relevance_but_not_as_a_keep(self):
         """A board of ambiguous finance titles is a finance employer nobody has
-        read yet; a board of housekeepers is not. If undecided did not count,
-        this would only measure how many bodies we happened to fetch."""
-        self.assertEqual(lexicon.board_profile(0, 50, 10)[0], "markets")
+        read yet; a board of housekeepers is not. If undecided did not count at
+        all, this would only measure how many bodies we happened to fetch.
+
+        **It used to count as a full keep, and that made the measure useless in
+        the direction it exists for.** `board_profile(0, 50, 10)` was
+        `markets` -- and over the real corpus that verdict was `bosch.com`,
+        with 149 unplaceable titles, 157 rejections and *no keep at all*. A
+        board nothing has been read as markets work on is not a markets
+        board, however much of it is unreadable."""
+        self.assertEqual(lexicon.board_profile(0, 50, 10)[0], "mixed")
+        self.assertEqual(lexicon.board_profile(20, 30, 10)[0], "markets")
+
+    def test_a_board_with_no_keeps_is_never_markets(self):
+        """The property `bosch.com` needed, and the weighting alone does not
+        guarantee it."""
+        self.assertNotEqual(lexicon.board_profile(0, 900, 10)[0], "markets")
+
+    def test_a_real_trading_board_still_reads_as_markets(self):
+        """`flowtraders.com`, measured: 26 keeps, 10 undecided, 14 rejected."""
+        self.assertEqual(lexicon.board_profile(26, 10, 14)[0], "markets")
+
+    def test_the_property_and_healthcare_boards_do_not_read_as_markets(self):
+        """`jll.com` is 15 keeps in 3,143 and `healthpartners.com` 1 in 817.
+        Both stay `mixed` rather than falling to `non_markets`, and that is the
+        honest answer: JLL genuinely runs a real-estate capital markets desk,
+        and a board that large will carry a few finance seats. What matters is
+        that neither can reach `markets`, which is the verdict that would let
+        a board vouch for a title nothing else could read."""
+        for keep, undecided, rejected in ((15, 721, 2407), (1, 249, 567)):
+            with self.subTest(keep=keep):
+                self.assertNotEqual(
+                    lexicon.board_profile(keep, undecided, rejected)[0], "markets")
 
 
 class EveryRejectionCarriesItsReason(unittest.TestCase):
@@ -448,3 +477,63 @@ class EveryRejectionCarriesItsReason(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ABigBoardNeedsAnAbsoluteFloor(unittest.TestCase):
+    """`non_markets` is the verdict that cannot afford to be wrong, because it
+    is the one the board gate acts on.
+
+    A share alone gets a large board wrong in the expensive direction: `td.com`
+    carries 58 postings read as markets work and `dbs.com` 42 -- real desks at
+    real banks -- and both score under 5% because the boards are 2,400 and
+    1,600 postings of retail branch work. Calling TD Bank a board that
+    publishes no markets work is not a threshold to tune, it is a false
+    statement."""
+
+    def test_a_bank_with_real_desks_is_never_non_markets(self):
+        for name, args in (("td.com", (58, 224, 2137)), ("dbs.com", (42, 110, 1434))):
+            with self.subTest(board=name):
+                self.assertEqual(lexicon.board_profile(*args)[0], "mixed")
+
+    def test_the_boards_the_gate_is_for_still_fall(self):
+        """Greystar apartments, Carrier HVAC, Resolute -- 3, 0 and 2 keeps."""
+        for name, args in (("greystar", (3, 70, 1931)), ("carrier", (0, 275, 1132)),
+                           ("resolute", (2, 153, 1033))):
+            with self.subTest(board=name):
+                self.assertEqual(lexicon.board_profile(*args)[0], "non_markets")
+
+    def test_the_floor_is_absolute_not_proportional(self):
+        """Ten keeps is ten keeps whether the board is 100 postings or 10,000."""
+        self.assertEqual(lexicon.board_profile(10, 0, 9_990)[0], "mixed")
+        self.assertEqual(lexicon.board_profile(9, 0, 9_991)[0], "non_markets")
+
+
+class ANationalFeedIsNotABoard(unittest.TestCase):
+    """Profiling one returns `non_markets`, which is true and useless: it
+    carries every job in the country by design.
+
+    **Only `jobtech` was listed, and that was an oversight with a
+    country-sized blast radius.** The tuple was written when JobStream was the
+    only national feed; Jobbsafari, Jobindex, job-room.ch and MyCareersFuture
+    arrived later. Once `board_profile` was wired to a board gate that gap
+    became live -- `jobindex/denmark` sits on 13 keeps against a floor of 10,
+    so a lexicon change costing Denmark four of them would have gated the whole
+    Danish feed."""
+
+    def test_every_national_feed_is_excluded(self):
+        for feed in ("jobtech", "jobbsafari", "jobindex", "jobroom",
+                     "mycareersfuture"):
+            with self.subTest(feed=feed):
+                self.assertIn(feed, lexicon.NOT_A_BOARD)
+
+    def test_a_firms_own_board_is_not(self):
+        for ats in ("greenhouse", "workday", "lever", "teamtailor", "site"):
+            with self.subTest(ats=ats):
+                self.assertNotIn(ats, lexicon.NOT_A_BOARD)
+
+    def test_the_danish_feeds_measured_numbers_would_have_gated_it(self):
+        """13 keeps, 12 undecided, 19,783 rejected -- the reading that made
+        this urgent. It is `mixed` only because of the absolute floor, and one
+        bad lexicon week would have taken it under."""
+        self.assertEqual(lexicon.board_profile(13, 12, 19_783)[0], "mixed")
+        self.assertEqual(lexicon.board_profile(9, 12, 19_783)[0], "non_markets")

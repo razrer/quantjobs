@@ -51,9 +51,8 @@ _SERVICE = (
 )
 SEARCH_URL = _SERVICE + "searchVUT?v={query}"
 
-# Per-company detail, kept here because it is the documented way to get type
-# and city and will be wanted eventually. Not called: one request per company.
-DETAIL_URL = _SERVICE + "hentVirksomhedsinformation?v={guid}"
+# `hentVirksomhedsinformation?v={guid}` on the same service returns type and
+# city per company, at one request each. Not used: the listing is enough.
 
 # Latin letters do the work; the digits and Danish letters are there to prove
 # the union has saturated, and are expected to add nothing.

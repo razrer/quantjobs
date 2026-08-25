@@ -53,18 +53,17 @@ CREATE TABLE IF NOT EXISTS ats_resolution (
 # Two bounds, and the host patterns need both.
 #
 # `([a-z0-9-]+)\.host\.com` looks harmless and is quadratic: over a long run
-# with no dot in it the capture swallows everything, backtracks one character
-# at a time, fails, and then the engine restarts the whole exercise one
-# position along. An inline base64 data URI is exactly such a run. A 40 KB
-# image stalled one pattern for minutes; a page carrying a few hung two runs
-# for hours at full CPU, writing nothing and reporting nothing.
+# with no dot in it the capture swallows everything, backtracks a character at
+# a time, fails, and restarts one position along. An inline base64 data URI is
+# exactly such a run, and a page carrying a few hung two `ats` runs for hours
+# at full CPU, writing nothing and reporting nothing.
 #
-# A DNS label is at most 63 characters, which caps the backtracking. That alone
+# A DNS label is at most 63 characters, which caps the backtracking -- but that
 # still leaves 63 attempts at every one of two million positions, so the
 # lookbehind does the real work: a label cannot begin mid-label, so inside a
 # base64 blob every position fails on the first check instead of the 63rd. It
-# excludes only the label characters, so `board.host.com` still matches when it
-# appears as `foo.board.host.com`.
+# excludes only label characters, so `board.host.com` still matches inside
+# `foo.board.host.com`.
 _LABEL = r"([a-z0-9-]{1,63})"
 _HOST_LABEL = r"(?<![a-z0-9-])" + _LABEL
 
@@ -173,15 +172,13 @@ ATS_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             re.I,
         ),
     ),
-    # Oracle Fusion Recruiting, which nothing here recognised until Danske Bank
-    # -- a Copenhagen roster firm -- was found sitting in tier B with 139 live
-    # postings behind it. The board is addressed by two parts that are not
-    # adjacent in the URL: the *pod host* (`ejqi.fa.ocs.oraclecloud.eu`, which
-    # is the customer's Fusion instance and differs per firm and per region)
-    # and the *site number* (`CX_1001`, which names the career site on it).
-    # A firm may run several sites on one pod, so neither half identifies a
-    # board alone. `_ORACLE_HCM` assembles `host|site` for the same reason
-    # `_workday_token` assembles three parts by name rather than by position.
+    # Oracle Fusion Recruiting, recognised by nothing until Danske Bank -- a
+    # Copenhagen roster firm -- was found in tier B with 139 live postings
+    # behind it. The board is addressed by two parts that are not adjacent in
+    # the URL: the *pod host*, which is the customer's Fusion instance, and the
+    # *site number*, which names a career site on it. `CX_1001` is Oracle's
+    # default and most tenants keep it, so a token of the site alone collides
+    # across every firm on the platform.
     (
         "oracle_hcm",
         re.compile(
@@ -287,15 +284,15 @@ class Resolution:
     evidence: str | None
 
 
-# An ATS serving a customer's board from the customer's *own* hostname. The
-# board never appears as `{board}.vendor.com`, so every host pattern misses it
-# and the firm is tiered B -- a careers page running on nothing recognisable.
-# The vendor's asset CDN is still in the markup, and the board is reachable at
+# An ATS serving a customer's board from the customer's *own* hostname, so the
+# board never appears as `{board}.vendor.com` and every host pattern misses it.
+# The vendor's asset CDN is still in the markup and the board is reachable at
 # the custom host, so that host is the token.
 #
-# This is not a corner case. `careers.lynxhedge.se` is Lynx Asset Management,
-# which is the Stockholm quant firm this project exists to find, and it sat in
-# tier B with a live feed behind it.
+# Not a corner case: `careers.lynxhedge.se` is Lynx Asset Management, the
+# Stockholm quant firm this project exists to find, and it sat in tier B with a
+# live feed behind it. **The CDN proves the firm uses the vendor, not where its
+# board lives**, so the feed is verified before anything is recorded.
 # (ats, asset host, feed path, marker the feed must contain)
 _VENDOR_ASSETS: tuple[tuple[str, str, str, str], ...] = (
     ("teamtailor", "teamtailor-cdn.com", "/jobs.rss", "<channel"),
@@ -338,18 +335,15 @@ def _workday_token(match: re.Match[str]) -> str | None:
 
 # Escapes that hide a board URL from every host pattern above.
 #
-# Julius Baer's careers page carries its navigation as a JSON blob inside an
-# HTML attribute, so the Workday board arrives spelled
-# `&quot;https:\/\/juliusbaer.wd3.myworkdayjobs.com\/en-US\/External&quot;`
-# -- doubly escaped, because it is JSON inside a JSON string inside an
-# attribute. Neither the slashes nor the quotes are what the pattern expects,
-# so a Switzerland roster firm tiered B with a live feed behind it. Any site
-# rendering its links through a JSON island does the same, which today is most
-# of them.
+# Julius Baer ships its navigation as JSON inside an HTML attribute, so its
+# Workday board arrives as
+# `&quot;https:\/\/juliusbaer.wd3.myworkdayjobs.com\/en-US\/External&quot;` --
+# doubly escaped, and neither the slashes nor the quotes are what the pattern
+# expects. Any site rendering links through a JSON island does the same.
 #
 # Undoing the escapes can only *add* matches, and every guard downstream still
-# applies: `_is_infrastructure` still rejects a vendor's own host, and Layer 3
-# still has to read the board before anything is recorded against it.
+# applies: `_is_infrastructure` rejects a vendor's own host, and Layer 3 still
+# has to read the board before anything is recorded against it.
 #
 # Longest first, so the doubled form is consumed before the single one turns
 # its leading backslash into a stray character.
@@ -430,14 +424,10 @@ def fingerprint(markup: str, url: str | None = None) -> tuple[str, str | None, s
     """
     markup = _unescape(markup)
     # The infrastructure-only fallback below used to be a *second* full sweep
-    # of all 23 patterns over the whole page -- `pattern.search`, run again
-    # from scratch, after the loop just below had already run `finditer` over
-    # every one of them. For the ~95% of pages that fingerprint to nothing at
-    # all (tier B and C), that doubled the regex cost of every fetch for no
-    # different answer: `pattern.search` returns the same first match
-    # `finditer` already yielded, and the loop below sees it first regardless
-    # of whether it goes on to accept or reject it. Recording it in passing
-    # gets the identical fallback for free.
+    # of every pattern over the whole page, which doubled the regex cost of
+    # every fetch for the ~95% of pages that fingerprint to nothing. It returns
+    # the same first match `finditer` already yielded, so recording it in
+    # passing gets the identical fallback for free.
     fallback: tuple[str, str] | None = None
     for name, pattern in ATS_PATTERNS:
         for match in pattern.finditer(markup):
@@ -539,17 +529,12 @@ def resolve_domain(domain: str) -> Resolution:
     if not candidates:
         return Resolution(domain, None, None, None, "C", "no careers link on homepage")
 
-    # Two hops, and both halves of that matter.
-    #
-    # The loop used to `return` tier B on the *first* readable careers page,
-    # so candidates two and three were fetched by nobody -- the ranking that
-    # put the most promising link first was the only one that ever counted.
-    #
-    # And the board is often a hop further in than the careers landing page.
-    # `swedbank.com` links to a careers page that links to `jobs.swedbank.com`,
-    # a Teamtailor board on their own domain, and one hop finds neither. Six
-    # fetches is the ceiling: this runs over 19,000 domains, and an unbounded
-    # crawl is a different program.
+    # **Every candidate, and two hops.** The loop used to `return` tier B on
+    # the *first* readable careers page, so candidates two and three were
+    # fetched by nobody -- and the board is often a hop further in than the
+    # careers landing page: `swedbank.com` links to a careers page that links
+    # to `jobs.swedbank.com`, and one hop finds neither. Six fetches is the
+    # ceiling: this runs over 19,000 domains.
     seen: set[str] = set()
     first_ok: str | None = None
     queue, fetches = candidates, 0

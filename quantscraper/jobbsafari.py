@@ -1,20 +1,16 @@
 """Layer 4 -- Jobbsafari, Sweden's widest job board.
 
-Stockholm is a focus hub and Sweden had one national source: JobStream, the
-delta feed over Platsbanken. That feed is a *change* feed, so what it leaves
-behind is whatever happened to change inside the polled window -- 4,582
-postings against a country advertising forty thousand. Widening Sweden is
-therefore two separate questions, and only the second one is about coverage:
-how much of Platsbanken we hold, and how much of Sweden Platsbanken is.
+Sweden had one national source, JobStream, and that is a *change* feed: what it
+leaves behind is whatever happened to change inside the polled window. Widening
+Sweden was therefore two questions, and only the second is about coverage -- how
+much of Platsbanken we hold, and how much of Sweden Platsbanken is.
 
 **Measured, because both were cheap to test.** Platsbanken's own search API
-answers `total.value = 39,636` for the unfiltered query. Jobbsafari advertises
-**48,550**, and 39 of 40 JobStream postings drawn at random from our own
-database are on it under the identical title -- the fortieth is an ad that
-expired in the five days between the poll and the check. So this board is
-Platsbanken plus roughly nine thousand more, and the obvious alternative --
-streaming JobTech's 700 MB `/snapshot` to backfill the delta feed -- would have
-bought a subset of what one hundred requests get here.
+answers 39,636 for the unfiltered query; Jobbsafari advertises **48,550**, and
+39 of 40 JobStream postings drawn at random from our database are on it under
+the identical title. So this board is Platsbanken plus roughly nine thousand
+more -- and the obvious alternative, streaming JobTech's 700 MB `/snapshot`,
+would have bought a subset of what a hundred requests get here.
 
 **Jobbsafari is Jobindex's Swedish sibling**, same owner, and shares none of
 its problems:
@@ -25,64 +21,53 @@ its problems:
     ~1,300 requests, 70 MB            98 requests
     robots disallows the pager        robots allows it
 
-`Disallow:` covers `/api`, `/monitoring`, and `/lediga-jobb` under `yrke=`,
-`ort=`, `kategori=`, `foretag=` or four-plus parameters. This module asks for
-`page` and `page_size` on `/lediga-jobb` and nothing else, so unlike the Danish
-sweep there is no judgement call here to hand back to the user.
+This module asks for `page` and `page_size` on `/lediga-jobb` and nothing else,
+so unlike the Danish sweep there is no judgement call to hand back to the user.
 
-**The surface is Next.js's own data route, not the rendered page.** Every
-search page ships `__NEXT_DATA__`, a JSON island carrying the search response
-as structured records; the same payload is served without the 900 KB of markup
-around it at `/_next/data/{buildId}/{locale}/lediga-jobb.json`. The build id
+**The surface is Next.js's own data route, not the rendered page.** The same
+payload the search page ships as `__NEXT_DATA__` is served without the 900 KB
+of markup at `/_next/data/{buildId}/{locale}/lediga-jobb.json`. The build id
 changes on every deploy, so it is read from the page rather than pinned, and a
 404 from a stale one refreshes it once before giving up.
 
-**`page_size` is honoured up to at least 2,000 and the board publishes its own
-total**, so the walk is checked rather than trusted: what arrived is compared
-against what the board advertised, and a shortfall is reported as truncation
-rather than shrugged at.
+**The board publishes its own total**, so the walk is checked rather than
+trusted: what arrived is compared against what was advertised, and a shortfall
+is reported as truncation rather than shrugged at.
 
-**Paging stops on an *empty* page, never on a short one, and the difference cost
+**Paging stops on an *empty* page, never a short one, and the difference cost
 the first live sweep 43,000 postings.** Page 11 came back with 499 rows instead
-of the 500 asked for -- an ad withdrawn between the count and the render -- the
-walk read that as the end of the board, and reported a clean, finished, wrong
-5,421. Only a page of zero means there is nothing after it, which is what the
-board actually serves: at `page_size=500` page 98 carries the last 50 and page
-99 carries none. It also stops on a page repeating the previous one exactly,
-because a board ignoring `page` serves page one forever and never runs out --
-the same shape as Jobvite's missing trailing slash.
+of 500 -- an ad withdrawn between the count and the render -- the walk read that
+as the end of the board, and reported a clean, finished, wrong 5,421. Only a
+page of zero means there is nothing after it. It also stops on a page repeating
+the previous one exactly, because a board ignoring `page` serves page one
+forever and never runs out.
 
 **No cursor and no top-up path, deliberately.** Jobindex needs one because a
-full sweep there is 1,300 requests; here it is 98, roughly two minutes, and a
-sweep refreshes `last_seen` on every posting still live, which is how a listing
-goes missing. A second code path that could only ever be *less* complete is not
-worth the two minutes it saves.
+full sweep there is 1,300 requests; here it is 98, and a sweep refreshes
+`last_seen` on every posting still live, which is how a listing goes missing. A
+second code path that could only ever be *less* complete is not worth two
+minutes.
 
-**`endDate` is not a deadline and is not written as one.** It is on every row,
-11.3% of rows sit exactly 181 days after the start date, and a long tail of
-them fall in the year 2650 -- an employer does not state a closing date six
-centuries out. It is when the advertisement comes down, the same field
-Jobindex calls `lastdate` and job-room.ch calls `publication.endDate`, and the
-board sorts an approaching deadline above everything else. JobStream remains
-the only Swedish source publishing a real one.
+**`endDate` is not a deadline and is not written as one.** 11.3% of rows sit
+exactly 181 days after the start date and a long tail fall in the year 2650. It
+is when the advertisement comes down -- the field Jobindex calls `lastdate` and
+job-room.ch calls `publication.endDate` -- and the board sorts an approaching
+deadline above everything else. JobStream remains the only Swedish source
+publishing a real one.
 
 **No taxonomy, and that is a real limitation rather than an oversight.** The
-detail page carries `mainCategories` and `subcategories` -- an enumeration the
-advertiser picked from, which is exactly what `jobs.category` is for and what
-gates Denmark and Singapore. The *list* endpoint returns them empty on 1,000 of
-1,000 rows, and the only route to them is `kategori=`, which robots disallows.
-So Swedish postings are gated by the occupation lexicon instead, which is why
-widening the Swedish half of `tagging.py` is the stage that follows this one.
+detail page carries `mainCategories` and `subcategories`, which is exactly what
+`jobs.category` is for and what gates Denmark and Singapore -- but the *list*
+endpoint returns them empty on 1,000 of 1,000 rows, and the only route to them
+is `kategori=`, which robots disallows. So Swedish postings are gated by the
+occupation lexicon instead.
 
 **No employer domain, and that was measured before being given up on.**
-`apply.href` resolves on 1,681 of 2,000 rows across 386 distinct hosts, and the
-head of that distribution is `recruit.visma.com`, `web103.reachmee.com`,
-`emp.jobylon.com` -- ATS vendors -- while the tail mixes an employer's own
-careers host (`career.avanza.se`) with staffing agencies standing in for
-clients they do not name (`ledigajobb.bravura.se`, `experis.se`). Nothing on
-the record separates the two, which is the surrogate problem job-room.ch
-solved with a flag this board does not publish. `company.name` is on every row
-and the board groups on it; a domain would only be a guess wearing an
+`apply.href` resolves on 1,681 of 2,000 rows across 386 hosts, and the head of
+that distribution is ATS vendors while the tail mixes an employer's own careers
+host with staffing agencies standing in for clients they do not name. Nothing
+on the record separates the two -- the surrogate problem job-room.ch solves with
+a flag this board does not publish. A domain would only be a guess wearing an
 identity's clothes.
 """
 
