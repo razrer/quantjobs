@@ -129,13 +129,16 @@ NEVER_ASK = frozenset({"unrelated_occupation", "corporate_function", "crypto_web
 # six-word title that no detector should claim to have read.
 READABLE = frozenset({"en", "sv", "unknown"})
 
-# The six focus hubs plus the deprioritized ones -- London, New York, Frankfurt
-# and the rest are places the reader would plausibly work, where Cyprus and
-# Bulgaria are not. Used to *order* the draw, never to filter it.
-_NEARBY = frozenset({
-    "stockholm", "copenhagen", "amsterdam", "switzerland", "hong_kong",
-    "singapore", "deprioritized",
-})
+# Everywhere the board is willing to show, which is the same question this asks
+# -- London, New York and Frankfurt are places the reader would plausibly work,
+# where Cyprus and Bulgaria are not. Used to *order* the draw, never to filter
+# it.
+#
+# **Derived rather than restated.** It was a copy of the hub list and drifted
+# the moment one was added: promoting the United States would have left the
+# sheet ranking New York level with Bucharest. `unknown` is dropped because a
+# posting that named no place is not evidence of being near one.
+_NEARBY = frozenset(tagging.BOARD_HUBS) - {"unknown"}
 
 # Stratified over what the judge made of a posting, not over the fit bucket.
 # `undecided` is the largest share on purpose: it is the genuine ambiguity, the

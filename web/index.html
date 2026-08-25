@@ -939,6 +939,11 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     insurance_pricing: "insurance pricing", crypto_web3: "crypto / web3",
     heavy_systems: "heavy systems", insurance_ops: "insurance ops",
     "hong kong": "Hong Kong", deprioritized: "deprioritized hub",
+    "new york": "New York", chicago: "Chicago", boston: "Boston",
+    // Unlike the three below, this one reaches the board on its own: the
+    // United States is a target, so a posting in Denver is shown and ranked
+    // rather than gated. It is only the metros it is not.
+    "us other": "elsewhere in the US",
     // Only ever a *second* hub on this page. Everything whose only place is
     // the rest of Sweden, Denmark or the Netherlands is gated before it
     // reaches `data.js`, so a card carrying one of these is a posting open in
@@ -1104,7 +1109,10 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     // priority order, so a card still leads with the place that matters most.
     { key: "hub", label: "Place", open: true,
       order: ["stockholm", "copenhagen", "amsterdam", "switzerland", "hong kong",
-              "singapore", "deprioritized", "unstated",
+              "singapore", "new york", "chicago", "boston",
+              // A target, so it is listed above `deprioritized` and below the
+              // metros -- which is exactly where it ranks.
+              "us other", "deprioritized", "unstated",
               // Never a posting's only place -- see the labels above.
               "sweden other", "denmark other", "netherlands other"],
       get: (j) => j.hub || ["unstated"] },
@@ -1218,9 +1226,13 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     { key: "worth", label: "Worth reading",
       apply: (s) => { s.sel.fit = ["apply_now", "strong", "plausible"]; },
       test: (j) => ["apply_now", "strong", "plausible"].includes(j.fit) },
+    // The nine focus hubs, which is `tagging._FOCUS_HUBS` spelled with spaces.
+    // `us other` is deliberately absent even though the board shows it: this
+    // preset is the metros, and the rest of the country ranks below them the
+    // same way the rest of Sweden would if it were shown.
     { key: "focus", label: "Focus hubs",
-      apply: (s) => { s.sel.hub = ["stockholm", "copenhagen", "amsterdam", "switzerland", "hong kong", "singapore"]; },
-      test: (j) => (j.hub || []).some((h) => h !== "deprioritized") },
+      apply: (s) => { s.sel.hub = ["stockholm", "copenhagen", "amsterdam", "switzerland", "hong kong", "singapore", "new york", "chicago", "boston"]; },
+      test: (j) => (j.hub || []).some((h) => h !== "deprioritized" && h !== "us other") },
     { key: "junior", label: "Junior-friendly",
       apply: (s) => { s.sel.sen = ["new_grad", "junior_0_2", "mid_3_5"]; },
       test: (j) => ["new_grad", "junior_0_2", "mid_3_5"].includes(j.sen) },
@@ -1349,25 +1361,56 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
 
   // --- grouping ------------------------------------------------------------
 
-  // A stack is one bucket, so a two-city posting groups under the first of its
-  // hubs -- the lexicon's priority order, so that is the one worth leading
-  // with. Filtering and the rail counts still see both; only the pile it sits
-  // in has to pick one.
-  const lead = (j) => (j.hub && j.hub[0]) || null;
+  // **A posting open in two cities belongs in both piles, and every key here
+  // returns a list so that it can be in them.** This used to group on
+  // `hub[0]`, the lexicon's priority order, and the comment said filtering and
+  // the rail counts still saw both places so only the pile had to pick one.
+  // That was the wrong trade: grouping *by place* is the one view whose entire
+  // question is "what is open in Copenhagen", and a Stockholm-and-Copenhagen
+  // seat answered it only under Stockholm. Anyone who filtered to Copenhagen
+  // and grouped by place saw the posting vanish into a pile named for a city
+  // they had just filtered out.
+  //
+  // A card rendering twice is the point rather than a cost: the two piles are
+  // two different questions and the posting is a true answer to both. Only the
+  // hub groupings multiply -- `firm` and `role` are single-valued and return a
+  // list of one.
+  //
+  // **But narrowed to the rail's own selection first**, or the piles
+  // contradict the filter. With only Copenhagen ticked, a
+  // Stockholm-and-Copenhagen seat otherwise built a one-member `stockholm`
+  // pile *as well as* joining the Copenhagen one, so the reader saw the same
+  // card twice under a filter naming a single city. Multiplying a card across
+  // the places it is open is the point; multiplying it across a place the
+  // reader has just excluded is not. The `kept.length ? ... : all` fallback is
+  // what handles `unstated`: the rail spells a hub-less card that way while
+  // `j.hub` is simply absent, so the selection can never intersect it and the
+  // card would otherwise fall out of every pile.
+  const hubsOf = (j) => {
+    const all = j.hub && j.hub.length ? j.hub : [null];
+    const picked = state.sel.hub;
+    if (!picked || !picked.length) return all;
+    const kept = all.filter((h) => picked.includes(h));
+    return kept.length ? kept : all;
+  };
 
   const GROUP_KEY = {
-    firm: (j) => j.firm,
-    "firm+hub": (j) => j.firm + "|" + (lead(j) || j.loc || "—"),
-    role: (j) => j.role || "unknown",
-    "role+hub": (j) => (j.role || "unknown") + "|" + (lead(j) || "—"),
-    hub: (j) => lead(j) || "unstated",
+    firm: (j) => [j.firm],
+    "firm+hub": (j) => hubsOf(j).map((h) => j.firm + "|" + (h || j.loc || "—")),
+    role: (j) => [j.role || "unknown"],
+    "role+hub": (j) => hubsOf(j).map((h) => (j.role || "unknown") + "|" + (h || "—")),
+    hub: (j) => hubsOf(j).map((h) => h || "unstated"),
   };
+  // Named from the *key* rather than from the first member, because one job now
+  // reaches several groups and `list[0].hub[0]` names only one of them -- a
+  // Copenhagen pile led by a posting whose first hub is Stockholm would
+  // otherwise be titled "Stockholm".
   const GROUP_NAME = {
     firm: (j) => j.firmName,
-    "firm+hub": (j) => `${j.firmName} · ${label(lead(j) || j.loc || "—")}`,
+    "firm+hub": (j, key) => `${j.firmName} · ${label(key.slice(j.firm.length + 1))}`,
     role: (j) => label(j.role || "unknown"),
-    "role+hub": (j) => `${label(j.role || "unknown")} · ${label(lead(j) || "anywhere")}`,
-    hub: (j) => label(lead(j) || "unstated"),
+    "role+hub": (j, key) => `${label(j.role || "unknown")} · ${label(key.split("|").slice(1).join("|") || "anywhere")}`,
+    hub: (j, key) => label(key),
   };
   const STACK_AT = 3;
 
@@ -1380,16 +1423,19 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     const seen = new Map();
     const out = [];
     for (const job of sorted) {
-      const k = key(job);
-      const at = seen.get(k);
-      if (at === undefined) {
-        seen.set(k, out.length);
-        out.push({ job, key: k, list: [job] });
-      } else {
-        out[at].list.push(job);
+      // Several keys per job where the grouping is by place, so the same
+      // posting joins every pile it is genuinely open in.
+      for (const k of key(job)) {
+        const at = seen.get(k);
+        if (at === undefined) {
+          seen.set(k, out.length);
+          out.push({ job, key: k, list: [job] });
+        } else {
+          out[at].list.push(job);
+        }
       }
     }
-    return out.map((u) => (u.list.length >= STACK_AT ? u : u.list.map((job) => ({ job })))).flat();
+    return out.map((u) => (u.list.length >= STACK_AT ? u : u.list.map((job) => ({ job, key: u.key })))).flat();
   }
 
   // --- rendering -----------------------------------------------------------
@@ -1489,8 +1535,13 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
   function stackHTML(unit) {
     const { list } = unit;
     const soonest = list.reduce((best, j) => (j.left !== null && j.left >= 0 && (best === null || j.left < best) ? j.left : best), null);
-    const name = GROUP_NAME[state.group](list[0]);
-    const hubs = [...new Set(list.flatMap((j) => j.hub || []))];
+    const name = GROUP_NAME[state.group](list[0], unit.key);
+    // Every place the members name, but the pile's own place first: a
+    // Copenhagen stack whose lead member is also in Stockholm would otherwise
+    // be chipped "stockholm" under a heading that says Copenhagen.
+    const mine = state.group.endsWith("hub") ? unit.key.split("|").pop() : null;
+    const hubs = [...new Set(list.flatMap((j) => j.hub || []))]
+      .sort((a, b) => (b === mine) - (a === mine));
     const best = list.reduce((r, j) => Math.max(r, FIT_RANK[j.fit || "unknown"]), 0);
     const peek = list.slice(0, 3).map((j) => `<li>${esc(j.title)}</li>`).join("");
 

@@ -42,6 +42,120 @@ def _posting(connection, ats, token, job_id, url, *, relevance="unknown"):
     connection.commit()
 
 
+class SecondQueueTest(unittest.TestCase):
+    """The placeholder queue, which does not care what the tagger decided.
+
+    A posting reading `2 Locations` is not one the tagger failed on -- it may
+    read perfectly and still sit under `unstated` on the board, because the
+    list endpoint published a count where the names were. So this arm is
+    filtered on the gates and on nothing else.
+    """
+
+    def _placeholder(self, connection, job_id, location, *, relevance, body=None):
+        connection.execute(
+            "INSERT INTO jobs (ats, token, job_id, title, location, description,"
+            " url, first_seen, last_seen) VALUES ('workday', 'acme|wd3|X', ?,"
+            " 'Analyst', ?, ?, NULL, '2026-08-20', '2026-08-20')",
+            (job_id, location, body),
+        )
+        connection.execute(
+            "INSERT INTO job_tags (ats, token, job_id, dimension, value,"
+            " confidence, tagger, tagged_at) VALUES ('workday', 'acme|wd3|X', ?,"
+            " 'relevance', ?, 'weak', ?, '2026-08-20')",
+            (job_id, relevance, tagging.TAGGER),
+        )
+        connection.commit()
+
+    def _ids(self, connection):
+        return {row["job_id"] for row in bodies.targets(connection, 50)}
+
+    def test_a_placeholder_is_queued_even_when_the_tagger_read_it_fine(self):
+        connection = _memory(self)
+        self._placeholder(connection, "/1", "2 Locations",
+                          relevance="relevant", body="a full description")
+        self.assertEqual(self._ids(connection), {"/1"})
+
+    def test_a_real_place_is_not_queued_for_its_location(self):
+        connection = _memory(self)
+        self._placeholder(connection, "/1", "New York, NY",
+                          relevance="relevant", body="a full description")
+        self.assertEqual(self._ids(connection), set())
+
+    def test_a_gated_posting_stays_out_of_both_queues(self):
+        """A posting already off the board for being another profession does
+        not come back by acquiring an address."""
+        connection = _memory(self)
+        self._placeholder(connection, "/1", "3 Locations", relevance="rejected")
+        connection.execute(
+            "INSERT INTO job_tags (ats, token, job_id, dimension, value,"
+            " confidence, tagger, tagged_at) VALUES ('workday', 'acme|wd3|X', '/1',"
+            " 'exclusion_reason', 'off_industry', 'strong', ?, '2026-08-20')",
+            (tagging.TAGGER,),
+        )
+        connection.commit()
+        self.assertEqual(self._ids(connection), set())
+
+    def test_a_posting_in_both_queues_is_returned_once(self):
+        """`UNION` rather than `UNION ALL`, or the pass fetches it twice."""
+        connection = _memory(self)
+        self._placeholder(connection, "/1", "2 Locations", relevance="unknown")
+        self.assertEqual(
+            [row["job_id"] for row in bodies.targets(connection, 50)], ["/1"])
+
+
+class SpreadTest(unittest.TestCase):
+    """The queue is fetched round-robin over hosts, not in the order selected.
+
+    `http._throttle` books its interval per host, so a queue clustered by
+    tenant makes a twelve-thread pool behave like a one-thread one.
+    """
+
+    def _row(self, ats, token, job_id="/1"):
+        return {"ats": ats, "token": token, "job_id": job_id, "url": None,
+                "location": None}
+
+    def test_the_hosts_alternate(self):
+        rows = [self._row("workday", "a|wd3|X", f"/a{i}") for i in range(3)]
+        rows += [self._row("workday", "b|wd3|X", f"/b{i}") for i in range(3)]
+        got = [bodies._host_of(r) for r in bodies._spread(rows)]
+        self.assertEqual([h.split("//")[1].split(".")[0] for h in got],
+                         ["a", "b", "a", "b", "a", "b"])
+
+    def test_nothing_is_dropped_or_duplicated(self):
+        rows = [self._row("workday", "a|wd3|X", f"/a{i}") for i in range(5)]
+        rows += [self._row("workday", "b|wd3|X", "/b0")]
+        rows += [self._row("jobbsafari", "sweden", "/s0")]
+        spread = bodies._spread(rows)
+        self.assertEqual(len(spread), len(rows))
+        self.assertEqual({r["job_id"] for r in spread}, {r["job_id"] for r in rows})
+
+    def test_each_hosts_own_order_is_kept(self):
+        """Selection is `targets`' decision; this only reorders across hosts.
+        A host's rows must still arrive newest-first within that host."""
+        rows = [self._row("workday", "a|wd3|X", f"/a{i}") for i in range(4)]
+        rows += [self._row("workday", "b|wd3|X", "/b0")]
+        mine = [r["job_id"] for r in bodies._spread(rows)
+                if r["job_id"].startswith("/a")]
+        self.assertEqual(mine, ["/a0", "/a1", "/a2", "/a3"])
+
+    def test_one_myworkdaysite_host_is_shared_by_every_tenant(self):
+        """On that host the subdomain is a bare `wdN`, so keying on the tenant
+        would spread rows that cannot be spread."""
+        a = self._row("workday", "alpha|wd3|X|myworkdaysite.com")
+        b = self._row("workday", "beta|wd3|Y|myworkdaysite.com")
+        self.assertEqual(bodies._host_of(a), bodies._host_of(b))
+        # ...and the ordinary host still separates them.
+        c = self._row("workday", "alpha|wd3|X")
+        d = self._row("workday", "beta|wd3|Y")
+        self.assertNotEqual(bodies._host_of(c), bodies._host_of(d))
+
+    def test_a_malformed_token_does_not_raise(self):
+        """It still has to be fetched (and rejected) rather than crash the
+        pass before a single request goes out."""
+        self.assertEqual(bodies._host_of(self._row("workday", "acme")),
+                         "workday:malformed")
+
+
 class TargetsTest(unittest.TestCase):
     def test_the_queue_carries_the_url(self):
         """The Jobbsafari fetcher reads it, and a missing column reads as a
@@ -84,9 +198,12 @@ class JobbsafariBodyTest(unittest.TestCase):
 
         with mock.patch.object(bodies.jobbsafari, "build_id", return_value="B/sv-SE"):
             with mock.patch.object(bodies.http, "get_text", side_effect=fake):
-                body = bodies.jobbsafari_body(
+                got = bodies.jobbsafari_body(
                     self._row("https://jobbsafari.se/jobb/analytiker-abcde-99"))
-        self.assertEqual(body, "Vi söker en analytiker.")
+        self.assertEqual(got.description, "Vi söker en analytiker.")
+        # Jobbsafari publishes one place and the list endpoint already has
+        # it, so this fetcher has nothing to add to the location.
+        self.assertIsNone(got.location)
         self.assertEqual(
             seen,
             ["https://jobbsafari.se/_next/data/B/sv-SE/jobb/analytiker-abcde-99.json"])
@@ -94,7 +211,8 @@ class JobbsafariBodyTest(unittest.TestCase):
     def test_a_posting_with_no_usable_url_is_skipped_rather_than_guessed(self):
         for url in (None, "", "https://jobbsafari.se/lediga-jobb"):
             with self.subTest(url=url):
-                self.assertIsNone(bodies.jobbsafari_body(self._row(url)))
+                self.assertEqual(bodies.jobbsafari_body(self._row(url)),
+                                 bodies.Fetched(None, None))
 
     def test_a_stale_deploy_id_is_refreshed_once(self):
         payload = json.dumps({"pageProps": {"jobEntry": {"description": "text here"}}})
@@ -110,15 +228,17 @@ class JobbsafariBodyTest(unittest.TestCase):
                                side_effect=["STALE/sv-SE", "FRESH/sv-SE"]):
             with mock.patch.object(bodies.http, "get_text", side_effect=fake):
                 self.assertEqual(
-                    bodies.jobbsafari_body(self._row("https://jobbsafari.se/jobb/a-1")),
+                    bodies.jobbsafari_body(
+                        self._row("https://jobbsafari.se/jobb/a-1")).description,
                     "text here")
 
     def test_a_posting_the_board_has_dropped_returns_nothing(self):
         with mock.patch.object(bodies.jobbsafari, "build_id", return_value="B/sv-SE"):
             with mock.patch.object(bodies.http, "get_text",
                                    return_value=json.dumps({"pageProps": {}})):
-                self.assertIsNone(
-                    bodies.jobbsafari_body(self._row("https://jobbsafari.se/jobb/a-1")))
+                self.assertEqual(
+                    bodies.jobbsafari_body(self._row("https://jobbsafari.se/jobb/a-1")),
+                    bodies.Fetched(None, None))
 
 
 class WorkdayBodyTest(unittest.TestCase):
@@ -145,8 +265,93 @@ class WorkdayBodyTest(unittest.TestCase):
         ])
 
     def test_a_malformed_token_is_skipped(self):
-        self.assertIsNone(bodies.workday_body(self._row("acme", "/job/1")))
-        self.assertIsNone(bodies.workday_body(self._row("acme|wd3|External", "")))
+        self.assertEqual(bodies.workday_body(self._row("acme", "/job/1")),
+                         bodies.Fetched(None, None))
+        self.assertEqual(bodies.workday_body(self._row("acme|wd3|External", "")),
+                         bodies.Fetched(None, None))
+
+    def test_the_detail_page_spells_out_what_the_list_summarised(self):
+        """`2 Locations` is the largest single thing in the `hub: unknown`
+        bucket and it is not a posting that named no place -- it is one that
+        named several, summarised by a field too narrow to hold them."""
+        payload = json.dumps({"jobPostingInfo": {
+            "jobDescription": "<p>Body</p>",
+            "location": "Nashville, Tennessee",
+            "additionalLocations": ["New York, New York"],
+        }})
+        with mock.patch.object(bodies.http, "get_text", return_value=payload):
+            got = bodies.workday_body(self._row("acme|wd3|External", "/job/1"))
+        self.assertEqual(got.location, "Nashville, Tennessee; New York, New York")
+
+    def test_a_repeated_location_is_published_twice_and_stored_once(self):
+        """Some tenants echo `location` into `additionalLocations`, so the two
+        fields must be unioned rather than concatenated."""
+        payload = json.dumps({"jobPostingInfo": {
+            "jobDescription": "<p>Body</p>",
+            "location": "Minneapolis, Minnesota",
+            "additionalLocations": ["Minneapolis, Minnesota"],
+        }})
+        with mock.patch.object(bodies.http, "get_text", return_value=payload):
+            got = bodies.workday_body(self._row("acme|wd3|External", "/job/1"))
+        self.assertEqual(got.location, "Minneapolis, Minnesota")
+
+    def test_a_posting_with_no_places_published_yields_none(self):
+        payload = json.dumps({"jobPostingInfo": {"jobDescription": "<p>Body</p>"}})
+        with mock.patch.object(bodies.http, "get_text", return_value=payload):
+            got = bodies.workday_body(self._row("acme|wd3|External", "/job/1"))
+        self.assertEqual(got.description, "Body")
+        self.assertIsNone(got.location)
+
+
+class UnresolvedPlaceTest(unittest.TestCase):
+    """Which stored locations this pass is allowed to overwrite.
+
+    `N Locations` is a *count*, and the names behind it are strictly more than
+    it says, so replacing it loses nothing. `Remote` is not: the detail
+    endpoint answers it with the requisition's anchor office, and writing that
+    would pin a remote posting to a city nobody has to travel to.
+    """
+
+    def test_the_count_is_a_placeholder(self):
+        for value in ("2 Locations", "10 Locations", " 3 locations ", "1 Location"):
+            with self.subTest(value=value):
+                self.assertTrue(bodies._UNRESOLVED.match(value))
+
+    def test_a_real_place_is_not(self):
+        for value in ("Remote", "New York, NY", "2 Locations in Texas",
+                      "Stockholm", "", "Locations"):
+            with self.subTest(value=value):
+                self.assertFalse(bodies._UNRESOLVED.match(value))
+
+
+class WritesBothHalvesTest(unittest.TestCase):
+    """Either half of a fetch may be missing and neither may blank the other."""
+
+    def _connection(self):
+        connection = db.connect(":memory:")
+        connection.executescript(tagging.SCHEMA)
+        connection.execute(
+            "INSERT INTO jobs (ats, token, job_id, title, location, description,"
+            " first_seen, last_seen) VALUES"
+            " ('workday', 'acme|wd3|X', '/1', 'Analyst', '2 Locations', 'held',"
+            "  '2026-01-01', '2026-01-01')")
+        return connection
+
+    def test_a_location_alone_does_not_blank_the_body(self):
+        connection = self._connection()
+        bodies._write(connection, [(None, "Boston, MA", "workday", "acme|wd3|X", "/1")])
+        row = connection.execute(
+            "SELECT description, location FROM jobs").fetchone()
+        self.assertEqual(row["description"], "held")
+        self.assertEqual(row["location"], "Boston, MA")
+
+    def test_a_body_alone_does_not_blank_the_location(self):
+        connection = self._connection()
+        bodies._write(connection, [("new text", None, "workday", "acme|wd3|X", "/1")])
+        row = connection.execute(
+            "SELECT description, location FROM jobs").fetchone()
+        self.assertEqual(row["description"], "new text")
+        self.assertEqual(row["location"], "2 Locations")
 
 
 if __name__ == "__main__":
@@ -165,7 +370,7 @@ class RetiresStaleVerdictTest(unittest.TestCase):
     def test_current_version_tags_go(self):
         connection = _memory(self)
         _posting(connection, "jobbsafari", "sweden", "1", "https://x/jobb/a-1")
-        bodies._write(connection, [("a description", "jobbsafari", "sweden", "1")])
+        bodies._write(connection, [("a description", None, "jobbsafari", "sweden", "1")])
         self.assertEqual(
             connection.execute(
                 "SELECT description FROM jobs WHERE job_id = '1'"
@@ -191,7 +396,7 @@ class RetiresStaleVerdictTest(unittest.TestCase):
             (tagging.TAGGER - 1,),
         )
         connection.commit()
-        bodies._write(connection, [("a description", "jobbsafari", "sweden", "1")])
+        bodies._write(connection, [("a description", None, "jobbsafari", "sweden", "1")])
         self.assertEqual(
             connection.execute(
                 "SELECT COUNT(*) n FROM job_tags WHERE job_id = '1' AND tagger = ?",

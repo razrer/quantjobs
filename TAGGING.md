@@ -58,7 +58,7 @@ Multi-valued: `asset_class`, `hard_gates`, `horizon`, `language`,
 | `spoken_language` | a language the posting *requires*, or `none` |
 | `posting_language` | ISO code of the language it is *written* in, `cjk`, or `unknown` |
 | `contract` | `permanent` · `fixed_term` · `internship` · `contractor` · `part_time` · `unknown` |
-| `hub` | the six focus hubs · `deprioritized` · `sweden_other` · `denmark_other` · `netherlands_other` · `other` · `unknown` |
+| `hub` | the nine focus hubs · `us_other` · `deprioritized` · `sweden_other` · `denmark_other` · `netherlands_other` · `other` · `unknown` |
 | `exclusion_reason` | why a posting ranks down or comes off the board |
 | `fit` | `apply_now` · `strong` · `plausible` · `stretch` · `out_of_scope` · `unknown` |
 

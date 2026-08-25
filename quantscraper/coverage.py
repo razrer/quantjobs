@@ -266,5 +266,16 @@ def by_hub(connection: sqlite3.Connection):
 
 
 def unmeasured_hubs(connection: sqlite3.Connection) -> list[str]:
-    """Focus hubs with no second source, so no coverage claim is possible."""
-    return ["copenhagen", "amsterdam", "switzerland", "hong_kong", "singapore"]
+    """Focus hubs with no second source, so no coverage claim is possible.
+
+    **Derived rather than listed.** This was a hand-copy of the focus hubs
+    minus Stockholm, and a hand-copy of a hub list goes stale the moment one is
+    added -- `labels._NEARBY` had the same shape and the same fault. Promoting
+    the United States would have left this printing five hubs while nine
+    existed, quietly claiming New York, Chicago and Boston were measured when
+    nothing had measured them.
+
+    JobStream speaks for Stockholm and for nowhere else, which is the whole of
+    what makes a hub measurable here.
+    """
+    return sorted(tagging._FOCUS_HUBS - {SECOND_SOURCE_HUB})

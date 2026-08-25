@@ -795,6 +795,51 @@ class AccentFoldingTest(unittest.TestCase):
         self.assertIn(" cplusplus ", tagging.fold("Strong C++ skills"))
 
 
+class HubTableIsSelfConsistentTest(unittest.TestCase):
+    """The three hub sets must agree, because four modules read them.
+
+    They drifted once already: `labels._NEARBY` was a hand-copy of the focus
+    list, so a hub added here would have left the labelling sheet ranking New
+    York level with Bucharest. These assertions are cheap and the failure they
+    catch is silent.
+    """
+
+    def test_every_named_hub_is_classified(self):
+        """A value in `_HUBS` that is in neither `BOARD_HUBS` nor a residual is
+        a place the tagger names and nothing acts on."""
+        residual = set(tagging._RESIDUAL_OF)
+        for name in tagging._HUBS:
+            with self.subTest(hub=name):
+                self.assertTrue(
+                    name in tagging.BOARD_HUBS or name in residual,
+                    f"{name} is named by the lexicon and read by nothing")
+
+    def test_the_focus_hubs_are_all_shown(self):
+        self.assertTrue(tagging._FOCUS_HUBS <= tagging.BOARD_HUBS)
+
+    def test_the_residual_targets_are_real_hubs(self):
+        for residual, focus in tagging._RESIDUAL_OF.items():
+            with self.subTest(residual=residual):
+                self.assertIn(residual, tagging._HUBS)
+                self.assertTrue(focus <= set(tagging._HUBS))
+                # A residual's country words must be findable in its own tuple,
+                # or `_residual` drops a bucket on a needle it cannot re-derive.
+                self.assertTrue(
+                    tagging._COUNTRY_WORDS[residual] <= set(tagging._HUBS[residual]))
+
+    def test_the_labelling_sheet_reads_the_same_list(self):
+        from quantscraper import labels
+        self.assertEqual(labels._NEARBY, tagging.BOARD_HUBS - {"unknown"})
+
+    def test_the_coverage_report_reads_the_same_list(self):
+        """`unmeasured_hubs` was the third hand-copy. A focus hub missing from
+        it is a hub the report silently claims to have measured."""
+        from quantscraper import coverage
+        self.assertEqual(
+            set(coverage.unmeasured_hubs(None)),
+            tagging._FOCUS_HUBS - {coverage.SECOND_SOURCE_HUB})
+
+
 class GeographyGatesTest(unittest.TestCase):
     """Geography ranked and now gates, at the reader's request. That makes
     every imprecision in `_HUBS` a deleted posting rather than a mis-rank."""
@@ -829,12 +874,18 @@ class GeographyGatesTest(unittest.TestCase):
         self.assertEqual(self._hub("2 Locations"), "unknown")
         self.assertFalse(self._gated("2 Locations"))
 
-    def test_a_us_state_code_is_semi_target_not_elsewhere(self):
+    def test_a_us_state_code_is_a_target_not_elsewhere(self):
         """No US city list is ever finished; the state code is the handle. 5,987
-        postings were being gated out of a geography that is kept."""
-        for location in ("Cincinnati, OH", "Waltham, MA", "Holland, MI"):
+        postings were being gated out of a geography that is kept.
+
+        A state is not a metro, so the fallback always lands in `us_other` --
+        `Waltham` reaches Boston because it is named in the belt, not because
+        `, MA` is."""
+        for location, hub in (("Cincinnati, OH", "us_other"),
+                              ("Holland, MI", "us_other"),
+                              ("Waltham, MA", "boston")):
             with self.subTest(location=location):
-                self.assertEqual(self._hub(location), "deprioritized")
+                self.assertEqual(self._hub(location), hub)
                 self.assertFalse(self._gated(location))
 
     def test_a_state_code_is_never_read_from_the_title(self):
@@ -1037,16 +1088,85 @@ class SwissTradesTest(unittest.TestCase):
             _posting(title="Analyst, SO and GE reporting", location="Bangalore, India"))
         self.assertNotIn("switzerland", [t.value for t in tags if t.dimension == "hub"])
 
-    def test_the_three_colliding_codes_stay_american(self):
-        """`AR`, `NE` and `FL` are also Arkansas, Nebraska and Florida, and both
-        readings are live here. Both labels keep the posting on the board, so
-        the only question is which one is wrong -- and a false hit in a focus
-        hub is worse than a false miss."""
-        for place in ("Omaha, NE", "Hot Springs, AR", "Orlando, FL"):
+    def test_ar_and_ne_read_as_cantons_and_fl_as_florida(self):
+        """`AR`, `NE` and `FL` are cantons and states at once, and the tie-break
+        changed when the United States became a target geography.
+
+        It used to be "a false hit in a focus hub is worse than a false miss",
+        which put all three on the American side while only Switzerland was
+        focus. With both sides focus that rule says nothing, so the answer is
+        the count: `, AR` is 235 postings and all of them Appenzell, `, NE` is
+        419 of which 380 are Neuchâtel, and `, FL` is 980 of which 938 are
+        Florida."""
+        for place, hub in (("Neuchâtel, NE", "switzerland"),
+                           ("Herisau, AR", "switzerland"),
+                           ("Orlando, FL", "us_other")):
             with self.subTest(place=place):
                 tags = tagging.tag_posting(_posting(title="Analyst", location=place))
                 self.assertEqual(
-                    [t.value for t in tags if t.dimension == "hub"], ["deprioritized"])
+                    [t.value for t in tags if t.dimension == "hub"], [hub])
+
+    def test_nebraskas_head_count_survives_that_move(self):
+        """`_HUBS` is read before the canton pattern, so naming the city is what
+        keeps Omaha American -- 29 of Nebraska's 39 postings say it."""
+        tags = tagging.tag_posting(_posting(title="Analyst", location="Omaha, NE"))
+        self.assertEqual(
+            [t.value for t in tags if t.dimension == "hub"], ["us_other"])
+
+    def test_liechtenstein_is_filed_with_switzerland_not_florida(self):
+        """`FL` staying a state code leaves Vaduz and Schaan to be named, and
+        job-room.ch files them under Switzerland for the same reason."""
+        tags = tagging.tag_posting(_posting(title="Analyst", location="Vaduz, FL"))
+        self.assertEqual(
+            [t.value for t in tags if t.dimension == "hub"], ["switzerland"])
+
+    def test_a_lowercase_country_code_is_not_a_state(self):
+        """An ATS writes the *country* in lowercase, so case-folding this
+        pattern claimed Bengaluru for Indiana and Berlin for Delaware. `\\b` let
+        a full stop close the match, which read `Co. Dublin` as Colorado 37
+        times."""
+        for place in ("Bengaluru, in", "Berlin, de", "Casablanca, ma",
+                      "Dublin, Co. Dublin, Ireland"):
+            with self.subTest(place=place):
+                tags = tagging.tag_posting(_posting(title="Analyst", location=place))
+                hubs = [t.value for t in tags if t.dimension == "hub"]
+                self.assertNotIn("us_other", hubs)
+
+    def test_a_state_written_before_the_city_is_reached_by_the_city(self):
+        """Some tenants write `CT - Hartford`, which no `, XX` pattern sees --
+        267 postings sat unplaced and were gated as `other`."""
+        for place in ("CT - Hartford", "CT - Hartford; MN - St. Paul",
+                      "TX - Richardson", "GA - Alpharetta"):
+            with self.subTest(place=place):
+                tags = tagging.tag_posting(_posting(title="Analyst", location=place))
+                self.assertEqual(
+                    [t.value for t in tags if t.dimension == "hub"], ["us_other"])
+
+    def test_and_a_prefix_pattern_would_have_claimed_five_countries(self):
+        """Why those are cities and not a rule. `XX - City` is also how the
+        same tenants write *country* - city, and restricting a pattern to codes
+        that are not ISO country codes still leaks: `ID` is Indonesia and `IL`
+        is Israel as readily as Idaho and Illinois."""
+        for place in ("IN - Bengaluru, India", "CO - Bogota, Colombia",
+                      "CA - Toronto", "ID - Jakarta", "IL - Tel Aviv"):
+            with self.subTest(place=place):
+                tags = tagging.tag_posting(_posting(title="Analyst", location=place))
+                self.assertNotIn(
+                    "us_other", [t.value for t in tags if t.dimension == "hub"])
+
+    def test_the_two_codes_that_are_mostly_foreign_are_off_the_list(self):
+        """`, IN` is more Bangalore than Indiana and `, DE` more Stuttgart than
+        Delaware, so the American half of each is reached by name instead."""
+        for place in ("Bangalore, IN", "Stuttgart, DE"):
+            with self.subTest(place=place):
+                tags = tagging.tag_posting(_posting(title="Analyst", location=place))
+                self.assertNotIn(
+                    "us_other", [t.value for t in tags if t.dimension == "hub"])
+        for place in ("Indianapolis, IN", "Wilmington, DE"):
+            with self.subTest(place=place):
+                tags = tagging.tag_posting(_posting(title="Analyst", location=place))
+                self.assertEqual(
+                    [t.value for t in tags if t.dimension == "hub"], ["us_other"])
 
     def test_no_swiss_needle_gates_a_quant_title(self):
         for title in ("Quantitative Analyst", "Quantitative Researcher",
@@ -1171,7 +1291,7 @@ class MultiLocationTest(unittest.TestCase):
     def test_three_places_are_all_recorded(self):
         self.assertEqual(
             self._hubs("Hong Kong, Singapore, New York"),
-            ["hong_kong", "singapore", "deprioritized"])
+            ["hong_kong", "singapore", "new_york"])
 
     def test_one_place_on_the_board_is_enough_to_stay(self):
         """The gate must fire on "nowhere the reader would go", never on
@@ -1211,7 +1331,43 @@ class MultiLocationTest(unittest.TestCase):
     def test_one_place_still_yields_one_hub(self):
         self.assertEqual(self._hubs("Stockholm, Sweden"), ["stockholm"])
         self.assertEqual(self._hubs("2 Locations"), ["unknown"])
-        self.assertEqual(self._hubs("Cincinnati, OH"), ["deprioritized"])
+        self.assertEqual(self._hubs("Cincinnati, OH"), ["us_other"])
+
+    def test_an_american_metro_does_not_double_up_with_its_own_state(self):
+        """`us_other` is the complement of all three metros at once, so a
+        posting naming a metro and its state names one place. The residual rule
+        had one focus hub per bucket until the United States arrived with
+        three."""
+        self.assertEqual(self._hubs("Chicago, Illinois"), ["chicago"])
+        self.assertEqual(self._hubs("Boston, Massachusetts"), ["boston"])
+        self.assertEqual(self._hubs("New York, New York"), ["new_york"])
+        self.assertEqual(self._hubs("Jersey City, New Jersey"), ["new_york"])
+
+    def test_but_a_real_second_american_city_survives_it(self):
+        """The same asymmetry `Copenhagen, Aarhus` pins: a residual is dropped
+        only when every needle it matched was the containing region."""
+        self.assertEqual(
+            self._hubs("Chicago, Denver"), ["chicago", "us_other"])
+        self.assertEqual(
+            self._hubs("Springfield, Illinois"), ["us_other"])
+
+    def test_two_american_metros_are_both_recorded(self):
+        self.assertEqual(self._hubs("New York, Chicago"), ["new_york", "chicago"])
+
+    def test_the_form_bodies_writes_resolves_into_every_place(self):
+        """`bodies.workday_body` joins the detail endpoint's place list with
+        `; `, replacing the `N Locations` count the list endpoint published.
+        That string has to read as several places or the fetch bought nothing
+        -- 8,004 postings sat in `hub: unknown` on that summary."""
+        self.assertEqual(
+            self._hubs("Nashville, Tennessee; New York, New York"),
+            ["new_york", "us_other"])
+        self.assertEqual(
+            self._hubs("Stockholm, Sweden; Copenhagen, Denmark"),
+            ["stockholm", "copenhagen"])
+        # And the placeholder itself stays `unknown` rather than `other`, so a
+        # posting whose fetch has not happened yet is still shown.
+        self.assertEqual(self._hubs("2 Locations"), ["unknown"])
 
     def test_a_focus_hub_among_several_keeps_the_fit_notch_off(self):
         """`_fit` reads the set: an Amsterdam-and-Milan posting is not

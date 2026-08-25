@@ -45,8 +45,30 @@ import sqlite3
 import threading
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor
+from typing import NamedTuple
 
 from . import db, http, jobbsafari, tagging
+
+
+class Fetched(NamedTuple):
+    """What a detail page yielded. Either half may be missing.
+
+    `location` exists because Workday's detail endpoint answers two questions
+    at once and the second one was being thrown away -- see `workday_body`. A
+    fetcher with nothing to add there returns None and nothing is written.
+    """
+
+    description: str | None
+    location: str | None
+
+
+# **The shape Workday publishes instead of a place**, and the only location
+# this pass is allowed to overwrite. `Remote` is deliberately not here: the
+# detail endpoint answers it with the requisition's anchor office, so treating
+# it as a placeholder would pin a remote posting to a city nobody has to go to.
+# `N Locations` makes no such claim -- it is a count, and the names behind it
+# are strictly more than it says.
+_UNRESOLVED = re.compile(r"^\s*\d+\s+locations?\s*$", re.IGNORECASE)
 
 _TAGS = re.compile(r"<[^>]+>")
 
@@ -63,36 +85,78 @@ def _clean(html: str | None) -> str | None:
     return " ".join(_TAGS.sub(" ", html).split())[:_MAX_BODY] or None
 
 
-def workday_body(row) -> str | None:
-    """The description for one Workday posting.
+def _workday_origin(token: str) -> str | None:
+    """`https://host` for a Workday token, or None if it is malformed.
 
-    `token` is `tenant|wdN|site[|host]` and `job_id` is the `externalPath` the
-    list endpoint returned, which is exactly what the detail endpoint appends.
-    Both Workday hosts are handled the same way they are in `extract.workday`.
+    Its own function because the *throttle* is per host and this pass now has
+    to know which host a row will hit before it fetches it -- see `_spread`.
     """
-    token, path = row["token"], row["job_id"]
     parts = token.split("|")
-    if len(parts) not in (3, 4) or not path:
+    if len(parts) not in (3, 4):
         return None
-    tenant, wd, site = parts[:3]
+    tenant, wd = parts[0], parts[1]
     host = parts[3] if len(parts) == 4 else "myworkdayjobs.com"
-    origin = (
+    # On `myworkdaysite.com` the subdomain is a bare `wdN`, so every tenant
+    # there shares one host and one throttle slot. That is the case worth
+    # getting right: keying on the tenant would spread rows that cannot be
+    # spread and quietly re-cluster them.
+    return (
         f"https://{wd}.{host}"
         if host == "myworkdaysite.com"
         else f"https://{tenant}.{wd}.{host}"
     )
+
+
+def workday_body(row) -> Fetched:
+    """The description *and the real locations* for one Workday posting.
+
+    `token` is `tenant|wdN|site[|host]` and `job_id` is the `externalPath` the
+    list endpoint returned, which is exactly what the detail endpoint appends.
+    Both Workday hosts are handled the same way they are in `extract.workday`.
+
+    **Workday's list endpoint summarises a multi-site requisition as `2
+    Locations` and its detail endpoint spells them out.** That summary is the
+    single largest thing in the `hub: unknown` bucket -- 8,004 postings, 58% of
+    it -- and it is not a posting that named no place, it is a posting that
+    named several and was read by a field too narrow to hold them. Both halves
+    of that matter: the board says `unstated` where the answer is knowable, and
+    a seat open in Stockholm *and* Copenhagen is exactly the posting that
+    should appear under both.
+
+    `additionalLocations` repeats `location` on some tenants and extends it on
+    others, so the two are unioned and de-duplicated in published order.
+    """
+    token, path = row["token"], row["job_id"]
+    origin = _workday_origin(token)
+    if origin is None or not path:
+        return Fetched(None, None)
+    tenant, _, site = token.split("|")[:3]
     url = f"{origin}/wday/cxs/{tenant}/{site}{path}"
     try:
         payload = json.loads(http.get_text(url, timeout=25, retries=1))
     except (urllib.error.HTTPError, urllib.error.URLError, ValueError,
             TimeoutError, OSError):
-        return None
+        return Fetched(None, None)
     except Exception:  # noqa: BLE001 -- one hostile tenant must not stop the run
-        return None
+        return Fetched(None, None)
     info = payload.get("jobPostingInfo")
     if not isinstance(info, dict):
-        return None
-    return _clean(info.get("jobDescription"))
+        return Fetched(None, None)
+    return Fetched(_clean(info.get("jobDescription")), _workday_places(info))
+
+
+def _workday_places(info: dict) -> str | None:
+    """`location` and `additionalLocations` as one `; `-joined string.
+
+    Joined with a semicolon because that is what the hub reader already treats
+    as a list separator, and de-duplicated because a tenant that publishes only
+    one place publishes it twice -- once in each field.
+    """
+    places: list[str] = []
+    for value in [info.get("location"), *(info.get("additionalLocations") or [])]:
+        if isinstance(value, str) and (value := value.strip()) and value not in places:
+            places.append(value)
+    return "; ".join(places) or None
 
 
 # One deploy id for the whole run. **Behind a lock, because this pass runs
@@ -122,7 +186,7 @@ def _jobbsafari_deploy(*, refresh: bool = False) -> str | None:
         return _JOBBSAFARI_DEPLOY[0]
 
 
-def jobbsafari_body(row) -> str | None:
+def jobbsafari_body(row) -> Fetched:
     """The description for one Jobbsafari posting.
 
     **The slug is required and cannot be synthesised.** It ends in the posting
@@ -137,22 +201,23 @@ def jobbsafari_body(row) -> str | None:
     """
     url = row["url"]
     if not url or "/jobb/" not in url:
-        return None
+        return Fetched(None, None)
     slug = url.rsplit("/jobb/", 1)[1].split("?")[0]
     for attempt in (0, 1):
         # A deploy mid-pass 404s an id that worked a second ago, so the second
         # attempt asks for a fresh one.
         deploy = _jobbsafari_deploy(refresh=bool(attempt))
         if deploy is None:
-            return None
+            return Fetched(None, None)
         address = f"{jobbsafari.SITE}/_next/data/{deploy}/jobb/{slug}.json"
         try:
             payload = json.loads(http.get_text(address, timeout=25, retries=1))
         except Exception:  # noqa: BLE001 -- a 404, a timeout, a hostile page
             continue
         entry = payload.get("pageProps", {}).get("jobEntry")
-        return _clean(entry.get("description")) if isinstance(entry, dict) else None
-    return None
+        body = _clean(entry.get("description")) if isinstance(entry, dict) else None
+        return Fetched(body, None)
+    return Fetched(None, None)
 
 
 # Keyed on `jobs.ats`, and each fetcher takes the whole row: a posting is
@@ -162,73 +227,180 @@ FETCHERS = {"workday": workday_body, "jobbsafari": jobbsafari_body}
 
 
 def targets(connection: sqlite3.Connection, limit: int) -> list[sqlite3.Row]:
-    """Body-less postings whose verdict a body could actually change.
+    """Postings one detail fetch could change the answer for.
 
-    Ordered by whether the posting is still live, then by whether the tagger
-    already placed it somewhere the board keeps. A body fetched for a posting
-    already gated as another profession answers a question nobody asked.
+    **Two queues, because the detail page settles two different questions.**
+    The first is the original one: a body-less posting the tagger could not
+    place, ordered so that a posting already gated as another profession is
+    never fetched -- a body answers no question there.
+
+    The second is a posting whose *location* is Workday's `N Locations`
+    summary. That one is not filtered on `relevance` and not filtered on
+    whether a body is already held, because neither has anything to do with the
+    fault: the posting names several places, the list endpoint published a
+    count instead of the names, and the board consequently files it under
+    `unstated` however well it reads. It is still filtered on the gates, for
+    the same reason the first queue is.
+
+    **`UNION` rather than one `WHERE` with an `OR`.** The two arms want
+    different index paths and putting them in one predicate denies both: the
+    planner drove the whole thing from `job_tags_by_value (dimension=?)`,
+    scanning every relevance row in the corpus, and the pass took **34.6s** to
+    decide what to fetch. Split, the second arm needs no `job_tags` join at all
+    -- it does not care what the tagger made of the posting, only that the
+    location is a count -- and drives from `jobs`.
+
+    One `--limit` still bounds the whole pass, and `UNION` de-duplicates a
+    posting that is in both queues so it is fetched once.
     """
-    placeholders = ",".join("?" * len(FETCHERS))
+    boards = ",".join("?" * len(FETCHERS))
     return connection.execute(
         f"""
-        SELECT j.ats, j.token, j.job_id, j.url
-        FROM jobs j
-        JOIN job_tags r ON r.ats = j.ats AND r.token = j.token
-                       AND r.job_id = j.job_id
-                       AND r.dimension = 'relevance' AND r.tagger = ?
-        LEFT JOIN job_tags x ON x.ats = j.ats AND x.token = j.token
-                            AND x.job_id = j.job_id
-                            AND x.dimension = 'exclusion_reason'
-                            AND x.tagger = ?
-        WHERE j.ats IN ({placeholders})
-          AND (j.description IS NULL OR j.description = '')
-          AND j.removed_at IS NULL
-          -- The whole point of the queue: a posting the tagger could not
-          -- place. Anything it already decided needs no help.
-          AND r.value = 'unknown'
-          -- Not already gated off the board for being somewhere else or
-          -- something else. Those are 50,000 postings and none of them
-          -- becomes a quant job by acquiring a description.
-          AND x.value IS NULL
-        ORDER BY j.first_seen DESC
+        SELECT * FROM (
+            -- Queue one: the tagger could not place it and has no text to
+            -- place it with.
+            SELECT j.ats, j.token, j.job_id, j.url, j.location, j.first_seen
+            FROM jobs j
+            JOIN job_tags r ON r.ats = j.ats AND r.token = j.token
+                           AND r.job_id = j.job_id
+                           AND r.dimension = 'relevance' AND r.tagger = ?
+            LEFT JOIN job_tags x ON x.ats = j.ats AND x.token = j.token
+                                AND x.job_id = j.job_id
+                                AND x.dimension = 'exclusion_reason'
+                                AND x.tagger = ?
+            WHERE j.ats IN ({boards})
+              AND j.removed_at IS NULL
+              AND (j.description IS NULL OR j.description = '')
+              AND r.value = 'unknown'
+              -- Not already gated off the board for being somewhere else or
+              -- something else. Those are 50,000 postings and none of them
+              -- becomes a quant job by acquiring a description.
+              AND x.value IS NULL
+
+            UNION
+
+            -- Queue two: it named several places and the list endpoint gave us
+            -- the count. Not filtered on relevance, and no `r` join for the
+            -- same reason: how well a posting reads has nothing to do with
+            -- whether we know where it is. Still filtered on the gates, since
+            -- a posting already off the board for being another profession
+            -- does not come back by acquiring an address.
+            SELECT j.ats, j.token, j.job_id, j.url, j.location, j.first_seen
+            FROM jobs j
+            LEFT JOIN job_tags x ON x.ats = j.ats AND x.token = j.token
+                                AND x.job_id = j.job_id
+                                AND x.dimension = 'exclusion_reason'
+                                AND x.tagger = ?
+            WHERE j.ats IN ({boards})
+              AND j.removed_at IS NULL
+              AND x.value IS NULL
+              AND (j.location GLOB '[0-9]* Location'
+                   OR j.location GLOB '[0-9]* Locations')
+        )
+        ORDER BY first_seen DESC
         LIMIT ?
         """,
-        (tagging.TAGGER, tagging.TAGGER, *FETCHERS, limit),
+        (tagging.TAGGER, tagging.TAGGER, *FETCHERS,
+         tagging.TAGGER, *FETCHERS, limit),
     ).fetchall()
+
+
+def _host_of(row: sqlite3.Row) -> str:
+    """Which host this row's fetch will hit, for `_spread`.
+
+    `http._throttle` books its interval per host, so this is the resource the
+    pool is actually contending for. Jobbsafari is one site, so every row of it
+    shares a key -- correctly: they genuinely cannot be spread.
+    """
+    if row["ats"] == "workday":
+        return _workday_origin(row["token"]) or "workday:malformed"
+    return row["ats"]
+
+
+def _spread(rows: list[sqlite3.Row]) -> list[sqlite3.Row]:
+    """Round-robin the queue over its hosts, keeping each host's own order.
+
+    **A twelve-thread pool over a queue sorted by date is close to a
+    one-thread pool.** `targets` orders by `first_seen DESC` so a `--limit`
+    keeps the most promising rows -- and a board polled this morning
+    contributes its whole batch at once, so that ordering arrives clustered by
+    tenant. With `MIN_INTERVAL_S` booked per host, twelve workers then queue
+    behind one tenant's one-second slot: 335 consecutive `usbank` rows are 335
+    seconds however many threads are watching, and the run is the sum of those
+    stretches rather than the longest of them. Measured on the live queue, the
+    longest same-host run falls **335 -> 102** when the hosts are interleaved,
+    and the wall time with it -- roughly 90 minutes to roughly 12 for 5,372
+    rows.
+
+    **12 minutes is the floor and no ordering beats it.** The biggest tenant
+    contributes 723 rows and the throttle allows one a second, so a pass is
+    never shorter than its largest board. That is the number to check before
+    suspecting this function: if a run takes far longer, the queue has
+    re-clustered; if it takes about that, it is doing as well as politeness
+    permits.
+
+    **Selection and order are separate decisions and only the order changes
+    here.** `targets` still picks the newest rows; this only decides what to
+    fetch first among the rows already chosen, which is the same split the
+    `jobs` parallelisation had to make -- *spread the sample across hosts, or
+    a concurrency change measures nothing.*
+    """
+    queues: dict[str, list[sqlite3.Row]] = {}
+    for row in rows:
+        queues.setdefault(_host_of(row), []).append(row)
+    out: list[sqlite3.Row] = []
+    while queues:
+        for host in list(queues):
+            out.append(queues[host].pop(0))
+            if not queues[host]:
+                del queues[host]
+    return out
 
 
 def run(
     connection: sqlite3.Connection, limit: int, workers: int = 12
-) -> tuple[int, int]:
-    """Fill in missing descriptions. Returns (attempted, filled)."""
-    rows = targets(connection, limit)
-    if not rows:
-        return 0, 0
+) -> tuple[int, int, int]:
+    """Fill in missing descriptions and unresolved places.
 
-    def work(row: sqlite3.Row) -> tuple[sqlite3.Row, str | None]:
+    Returns (attempted, filled, placed). The last two are counted separately
+    because they are separate faults with separate cures, and one total would
+    hide a pass that fetched five thousand pages and resolved no location.
+    """
+    rows = _spread(targets(connection, limit))
+    if not rows:
+        return 0, 0, 0
+
+    def work(row: sqlite3.Row) -> tuple[sqlite3.Row, Fetched]:
         return row, FETCHERS[row["ats"]](row)
 
-    attempted = filled = 0
-    batch: list[tuple[str, str, str, str]] = []
+    attempted = filled = placed = 0
+    batch: list[tuple[str | None, str | None, str, str, str]] = []
     # Written in batches, like every other long pass here: this is tens of
     # minutes of network work and losing it to one exception means fetching
     # bodies we already have.
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        for row, body in pool.map(work, rows):
+        for row, got in pool.map(work, rows):
             attempted += 1
-            if not body:
+            body = got.description or None
+            # **Only ever over the placeholder.** A posting that published a
+            # real place keeps it: the detail endpoint is a second opinion, not
+            # a better one, and overwriting a good location with it would be a
+            # write nobody asked for on the strength of nothing.
+            where = got.location if _UNRESOLVED.match(row["location"] or "") else None
+            if not body and not where:
                 continue
-            filled += 1
-            batch.append((body, row["ats"], row["token"], row["job_id"]))
+            filled += bool(body)
+            placed += bool(where)
+            batch.append((body, where, row["ats"], row["token"], row["job_id"]))
             if len(batch) >= 100:
                 _write(connection, batch)
                 batch.clear()
     _write(connection, batch)
-    return attempted, filled
+    return attempted, filled, placed
 
 
 def _write(connection: sqlite3.Connection, batch) -> None:
-    """Store the descriptions, and retire the verdicts they were reached without.
+    """Store the descriptions and places, and retire the verdicts reached without them.
 
     **A body that arrives after the tag is a body the tagger never reads.**
     `tagging.postings` selects postings with no row at the *current* version,
@@ -253,15 +425,19 @@ def _write(connection: sqlite3.Connection, batch) -> None:
     if not batch:
         return
     with connection:
+        # `COALESCE` because either half may be missing: a row fetched for its
+        # body must not blank a location, and a row fetched for its location
+        # must not blank a body it already had.
         connection.executemany(
-            "UPDATE jobs SET description = ?"
+            "UPDATE jobs SET description = COALESCE(?, description),"
+            "                location = COALESCE(?, location)"
             " WHERE ats = ? AND token = ? AND job_id = ?",
             batch,
         )
         connection.executemany(
             "DELETE FROM job_tags"
             " WHERE ats = ? AND token = ? AND job_id = ? AND tagger = ?",
-            [(ats, token, job_id, tagging.TAGGER) for _, ats, token, job_id in batch],
+            [(ats, token, job_id, tagging.TAGGER) for *_, ats, token, job_id in batch],
         )
 
 

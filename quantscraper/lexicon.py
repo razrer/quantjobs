@@ -391,6 +391,31 @@ MARKETS = _terms(
     "structured finance", "spot trade", "market abuse",
     "middle office", "back office", "trade support", "securities lending",
     "repo", "money market",
+    # ----------------------------------------------------------------------
+    # **The American desk vocabulary, read off the postings the United States
+    # left at `relevance: unknown`.** Emptying that bucket from below with
+    # occupation words and from above with a markets reading is one repair, and
+    # doing only half of it makes the page worse -- so this is the other half of
+    # the American batch in `tagging._OFF_INDUSTRY`.
+    #
+    # `exchange traded` was already here and never matched, because the corpus
+    # writes **ETF**: Invesco and AllianceBernstein advertise `ETF Strategist`,
+    # `Sr. Equity ETF Strategist` and `Senior ETF Engineer, Investment
+    # Technology`, and all fourteen sat unread. `market making` is the same
+    # shape of omission one word over -- SIG's `C++ Developer | Options Market
+    # Making` and Marex's `Market Making Technology`.
+    #
+    # `portfolio implementation` is the one worth naming: ten postings, AQR's
+    # summer analyst and AllianceBernstein's associate among them, and it is
+    # execution and portfolio construction, which is the reader's own subject.
+    #
+    # **`secondaries` was dropped after reading what it promotes.** All eleven
+    # are private-equity, infrastructure and real-estate secondaries -- the
+    # `discretionary_investing` exclusion, arriving under a markets-sounding
+    # word.
+    "etf", "market making", "portfolio implementation", "reference data",
+    "multi asset", "investment grade", "high yield", "municipals",
+    "separately managed accounts",
 )
 
 

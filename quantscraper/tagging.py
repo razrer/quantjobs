@@ -36,7 +36,7 @@ from . import db, lexicon
 # Bump on every lexicon change: the diff between two versions over the same
 # corpus is a free regression test, and it is the only way to tell "the
 # classifier improved" from "the market moved".
-TAGGER = 48
+TAGGER = 50
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS job_tags (
@@ -1491,6 +1491,66 @@ _OFF_INDUSTRY = _terms(
     "recycling", "bauprozess", "einrichter", "wohnen",
     "facility management", "gebaudetechnik", "hausdienst",
     "hotellerie", "empfang", "rezeption", "telefonie",
+    # ----------------------------------------------------------------------
+    # **American English, because the United States became a target geography
+    # and this list had never been written against it.** The diagnosis is the
+    # one the Nordics gave: 3,385 American postings sat at `relevance:
+    # unknown`, the bucket that holds both the unread junk and the real desks,
+    # and they sorted together. This is the half that empties it from below.
+    #
+    # The vocabulary is genuinely different rather than merely absent. `nurse`,
+    # `medical` and `clinical` were already here and caught none of `LPN/MA/EMT`,
+    # `Cardiac Sonographer`, `Clinic Assistant`, `Dietary Aide` or `Health Unit
+    # Coordinator`; `janitor` caught no `Custodial Worker I`; and an American
+    # television group publishes through the same ATS platforms as the trading
+    # firms, so `WSMV-Station-Nashville` arrives mixed in with anchors,
+    # meteorologists and multimedia journalists.
+    #
+    # Dry-run over all 296,096 live postings. **Exactly one candidate touched a
+    # positively-rated posting and it is out**: `environmental services` reaches
+    # `Equity Research Associate - Environmental Services`, an equity research
+    # seat covering the sector. The aide's own title goes in instead.
+    #
+    # **Three more were dropped on the principle rather than the count**, all
+    # three clean on the numbers today:
+    #
+    # - `sales lead` is the `salesperson` argument again -- the English sales
+    #   words are too close to markets sales to gate on, and this list has
+    #   refused `sales associate` and `sales representative` for years.
+    # - `security officer` reaches `Chief Information Security Officer` seven
+    #   times. A CISO is not another profession, it is a corporate function, so
+    #   the reason would have been wrong even where the verdict was not.
+    #   `security guard` above already covers the doorman.
+    # - bare `advanced practice` reaches `Advanced Practice Wealth Banker`. The
+    #   two clinical compounds are exact and reach only clinicians.
+    "lpn", "emt", "cna", "sonographer", "phlebotomist", "phlebotomy",
+    "radiologic", "nurse practitioner", "registered nurse", "certified nursing",
+    "medical assistant", "medical technologist", "clinic assistant",
+    "dietary aide", "health unit coordinator", "respiratory therapist",
+    "occupational therapist", "surgical technologist", "hospitalist",
+    "advanced practice provider", "advanced practice clinician", "orthopedic",
+    "dental hygienist", "behavioral health", "pharmacy technician",
+    "patient care", "caregiver", "case manager", "paramedic",
+    # janitorial, grounds and building services
+    "custodial", "custodian", "environmental services aide", "groundskeeper",
+    "housekeeper", "facilities technician", "maintenance technician",
+    "building engineer", "hvac",
+    # broadcast newsrooms and in-house creative, which arrive through the same
+    # tenants as everything else
+    "art director", "creative director", "photojournalist", "meteorologist",
+    "news anchor", "multimedia journalist", "news producer", "reporter",
+    # retail floor, food service and residential leasing
+    "cashier", "store manager", "shift supervisor", "line cook", "food service",
+    "banquet", "barback", "valet", "leasing agent", "lifestyle coordinator",
+    "workplace experience",
+    # plant, trades and the dealership service bay
+    "controls engineer", "material handler", "machine operator", "millwright",
+    "tool and die", "cnc machinist", "assembler", "production supervisor",
+    "welder", "service technician", "automotive technician",
+    "diesel technician", "warehouse associate", "quality inspector",
+    "plant manager", "field technician", "police officer",
+    # campus jobs and the university's own administration
+    "federal work study", "admissions representative", "adjunct faculty",
 )
 
 # Deliberately absent, each after matching something real in the corpus:
@@ -1515,27 +1575,46 @@ _NO_PLACE = re.compile(
 # a different one** -- Jobindex a postcode, Jobbsafari a municipality,
 # job-room.ch a town and a canton code (`Wallisellen, ZH`). 18,562 Swiss
 # postings in a focus hub read as `other` before this, and 5,987 US ones read
-# as elsewhere while the US is semi-target.
+# as elsewhere.
 #
 # **Neither can go in `_HUBS`**, which matches `fold(location, title)`: `IN`,
 # `OR` and `DE` are English words as well as states, and `SO`, `BE` and `GE`
 # are ordinary words in a title. Matched here against the **location alone**,
 # anchored to the `, XX` shape an address takes.
 #
-# **Three cantons are missing and were measured rather than forgotten.** `AR`,
-# `NE` and `FL` are also Arkansas, Nebraska and Florida and both readings are
-# live here, with no text rule between them. Both labels stay on the board
-# either way, so the only question is which one is wrong -- and a false hit in
-# a focus hub is worse than a false miss.
+# **`AR` and `NE` moved from the states to the cantons when the US became a
+# focus geography, and the measurement is what moved them.** They were left off
+# this list while only Switzerland was focus, on the rule that a false hit in a
+# focus hub is worse than a false miss -- with both sides focus that tie-break
+# is void, so the question became simply which reading is right. Counted over
+# the corpus: `, AR` is 235 postings and every one is Appenzell Ausserrhoden
+# (Herisau, Teufen, Walzenhausen); `, NE` is 419, of which 380 are the canton
+# of Neuchâtel and 39 are Nebraska. `omaha` sits in `_HUBS` and `_HUBS` is read
+# first, so the Nebraska head count survives the move.
+#
+# `FL` stays a state: 980 postings, of which 938 are Florida. The 42 that are
+# not are Vaduz and Schaan, and those are named in the Swiss hub for the reason
+# job-room.ch files them there.
 _CH_CANTON = re.compile(
-    r",\s*(AG|AI|BL|BS|BE|FR|GE|GL|GR|JU|LU|NW|OW|SG|SH|SO|SZ|TG|TI|UR|VD|VS|ZG|ZH)"
+    r",\s*(AG|AI|AR|BL|BS|BE|FR|GE|GL|GR|JU|LU|NE|NW|OW|SG|SH|SO|SZ|TG|TI|UR|VD|VS|ZG|ZH)"
     r"\s*$"
 )
 
+# **Uppercase only, and `IN` and `DE` are deliberately absent.** Case-folding
+# this pattern cost more than it bought: an ATS writes the *country* code in
+# lowercase, so `, in` claimed Bengaluru for Indiana, `, de` Berlin and Mainz
+# for Delaware, `, ma` Casablanca for Massachusetts and `, ar` Buenos Aires for
+# Arkansas. `\b` cost the same way one step further out -- it lets a full stop
+# close the match, so `Dublin, Co. Dublin, Ireland` read as Colorado 37 times.
+#
+# The two codes that are still wrong more often than right in *upper* case are
+# out: `, IN` is 279 postings and more than half are Bangalore and Pune, `, DE`
+# is 190 and more than half are Glatten, Meerane and Stuttgart. Their American
+# half is reached by name instead -- `indianapolis`, `indiana`, `wilmington de`,
+# `dover de`, `delaware` are all in `_HUBS`, which is read first.
 _US_STATE = re.compile(
-    r",\s*(A[LKZR]|C[AOT]|DE|FL|GA|HI|I[ADLN]|K[SY]|LA|M[ADEINOST]|"
-    r"N[CDEHJMVY]|OH|OK|OR|PA|RI|S[CD]|T[NX]|UT|V[AT]|W[AIVY]|DC)\b",
-    re.IGNORECASE)
+    r",\s*(A[LKZ]|C[AOT]|FL|GA|HI|I[ADL]|K[SY]|LA|M[ADEINOST]|"
+    r"N[CDHJMVY]|OH|OK|OR|PA|RI|S[CD]|T[NX]|UT|V[AT]|W[AIVY]|DC)(?![.\w])")
 
 # **City before country.** `sweden` used to sit in the `stockholm` tuple, so
 # every Swedish advertisement read Stockholm -- Kiruna and Visby included.
@@ -1591,6 +1670,11 @@ _HUBS = {
         "zurich", "zuerich", "geneva", "geneve", "genf", "zug", "basel",
         "bern", "berne", "lausanne", "lugano", "winterthur", "st gallen",
         "switzerland", "schweiz", "suisse", "svizzera",
+        # Liechtenstein, which is not Switzerland and is filed with it here for
+        # the same reason job-room.ch files it there: it is a 27th code on that
+        # board, inside the customs and currency union, and a commute from
+        # Sargans. Named because `FL` stays a US state code -- see `_US_STATE`.
+        "vaduz", "schaan", "liechtenstein",
     ),
     "hong_kong": (
         "hong kong", "hongkong", "kowloon", "central hong kong", "quarry bay",
@@ -1601,22 +1685,128 @@ _HUBS = {
         "one island east", "two ifc", "one ifc", "icc tower", "cheung kong",
     ),
     "singapore": ("singapore", "marina bay", "raffles place", "changi"),
+    # ----------------------------------------------------------------------
+    # **The United States, promoted out of `deprioritized` at the reader's
+    # instruction.** It is the largest thing on this board by a distance: 876
+    # postings rated `adjacent` or better against 887 for all six of the older
+    # focus hubs put together, and New York alone carries 468 -- more than Hong
+    # Kong, Stockholm, Amsterdam, Switzerland and Copenhagen combined.
+    #
+    # **It is three metros and a residual rather than one country**, which is
+    # the rule the rest of this table already follows: a focus hub is a city
+    # plus a real commuting belt, and the rest of the country gets its own
+    # value. A single national hub would have been the `sweden` mistake at
+    # continental scale -- every insurance clerk in Omaha ranking level with a
+    # Jane Street desk. Measured over the corpus, the three metros hold 74% of
+    # the American postings this board rates positively in 27% of its volume:
+    # New York 468, Chicago 107, Boston 75, and the whole of the rest 148.
+    #
+    # Boston is in on that number and on what the postings *are* -- State
+    # Street's model risk and quant research seats. The Bay Area (31), Texas
+    # (31) and Miami (15) are not, and reading their positives is why: wealth
+    # advisers, tax principals and real-estate capital markets. They sit in
+    # `us_other`, which is on the board and ranks below.
+    #
+    # **No state name appears in a metro list.** `illinois` in the Chicago
+    # tuple would file Springfield as Chicago, exactly the way `sweden` in the
+    # Stockholm tuple once filed Kiruna as Stockholm. The states live in
+    # `us_other` and `_residual` drops the duplicate, so `Chicago, Illinois`
+    # comes out `chicago` alone. Every name below was dry-run over all 296,096
+    # live postings; `manhattan` was dropped by it, matching the *Manhattan Bar*
+    # at a Singapore hotel and nothing in New York the word `new york` misses.
+    "new_york": (
+        "new york", "nyc", "brooklyn", "bronx", "staten island", "queens ny",
+        "long island", "white plains", "yonkers", "new rochelle",
+        # New Jersey and lower Connecticut, named as towns for the reason
+        # above: the state of New Jersey reaches Vineland and Mount Laurel,
+        # which commute to Philadelphia.
+        "jersey city", "newark", "hoboken", "hackensack", "short hills",
+        "morris plains", "stamford", "greenwich ct",
+    ),
+    "chicago": (
+        "chicago", "rosemont", "schaumburg", "naperville", "evanston",
+        "northbrook", "skokie", "downers grove", "tinley park", "orland park",
+        "buffalo grove", "oak brook", "des plaines",
+    ),
+    "boston": (
+        "boston", "waltham", "somerville", "quincy", "brookline", "dorchester",
+        "braintree", "dedham",
+    ),
+    # The rest of the United States: on the board and ranked below the metros,
+    # which is what makes it unlike `sweden_other` and `denmark_other`. Those
+    # are gated; this is not, because the country is a target now.
+    #
+    # **The state names carry most of it and the `, XX` codes do not reach
+    # them.** 2,017 postings spell the state out -- `O'Fallon, Missouri`,
+    # `Nashville, Tennessee` -- and read as `other`, which the board deletes.
+    # A further 374 say only that the job is American: `Remote US`, `Remote -
+    # US` and `Remote (US)` all fold to the same three tokens.
+    #
+    # **`georgia` was dropped after the dry-run** and it is the `Åre` lesson in
+    # a new alphabet: it reaches Tbilisi and Vancouver's Georgia Street, and
+    # buys nothing, because `atlanta` and `, GA` already hold the state's head
+    # count. `washington` was kept -- every one of its hits is the state or the
+    # District, `Conshohocken - Washington` included.
+    "us_other": (
+        "united states", "usa", "us remote", "remote us", "forenta staterna",
+        # Every state spelled out. The focus metros' own states are here too,
+        # so `Chicago, Illinois` names its state once; `_COUNTRY_WORDS` is what
+        # stops that from counting as a second place.
+        "alabama", "alaska", "arizona", "arkansas", "california", "colorado",
+        "connecticut", "delaware", "florida", "hawaii", "idaho", "illinois",
+        "indiana", "iowa", "kansas", "kentucky", "louisiana", "maine",
+        "maryland", "massachusetts", "michigan", "minnesota", "mississippi",
+        "missouri", "montana", "nebraska", "nevada", "ohio", "oklahoma",
+        "oregon", "pennsylvania", "tennessee", "texas", "utah", "vermont",
+        "virginia", "washington", "wisconsin", "wyoming", "new hampshire",
+        "new jersey", "new mexico", "new york", "north carolina",
+        "north dakota", "rhode island", "south carolina", "south dakota",
+        "west virginia", "district of columbia",
+        # The cities that carry a head count of their own, plus the two that
+        # `_US_STATE` stopped reaching when `, IN` and `, DE` came off it.
+        "san francisco", "seattle", "austin", "dallas", "houston", "atlanta",
+        "denver", "los angeles", "miami", "philadelphia", "washington dc",
+        "charlotte", "phoenix", "san diego", "san jose", "minneapolis",
+        "detroit", "portland", "salt lake city", "las vegas", "nashville",
+        "tampa", "orlando", "jacksonville", "st louis", "kansas city",
+        "cincinnati", "cleveland", "pittsburgh", "baltimore", "milwaukee",
+        "indianapolis", "raleigh", "newport beach", "irvine", "san antonio",
+        "sacramento", "omaha", "louisville", "memphis", "oklahoma city",
+        "albuquerque", "fort worth", "des moines", "boise", "tucson",
+        "bethesda", "charlottesville", "wilmington de", "dover de",
+        # **Some tenants put the state *before* the city** -- `CT - Hartford`,
+        # `MN - St. Paul`, `TX - Richardson` -- which no `, XX` pattern reaches,
+        # so 267 postings sat unplaced and were gated as `other`.
+        #
+        # **A prefix pattern is not the answer and the corpus says why.** The
+        # same two-letter collision is worse in that position, because `XX -
+        # City` is also how those tenants write *country* - city: `IN -
+        # Bengaluru`, `CO - Bogota`, `DE - Frankfurt`, `CA - Toronto`. Even
+        # restricting it to codes that are not ISO country codes leaks -- `ID -
+        # Jakarta` is Indonesia and `IL - Tel Aviv` is Israel. So the cities are
+        # named instead, which is the `georgia` decision again: take the
+        # specific handle, refuse the ambiguous rule.
+        #
+        # Every one dry-run over the corpus and every hit American.
+        "hartford", "st paul", "saint paul", "richardson", "alpharetta",
+        "spokane", "pensacola", "melville", "bellevue", "knoxville",
+        "syracuse", "coral gables", "fort lauderdale", "overland park",
+        "tallahassee", "west palm beach", "chanhassen", "hamden",
+    ),
+    # ----------------------------------------------------------------------
     # Semi-target: kept on the board, ranked below the focus hubs. The list was
     # eleven names and that was a ranking list. As a *gate* it has to be a
     # geography, so the country names and the cities that carry the head count
-    # are all here -- 3,261 postings say only "USA" and 675 say San Francisco.
+    # are all here.
+    #
+    # **`u s a` was removed with the American names**: it matched nothing, in
+    # any of 296,096 postings. `U.S.A.` folds to `usa`, not to three letters.
     "deprioritized": (
         "london", "united kingdom", "uk", "england", "scotland", "edinburgh",
         "manchester", "glasgow", "birmingham", "leeds", "bristol", "cambridge",
-        "new york", "nyc", "manhattan", "jersey city", "new jersey", "chicago",
-        "boston", "san francisco", "seattle", "austin", "dallas", "houston",
-        "atlanta", "denver", "los angeles", "miami", "philadelphia",
-        "washington dc", "charlotte", "california", "texas", "illinois",
-        "massachusetts", "united states", "usa", "u s a", "us remote",
         "germany", "deutschland", "frankfurt", "munich", "muenchen", "berlin",
         "hamburg", "dusseldorf", "stuttgart", "cologne", "koeln",
         "dubai", "abu dhabi", "united arab emirates", "uae", "difc",
-        "forenta staterna",
         "shanghai", "beijing", "shenzhen", "hangzhou", "guangzhou", "china",
     ),
     # The right country, the wrong city. Named rather than lumped into `other`
@@ -1727,31 +1917,46 @@ _HUBS = {
 
 
 _FOCUS_HUBS = frozenset(
-    {"stockholm", "copenhagen", "amsterdam", "switzerland", "hong_kong", "singapore"}
+    {"stockholm", "copenhagen", "amsterdam", "switzerland", "hong_kong",
+     "singapore", "new_york", "chicago", "boston"}
 )
 
 # A country bucket is the *complement* of its focus hub, not a second place:
 # `sweden_other` means "in Sweden and not Stockholm", so "Stockholm, Sverige"
 # matching both is a contradiction.
 #
-# **The word that causes it is the country's own name, and only that word.**
-# Collapsing on the bucket instead would throw away a real second city --
-# "Copenhagen, Aarhus" belongs in both -- which is the multi-location bug this
-# change exists to fix, arriving by the back door. So a residual is dropped
-# only when every needle it matched was the containing country.
+# **The word that causes it is the containing region's own name, and only that
+# word.** Collapsing on the bucket instead would throw away a real second city
+# -- "Copenhagen, Aarhus" belongs in both -- which is the multi-location bug
+# this change exists to fix, arriving by the back door. So a residual is
+# dropped only when every needle it matched was the region that contains it.
 #
-# `deprioritized` is deliberately absent: it spans five countries and is
+# **The value is a set because the United States has three focus metros.**
+# `us_other` is the complement of all of them at once, so `Chicago, Illinois`
+# and `Boston, Massachusetts` both have to collapse -- which also means the
+# region words for the US are the country's names *and* the three states, since
+# a state is what contains its metro. `New York, New York` collapses the same
+# way, and `Albany, New York` does not collapse but does read `new_york`; that
+# over-claim is between two hubs the board both shows, where the Swedish one
+# was between a hub and the gate.
+#
+# `deprioritized` is deliberately absent: it spans four countries and is
 # nobody's complement, so a posting in Amsterdam and Frankfurt keeps both.
 _RESIDUAL_OF = {
-    "sweden_other": "stockholm",
-    "denmark_other": "copenhagen",
-    "netherlands_other": "amsterdam",
+    "sweden_other": frozenset({"stockholm"}),
+    "denmark_other": frozenset({"copenhagen"}),
+    "netherlands_other": frozenset({"amsterdam"}),
+    "us_other": frozenset({"new_york", "chicago", "boston"}),
 }
 
 _COUNTRY_WORDS = {
     "sweden_other": frozenset({"sweden", "sverige"}),
     "denmark_other": frozenset({"denmark", "danmark"}),
     "netherlands_other": frozenset({"netherlands", "nederland"}),
+    "us_other": frozenset({
+        "united states", "usa", "us remote", "remote us", "forenta staterna",
+        "new york", "new jersey", "connecticut", "illinois", "massachusetts",
+    }),
 }
 
 
@@ -1762,11 +1967,11 @@ assert _RESIDUAL_OF.keys() == _COUNTRY_WORDS.keys()
 
 
 def _residual(found: list[tuple[str, str]], where: str) -> list[tuple[str, str]]:
-    """Drop a country bucket that names nothing but the country it contains."""
+    """Drop a country bucket that names nothing but the region it contains."""
     names = {value for value, _ in found}
     kept = []
     for value, evidence in found:
-        if _RESIDUAL_OF.get(value) in names:
+        if _RESIDUAL_OF.get(value, frozenset()) & names:
             towns = [
                 needle
                 for needle in _hits(where, _HUBS[value])
@@ -1801,7 +2006,7 @@ _OUT_OF_REACH = frozenset({"lead", "head_or_md"})
 # What the board will show. Everything else is gated -- see `_off_location` and
 # the note in `web/build_data.py`. `unknown` is deliberately in: a posting that
 # never stated a place is not a posting somewhere else.
-BOARD_HUBS = _FOCUS_HUBS | {"deprioritized", "unknown"}
+BOARD_HUBS = _FOCUS_HUBS | {"us_other", "deprioritized", "unknown"}
 
 # The exclusion reasons that *remove* a posting rather than ranking it.
 # Everything else in `job_tags` ranks.
@@ -2533,8 +2738,8 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
         hubs = ["switzerland"]
         add("hub", "switzerland", f"canton {canton.group(1).upper()!r}", "strong")
     elif state := _US_STATE.search(raw):
-        hubs = ["deprioritized"]
-        add("hub", "deprioritized", f"us state {state.group(1).upper()!r}", "strong")
+        hubs = ["us_other"]
+        add("hub", "us_other", f"us state {state.group(1).upper()!r}", "strong")
     elif raw and not _NO_PLACE.match(raw):
         hubs = ["other"]
         add("hub", "other", f"{raw[:40]!r}", "strong")

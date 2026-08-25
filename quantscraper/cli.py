@@ -351,11 +351,15 @@ def _switzerland(database: str, days: int | None) -> int:
 
 def _bodies(database: str, limit: int, workers: int) -> int:
     connection = db.connect(database)
-    attempted, filled = bodies.run(connection, limit, workers)
+    attempted, filled, placed = bodies.run(connection, limit, workers)
     if attempted:
-        print(f"fetched {attempted:,d} descriptions, filled {filled:,d}")
+        # `placed` is reported beside `filled` rather than folded into it: the
+        # pass now cures two faults and one number would hide either of them
+        # going quiet.
+        print(f"fetched {attempted:,d} pages, filled {filled:,d} bodies,"
+              f" resolved {placed:,d} places")
     else:
-        print("no body-less postings left in the queue")
+        print("nothing left in the queue")
 
     print("\nbodies held")
     for row in bodies.coverage(connection):
