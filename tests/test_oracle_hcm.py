@@ -453,6 +453,18 @@ class EveryFingerprintHasAReaderTest(unittest.TestCase):
                  "path serves the same SPA shell",
     }
 
+    def test_every_vendor_asset_rule_has_a_reader(self):
+        """The second fingerprinting table, which had no guard at all.
+
+        `_VENDOR_ASSETS` recognises a vendor from its CDN when the board is on
+        the firm's own hostname -- Teamtailor and Avature. It records tier A
+        with a token like any other match, so an entry with no reader is the
+        same 88-board silence one table over.
+        """
+        for name, *_ in ats._VENDOR_ASSETS:
+            with self.subTest(ats=name):
+                self.assertIn(name, extract.EXTRACTORS)
+
     def test_every_pattern_is_read_or_named_as_investigated(self):
         for name, _ in ats.ATS_PATTERNS:
             with self.subTest(ats=name):

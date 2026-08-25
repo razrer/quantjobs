@@ -658,6 +658,118 @@ def pinpoint(token: str) -> list[Job]:
     return jobs
 
 
+# Avature, which serves each customer a career portal on the customer's own
+# hostname -- `careers.twosigma.com` -- so there is no `{board}.avature.com`
+# for a host pattern to match. The board *is* the host, the same shape as a
+# Teamtailor customer fronting its board on `careers.lynxhedge.se`, and the
+# giveaway in the markup is the vendor's asset CDN, `avacdn.net`.
+#
+# Two Sigma is the reason this exists: a roster firm in two focus hubs whose
+# careers page nothing recognised, and one of the firms `UNDERGROUND.md` holds
+# up as unreachable. The portal is plain server-rendered HTML with no feed and
+# no API.
+#
+# **The list page is named per tenant**, which is why this is a list rather
+# than a constant. Two Sigma calls it `OpenRoles` and Avature's own default is
+# `SearchJobs`; asking for the wrong one gets a 404, not an empty board, so
+# trying each in turn costs one request and mistakes nothing for silence.
+AVATURE_LIST_PATHS = (
+    "/careers/OpenRoles",
+    "/careers/SearchJobs",
+    "/careers/JobSearch",
+    "/careers/Jobs",
+)
+# The portal pages ten at a time and ignores every page-size parameter tried,
+# the same as MAS. `jobOffset` is the cursor.
+_AVATURE_PAGE = 10
+_AVATURE_PAGES = 300
+
+# One result card. The chunk is split on the opening tag rather than matched as
+# a whole, for the reason `jobvite` gives one screen up: a single pattern
+# reaching from the title anchor down to the location spans has to cross
+# arbitrary nested markup, and that is where a regex over fetched markup turns
+# quadratic.
+_AVATURE_CARD = "article--result"
+_AVATURE_JOB = re.compile(
+    r'href="([^"]*?/careers/JobDetail/[^"/]*/(\d+))"[^>]*>\s*(.*?)\s*</a>',
+    re.I | re.S,
+)
+_AVATURE_SPAN = re.compile(
+    r'<span[^>]*class="[^"]*paragraph_inner-span[^"]*"[^>]*>(.*?)</span>',
+    re.I | re.S,
+)
+
+
+def _avature_cards(markup: str) -> list[str]:
+    return [chunk for chunk in markup.split("<article")[1:] if _AVATURE_CARD in chunk]
+
+
+def avature(token: str) -> list[Job]:
+    """Avature. `token` is the portal host -- see `ats.py` for why.
+
+    **Paging stops on a page that adds no new posting id**, not on a short one.
+    Ten is both the page size and, on a one-page board, the whole board, so a
+    short page is the ordinary last page here; and a portal that ignores
+    `jobOffset` serves page one forever without ever returning an empty one.
+    That is the iCIMS rule, and it is the one that catches both.
+    """
+    base = f"https://{token}"
+    markup, path = None, None
+    for candidate in AVATURE_LIST_PATHS:
+        try:
+            markup = http.get_text(f"{base}{candidate}", timeout=25, retries=2)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                continue
+            raise
+        if _avature_cards(markup):
+            path = candidate
+            break
+    if path is None:
+        # No list page under any known name. Raised rather than returned empty
+        # for the `sites.py` reason: a renamed portal and a firm that is not
+        # hiring are opposite facts that must not look alike.
+        raise ValueError(f"no Avature job list at {token}")
+
+    jobs: list[Job] = []
+    seen: set[str] = set()
+    for page in range(_AVATURE_PAGES):
+        if page:
+            markup = http.get_text(
+                f"{base}{path}?jobOffset={page * _AVATURE_PAGE}", timeout=25, retries=2
+            )
+        fresh = 0
+        for chunk in _avature_cards(markup):
+            match = _AVATURE_JOB.search(chunk)
+            if match is None:
+                continue
+            href, job_id, title = match.group(1), match.group(2), _text(match.group(3))
+            if job_id in seen or not title:
+                continue
+            seen.add(job_id)
+            fresh += 1
+            # The first span is the place; the ones after it are the tenant's
+            # own facets -- function, then experience level for this tenant.
+            # Only the first two are read, and neither is invented: a card
+            # carrying one span has a location and no department.
+            spans = [_text(s) for s in _AVATURE_SPAN.findall(chunk)]
+            spans = [s for s in spans if s]
+            jobs.append(
+                Job(
+                    ats="avature",
+                    token=token,
+                    job_id=job_id,
+                    title=title,
+                    url=urllib.parse.urljoin(base, html.unescape(href)),
+                    location=spans[0] if spans else None,
+                    department=spans[1] if len(spans) > 1 else None,
+                )
+            )
+        if not fresh:
+            break
+    return jobs
+
+
 # Oracle asks for the page size inside a `finder` expression rather than as a
 # query parameter, so the whole thing is one opaque-looking string. 200 is
 # comfortably served -- a request for 500 came back with the board's true 139
@@ -1069,6 +1181,7 @@ EXTRACTORS: dict[str, Callable[[str], list[Job]]] = {
     "oracle_hcm": oracle_hcm,
     "adp": adp,
     "ukg": ukg,
+    "avature": avature,
     # Layer 3C: firms with no ATS at all, read from their own website. One
     # entry here, dispatched by token -- see `sites.py` for why the list is
     # deliberately short.

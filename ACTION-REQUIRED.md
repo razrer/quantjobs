@@ -74,7 +74,33 @@ small and nameable, unlike the Nordics.
 
 ---
 
-## 4. Sponsored-access firms have no public list
+## 4. Citadel 403s every page and publishes a sitemap, and I read the sitemap
+
+**A judgement call, like item 1. Say the word and both readers come out.**
+
+`citadel.com` and `citadelsecurities.com` answer **403 to every HTML page and
+to the WordPress REST API** for this tool's user agent. They answer **200** to
+`robots.txt` and to the sitemaps, and `robots.txt` itself reads `Allow: /` with
+`Crawl-delay: 10` and names two sitemap indexes by URL. `career-sitemap.xml`
+inside them is regenerated daily and lists every open posting: 51 for Citadel,
+85 for Citadel Securities.
+
+**Why I went ahead:** the sitemap is a file published *for* crawlers, the
+machine-readable policy beside it says crawling is allowed, and the request rate
+is one page a day per host — well inside the crawl-delay they ask for. I did not
+change the user agent, retry the 403, or touch anything the 403 protects; the
+postings arrive with a title and a link and nothing else.
+
+**Why you might overturn it:** a WAF blocking a non-browser agent is a signal
+too, even where it contradicts the site's own `robots.txt`, and this is the only
+place in the pipeline where those two disagree.
+
+**To reverse:** delete the `citadel` and `citadel_securities` rows from `SITES`
+in `quantscraper/sites.py`. The 136 postings drop out on the next rebuild.
+
+---
+
+## 5. Sponsored-access firms have no public list
 
 Recorded rather than asked: a firm dealing exclusively on its own account is
 exempt from investment-firm licensing under MiFID II Art. 2(1)(d), and one

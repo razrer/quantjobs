@@ -280,13 +280,23 @@ Real holes, not bugs.
   registry anywhere. The seed file is the only realistic route.
 - **Dubai has no reachable register** — the DFSA's is behind a reCAPTCHA.
 - **Most small Hong Kong funds run no public board.** All 51 roster firms were
-  probed by name across every discoverable ATS and the sweep found two. The rest
-  hire through recruiters and personal networks, which no scraper reaches. This
-  is a finding, not a gap.
+  probed by name across every discoverable ATS and the sweep found two, and 21
+  were later re-probed by hand against their own careers pages: eight 404 on
+  every path and most of the rest publish a careers page carrying no postings.
+  The rest hire through recruiters and personal networks, which no scraper
+  reaches. This is a finding, not a gap.
 - **A few large firms simply refuse us.** ABN AMRO answers 503, Nasdaq times
   out, Citadel Securities and Jyske Bank answer 403; `curl` with a browser UA
   reaches all four. Julius Baer refuses `curl` too, so there is no header that
-  reaches it.
+  reaches it. **Citadel is no longer among them**, and the way out was not a
+  header: both Citadel hosts serve `robots.txt` and their sitemaps with HTTP
+  200 while every HTML page 403s, and one of those sitemaps is a daily list of
+  every open posting. The 403 said "not this door", not "no".
+- **Three ATS vendors are closed for stated reasons.** Eightfold's
+  `/api/apply/v2/jobs` answers 403, Paylocity renders its board client-side
+  with no reachable data endpoint, and Jefferies' Lumesse `tal.net` portal sits
+  behind an Altcha CAPTCHA. Morgan Stanley, XR Trading and Jefferies are the
+  roster firms behind them.
 - **Denmark carries no company type or city.** The register gives a name and a
   GUID; type and city need one request per company, which is 26,000 requests for
   a register enumerable in 39. Deferred deliberately — the rows are in the
@@ -319,7 +329,13 @@ against the real endpoint before writing the adapter — several sources here
 published formats nothing like what their documentation implied.
 
 Focus hubs are **Stockholm, Copenhagen, Amsterdam, Switzerland, Hong Kong,
-Singapore**; Germany, the US, London, China and Dubai are deprioritized. That
+Singapore, New York, Chicago and Boston**, with the rest of the US shown and
+ranked below them; Germany, London, China and Dubai are deprioritized. That
 governs what gets built next, never what gets ingested — collected data is never
 dropped for being out of area. The one exception is the *board*, which gates on
 geography at the user's instruction; see `web/build_data.py`.
+
+The US is three metros plus a residual rather than one national hub, for the
+same reason Stockholm is a city and not Sweden: a focus hub is a commuting belt.
+Measured over the corpus, those three metros hold 74% of the American postings
+the board rates positively in 27% of its American volume.

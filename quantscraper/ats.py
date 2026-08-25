@@ -35,7 +35,11 @@ import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
-from . import db, http
+# Layer 3, imported by Layer 2 on purpose. `_VENDOR_ASSETS` verifies a guessed
+# board by asking for the page the *reader* will ask for, and a second copy of
+# that path list is two sides of a comparison free to drift apart -- the same
+# argument `discover.py` makes for reusing `domains._labels`.
+from . import db, extract, http
 from .resolve import is_platform_domain
 
 SCHEMA = """
@@ -76,6 +80,33 @@ ATS_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     # after /boards/, not after the host. Matching the host alone extracts "v1"
     # for every Greenhouse user on earth.
     ("greenhouse", re.compile(r"boards-api\.greenhouse\.io/v\d+/boards/([a-z0-9_-]+)", re.I)),
+    # The embed script, which is how a firm puts its board on its own careers
+    # page -- and the shape Greenhouse's own copy-paste snippet uses is
+    # `/embed/job_board/js?for={board}`, with a path segment between the
+    # word `job_board` and the query string. The pattern below only allowed
+    # `/embed/job_board?for=`, so the general rule underneath it matched the
+    # host and captured `embed`, which `_NOT_A_TOKEN` then correctly refused
+    # -- leaving 29 domains at **tier A with a NULL token**, the state
+    # `discover.targets` documents as "a board nobody can poll". Maven
+    # Securities, GSA Capital, Geneva Trading, Acadian and Vatic were all in
+    # it. Any query parameter is allowed before `for=` for the same reason:
+    # the snippet is edited by hand on the customer's page.
+    #
+    # **`job_app` counts too, and it looked like it should not.** That embed is
+    # one posting's application form rather than a board, so the first version
+    # of this rule deliberately skipped it -- and `for=` is the *board* in
+    # every Greenhouse embed regardless of what is being embedded. GSA Capital
+    # publishes its whole careers page as a list of `job_app?for=gsacapital`
+    # forms and names the board nowhere else; refusing it left the firm at
+    # tier A with a NULL token after the fix that was supposed to clear it.
+    (
+        "greenhouse",
+        re.compile(
+            r"(?:job-)?boards\.greenhouse\.io/embed/job_(?:board|app)[a-z0-9/_.-]{0,40}"
+            r"\?(?:[a-z0-9_]{1,30}=[^\s\"'&]{0,60}&(?:amp;)?){0,4}for=([a-z0-9_-]+)",
+            re.I,
+        ),
+    ),
     ("greenhouse", re.compile(r"(?:job-)?boards\.greenhouse\.io/(?:embed/job_board\?for=)?([a-z0-9_-]+)", re.I)),
     ("lever", re.compile(r"jobs\.lever\.co/([a-z0-9_-]+)", re.I)),
     # Workday needs three things to be pollable -- tenant, data-centre number
@@ -293,13 +324,19 @@ class Resolution:
 # Stockholm quant firm this project exists to find, and it sat in tier B with a
 # live feed behind it. **The CDN proves the firm uses the vendor, not where its
 # board lives**, so the feed is verified before anything is recorded.
-# (ats, asset host, feed path, marker the feed must contain)
-_VENDOR_ASSETS: tuple[tuple[str, str, str, str], ...] = (
-    ("teamtailor", "teamtailor-cdn.com", "/jobs.rss", "<channel"),
+# (ats, asset host, feed paths, marker the feed must contain)
+#
+# Avature is the second entry and it needs *several* paths, because its list
+# page is named by the tenant rather than by the vendor: Two Sigma calls it
+# `OpenRoles` and Avature's own default is `SearchJobs`. A wrong name answers
+# 404, so trying each costs one request and can never invent a board.
+_VENDOR_ASSETS: tuple[tuple[str, str, tuple[str, ...], str], ...] = (
+    ("teamtailor", "teamtailor-cdn.com", ("/jobs.rss",), "<channel"),
+    ("avature", "avacdn.net", extract.AVATURE_LIST_PATHS, "article--result"),
 )
 
 
-def _serves_feed(host: str, path: str, marker: str) -> bool:
+def _serves_feed(host: str, paths: tuple[str, ...], marker: str) -> bool:
     """Whether `host` actually answers with the vendor's feed.
 
     The guess on its own is wrong more often than right: embedding a vendor's
@@ -309,13 +346,16 @@ def _serves_feed(host: str, path: str, marker: str) -> bool:
     project keeps meeting: a board that looks resolved and yields nothing
     forever. One request settles it.
     """
-    try:
-        body, _ = http.get_with_url(f"https://{host}{path}", timeout=10, retries=1)
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
-        return False
-    except Exception:  # noqa: BLE001 -- one hostile host must not stop the run
-        return False
-    return marker.encode() in body[:100_000]
+    for path in paths:
+        try:
+            body, _ = http.get_with_url(f"https://{host}{path}", timeout=10, retries=1)
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
+            continue
+        except Exception:  # noqa: BLE001 -- one hostile host must not stop the run
+            return False
+        if marker.encode() in body[:100_000]:
+            return True
+    return False
 
 
 def _workday_token(match: re.Match[str]) -> str | None:
@@ -454,8 +494,8 @@ def fingerprint(markup: str, url: str | None = None) -> tuple[str, str | None, s
     # usable token where that one yields none.
     if url:
         host = urllib.parse.urlsplit(url).netloc.casefold()
-        for name, asset_host, path, marker in _VENDOR_ASSETS:
-            if asset_host in markup and host and _serves_feed(host, path, marker):
+        for name, asset_host, paths, marker in _VENDOR_ASSETS:
+            if asset_host in markup and host and _serves_feed(host, paths, marker):
                 return name, host, f"{asset_host}, feed verified at {host}"
 
     # Third pass, without a third scan: the ATS is present but every match was

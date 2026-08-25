@@ -32,6 +32,7 @@ an answer; a missing anchor is a broken reader, and the two must not look alike.
 
 from __future__ import annotations
 
+import html
 import json
 import re
 import sqlite3
@@ -378,6 +379,314 @@ def norron() -> list[Job]:
 
 
 # --------------------------------------------------------------------------
+# 323 Trading
+
+
+_323_TITLE = re.compile(r"<h1>([\s\S]{3,160}?)</h1>", re.I)
+
+
+def trading_323() -> list[Job]:
+    """323 Trading, an Amsterdam prop shop whose careers page is one opening.
+
+    A hand-written static page: the `<h1>` is the job title and the paragraphs
+    under it are the description. There is no ATS, no feed, and no list -- the
+    firm advertises one seat at a time, the way Brummer does.
+
+    **The title is the anchor and its absence is an error**, because a page
+    edited by hand is the one most likely to be redesigned without warning, and
+    a firm that has filled the seat is a different fact from a parser that has
+    stopped working.
+
+    The known weakness is staleness rather than breakage: a static page carries
+    no date and says nothing when the seat is filled, so this reader cannot
+    tell a live opening from one left up. Every hand-written board shares that;
+    what makes it worth having anyway is that Amsterdam is a focus hub with
+    thirteen roster firms in it and this is one of them.
+    """
+    url = "https://323trading.nl/careers.html"
+    body = http.get_text(url, timeout=25, retries=2)
+    match = _323_TITLE.search(body)
+    title = _text(match.group(1)) if match else None
+    if not title:
+        raise SiteChanged("323trading: careers.html carries no <h1> title")
+    return [
+        Job(
+            ats="site",
+            token="323trading",
+            job_id=title.casefold().replace(" ", "-")[:80],
+            title=title,
+            url=url,
+            location="Amsterdam, Netherlands",
+        )
+    ]
+
+
+# --------------------------------------------------------------------------
+# Citadel and Citadel Securities -- the sitemap is the only surface
+
+
+def _slug_title(slug: str) -> str:
+    from .extract import _icims_title as shared  # one definition, see `_text`
+
+    return shared(slug)
+
+
+# `<loc>` entries under `/careers/details/`, which is the only shape the
+# careers sitemap carries. Bounded, like every pattern in this project that
+# runs over fetched markup.
+_CITADEL_JOB = re.compile(
+    r"<loc>\s*(https://[^<\s]{10,300}/careers/details/([a-z0-9][a-z0-9-]{2,120})/?)\s*</loc>",
+    re.I,
+)
+
+
+def _citadel_board(token: str, host: str) -> list[Job]:
+    """Citadel's openings, read from the sitemap it publishes for crawlers.
+
+    **Every HTML page and the WordPress REST API answer 403; robots.txt and
+    the sitemaps answer 200.** That is not a wall to be worked around -- it is
+    the site saying which door is the crawler's. `robots.txt` reads `Allow: /`
+    with `Crawl-delay: 10` and names two sitemap indexes, and the
+    `career-sitemap.xml` inside them is regenerated the same day: 51 postings
+    for Citadel and 85 for Citadel Securities, which is the whole board.
+
+    **The slug is the title, and it is lossy in the way iCIMS already is** --
+    `c-software-engineer` is *C++ Software Engineer*, and casing is gone.
+    `fold` lowercases both sides before any needle runs, so the tagger reads
+    these like any other posting; only the card is poorer.
+
+    **`<lastmod>` is deliberately not read as a posting date.** Every entry in
+    the file carries the same timestamp to within seconds, so it dates the
+    sitemap's regeneration and not the opening -- the `publication.endDate`
+    mistake from job-room.ch, one field over.
+
+    Location is left unset rather than mined out of the slug. A few end in
+    `-asia` or `-us` and most end in nothing, and the board *gates* on
+    geography: `unknown` survives that gate and a wrong city does not.
+    """
+    body = http.get_text(f"https://{host}/career-sitemap.xml", timeout=25, retries=2)
+    if "<loc>" not in body:
+        raise SiteChanged(f"{token}: {host}/career-sitemap.xml has no <loc> entries")
+    jobs: list[Job] = []
+    seen: set[str] = set()
+    for url, slug in _CITADEL_JOB.findall(body):
+        if slug in seen:
+            continue
+        seen.add(slug)
+        jobs.append(
+            Job(ats="site", token=token, job_id=slug, title=_slug_title(slug), url=url)
+        )
+    if not jobs:
+        raise SiteChanged(f"{token}: sitemap carries no /careers/details/ entries")
+    return jobs
+
+
+def citadel() -> list[Job]:
+    """Citadel, the hedge fund."""
+    return _citadel_board("citadel", "www.citadel.com")
+
+
+def citadel_securities() -> list[Job]:
+    """Citadel Securities, a different employer with its own board.
+
+    Two roster lines, two sitemaps, and the campus pipelines are advertised on
+    both. They are kept apart because `domains.py` already learned this one
+    expensively: `citadel.com` "verified" itself against Citadel Securities,
+    and a firm that shares a founder is still a different careers page.
+    """
+    return _citadel_board("citadel_securities", "www.citadelsecurities.com")
+
+
+# --------------------------------------------------------------------------
+# DRW
+
+
+_DRW_LISTINGS = "https://drw.com/work-at-drw/listings"
+_NEXT_DATA = re.compile(
+    r'<script[^>]{0,200}id="__NEXT_DATA__"[^>]{0,200}>([\s\S]{0,4000000}?)</script>',
+    re.I,
+)
+
+
+def drw() -> list[Job]:
+    """DRW, from the job array its own listings page ships inside the markup.
+
+    **DRW's stored careers URL was a Cloudinary image**, which is what the
+    careers walk settled on and is `discover.py`'s standing example of why no
+    regex over the page we did fetch can reach these firms. The board is not an
+    ATS at all: `/work-at-drw/listings` is a Next.js page carrying every
+    posting in `__NEXT_DATA__` -- 160 of them, with title, id and locations.
+
+    **Only `en` is read.** The payload also holds an `fr` array and all 17 of
+    its ids are already in `en`: they are French renderings of the Montreal
+    postings, not extra openings. Reading both double-counts an office.
+
+    Locations arrive as a list and are joined the way a Greenhouse board
+    already publishes a multi-site posting, because `hub` is multi-valued end
+    to end -- "Amsterdam; Chicago; London" is read as three places rather than
+    as one unknown.
+    """
+    body = http.get_text(_DRW_LISTINGS, timeout=30, retries=2)
+    match = _NEXT_DATA.search(body)
+    if match is None:
+        raise SiteChanged("drw: /work-at-drw/listings no longer ships __NEXT_DATA__")
+    try:
+        listings = json.loads(match.group(1))["props"]["pageProps"]["jobData"]["en"]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise SiteChanged(f"drw: jobData.en is gone from __NEXT_DATA__ ({exc})") from exc
+    jobs: list[Job] = []
+    seen: set[str] = set()
+    for listing in listings:
+        job_id = str(listing.get("id") or "")
+        title = _text(listing.get("job_title") or listing.get("title"))
+        if not job_id or not title or job_id in seen:
+            continue
+        seen.add(job_id)
+        slug = listing.get("slug")
+        jobs.append(
+            Job(
+                ats="site",
+                token="drw",
+                job_id=job_id,
+                title=title,
+                url=f"{_DRW_LISTINGS}/{slug}" if slug else _DRW_LISTINGS,
+                location="; ".join(p for p in listing.get("locations") or [] if p)
+                or None,
+                department="; ".join(
+                    c for c in listing.get("career_categories") or [] if c
+                )
+                or None,
+            )
+        )
+    if not jobs:
+        raise SiteChanged("drw: jobData.en is present and empty")
+    return jobs
+
+
+# --------------------------------------------------------------------------
+# The D. E. Shaw group
+
+
+# One card per posting. Split on the id attribute rather than matched whole,
+# for the reason `extract.jobvite` gives: a single pattern reaching from the id
+# across the nested SVG markup to the title is where a regex over a 900 KB page
+# turns quadratic.
+_DESHAW_ID = re.compile(r'<div class="job" data-job-id="(\d+)"', re.I)
+_DESHAW_TITLE = re.compile(r'class="job-display-name">([\s\S]{0,300}?)</span>', re.I)
+_DESHAW_LOCATION = re.compile(r'class="location">([\s\S]{0,200}?)</span>', re.I)
+_DESHAW_CATEGORY = re.compile(r'class="category">([\s\S]{0,200}?)</p>', re.I)
+_DESHAW_HREF = re.compile(r'href="(/careers/[a-z0-9][a-z0-9-]{2,140})"', re.I)
+
+
+def deshaw() -> list[Job]:
+    """The D. E. Shaw group, whose whole board is one server-rendered page.
+
+    86 postings, each a `<div class="job" data-job-id="...">` carrying the
+    title, the office and the group's own category -- more than several ATSes
+    give. There is no vendor here to fingerprint and no feed to guess.
+
+    The page is ~900 KB because every card also carries the first sentence of
+    its description. That snippet is deliberately not stored: `bodies.py`
+    fetches the real page for postings whose verdict it could change, and a
+    truncated opening line would satisfy its "has a body" test without carrying
+    the evidence.
+    """
+    body = http.get_text("https://www.deshaw.com/careers", timeout=40, retries=2)
+    chunks = _DESHAW_ID.split(body)
+    if len(chunks) < 3:
+        raise SiteChanged("deshaw: /careers has no data-job-id cards")
+    jobs: list[Job] = []
+    seen: set[str] = set()
+    # `split` on a capturing pattern yields [before, id, chunk, id, chunk, ...].
+    for job_id, chunk in zip(chunks[1::2], chunks[2::2]):
+        if job_id in seen:
+            continue
+        seen.add(job_id)
+        title = _DESHAW_TITLE.search(chunk)
+        if title is None:
+            continue
+        href = _DESHAW_HREF.search(chunk)
+        location = _DESHAW_LOCATION.search(chunk)
+        category = _DESHAW_CATEGORY.search(chunk)
+        jobs.append(
+            Job(
+                ats="site",
+                token="deshaw",
+                job_id=job_id,
+                title=_text(title.group(1)) or "",
+                url=urllib.parse.urljoin(
+                    "https://www.deshaw.com/", href.group(1) if href else "/careers"
+                ),
+                location=_text(location.group(1)) if location else None,
+                department=_text(category.group(1)) if category else None,
+            )
+        )
+    if not jobs:
+        raise SiteChanged("deshaw: cards found but none carried a job-display-name")
+    return jobs
+
+
+# --------------------------------------------------------------------------
+# Renaissance Technologies
+
+
+# Each opening is a link carrying its own position key, followed by a plain
+# `<div>` holding the office. The department is the `<h2>` above the group.
+_RENTEC_GROUP = re.compile(
+    r'<h2 class="Subhead_heading[^"]{0,80}">([\s\S]{0,120}?)</h2>', re.I
+)
+_RENTEC_JOB = re.compile(
+    r'href="([^"]{0,200}selectedPosition=([A-Za-z0-9_]{2,60}))"[^>]{0,200}>'
+    r"([\s\S]{0,200}?)</a>[\s\S]{0,400}?<div>([\s\S]{0,160}?)</div>",
+    re.I,
+)
+
+
+def rentec() -> list[Job]:
+    """Renaissance Technologies, whose openings are anchors on one page.
+
+    A dozen postings, all East Setauket or New York, published as
+    `Careers.action?jobs=true&selectedPosition={key}` links grouped under a
+    heading per department. `selectedPosition` is the id: it is what the firm
+    links to, and unlike the anchor text it is not rewritten when a title is
+    reworded.
+    """
+    url = "https://www.rentec.com/Careers.action?jobs=true"
+    body = http.get_text(url, timeout=25, retries=2)
+    if "selectedPosition" not in body:
+        raise SiteChanged("rentec: Careers.action lists no selectedPosition links")
+    headings = [(m.end(), _text(m.group(1))) for m in _RENTEC_GROUP.finditer(body)]
+    jobs: list[Job] = []
+    seen: set[str] = set()
+    for match in _RENTEC_JOB.finditer(body):
+        href, key, title, place = match.groups()
+        if key in seen:
+            continue
+        seen.add(key)
+        name = _text(title)
+        if not name:
+            continue
+        # The department is the last group heading before this link.
+        department = next(
+            (name_ for end, name_ in reversed(headings) if end < match.start()), None
+        )
+        jobs.append(
+            Job(
+                ats="site",
+                token="rentec",
+                job_id=key,
+                title=name,
+                url=urllib.parse.urljoin(url, html.unescape(href)),
+                location=_text(place),
+                department=department,
+            )
+        )
+    if not jobs:
+        raise SiteChanged("rentec: selectedPosition links found but none parsed")
+    return jobs
+
+
+# --------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
@@ -426,6 +735,67 @@ SITES: tuple[Site, ...] = (
         None,
         ats="workday",
     ),
+    # ---- the marquee firms, read from their own sites ---------------------
+    Site("citadel", "citadel.com", "Citadel", citadel),
+    Site(
+        "citadel_securities",
+        "citadelsecurities.com",
+        "Citadel Securities",
+        citadel_securities,
+    ),
+    Site("drw", "drw.com", "DRW", drw),
+    Site("deshaw", "deshaw.com", "DE Shaw", deshaw),
+    Site("rentec", "rentec.com", "Renaissance Technologies", rentec),
+    # ---- boards on an ATS we already read, that no walk could reach --------
+    #
+    # Every one of these was found by hand, and each was hidden by a different
+    # thing the careers walk cannot do. Two Sigma fronts an Avature portal on
+    # its own hostname; Bridgewater proxies its Greenhouse board through
+    # `/jobboard` on its own domain and names Greenhouse nowhere else; Northern
+    # Trust's `careers.` host *redirects* to Workday, so nothing is left in the
+    # markup to fingerprint; Wolverine's board is a hop past `/careers` on
+    # `/open-positions`; Five Rings, Headlands, Garda, Acadian and Teza all
+    # spell their token in a way no name guess produces --
+    # `headlandstechnologiesllc` from "Headlands Technologies", `gardacp` from
+    # "Garda Capital Partners".
+    #
+    # Six of the nine also had the **wrong domain** in `domain_lookups`, which
+    # is why they are `Site` rows rather than `discover` results: `twosigma.cn`
+    # for Two Sigma, `bwasc.com` for Bridgewater, `acadian.com` for Acadian
+    # (which is Acadian *Ambulance*, and its ADP board was recorded against the
+    # asset manager), `headlands.com`, `gardacp.dk` and `teza.com`. `register`
+    # writes `domain_lookups` too, so the roster's own spelling resolves to the
+    # domain a human verified.
+    Site("careers.twosigma.com", "twosigma.com", "Two Sigma", None, ats="avature"),
+    Site("bridgewater89", "bridgewater.com", "Bridgewater Associates", None, ats="greenhouse"),
+    Site("ntrs|wd1|northerntrust", "northerntrust.com", "Northern Trust", None, ats="workday"),
+    Site("wolve", "wolve.com", "Wolverine", None, ats="pinpoint"),
+    Site("fiveringsllc", "fiverings.com", "Five Rings", None, ats="greenhouse"),
+    Site(
+        "headlandstechnologiesllc",
+        "headlandstech.com",
+        "Headlands Technologies",
+        None,
+        ats="greenhouse",
+    ),
+    Site("gardacp", "gardacp.com", "Garda Capital", None, ats="greenhouse"),
+    Site(
+        "acadianassetmanagementllc",
+        "acadian-asset.com",
+        "Acadian Asset Management",
+        None,
+        ats="greenhouse",
+    ),
+    Site("teza-technologies", "teza.com", "Teza Technologies", None, ats="ashby"),
+    Site("magnetar", "magnetar.com", "Magnetar Capital", None, ats="greenhouse"),
+    # Amsterdam. Robeco's board is one hop past the careers page the walk
+    # settled on -- `/careers` links to `/careers/job-openings`, and only the
+    # second one carries the Workday host. VivCourt is here for the domain
+    # rather than the board: the roster says "Vivienne", `domains` resolved it
+    # to `viviennecourt.com`, and the firm publishes on `vivcourt.com`.
+    Site("robeco|wd3|robecoexternalcareers", "robeco.com", "Robeco", None, ats="workday"),
+    Site("vivcourt", "vivcourt.com", "Vivienne", None, ats="greenhouse"),
+    Site("323trading", "323trading.nl", "323 Trading", trading_323),
 )
 
 BY_TOKEN = {site.token: site for site in SITES}

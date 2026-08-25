@@ -59,7 +59,10 @@ python -m unittest discover -s tests            # regression tests
 ```
 
 `daily` runs corrections, sweden, denmark, switzerland, jobstream, jobs, pages,
-bodies, tag, alerts, then a rebuild. **It is deliberately manual**: the search is
+tag, bodies, re-tag, alerts, then a rebuild — **`tag` twice, on purpose**, since
+`bodies` fetches text and places the first pass could not see and
+`bodies.targets` reads the current tagger to know what to fetch. **It is
+deliberately manual**: the search is
 the expensive half, free here and billable anywhere else, so nothing schedules
 it — what is deployed is the *output*, not the scraper. A failing step does not
 stop the run, because a board redesigned underneath us should cost its own
@@ -179,8 +182,10 @@ registries/*.py  ->  employers table  ->  resolve.py  ->  firms table
 - `ats.py` — Layer 2: domain → `(ats, token)` by fingerprint, else tier B/C
 - `discover.py` — Layer 2C: firm name → board token, guessed then proven
 - `extract.py` — Layer 3: one function per ATS format; postings land in `jobs`
-- `sites.py` — Layer 3C: hand-written readers for firms running no ATS
-- `bodies.py` — fetch descriptions, for postings whose verdict one could change
+- `sites.py` — Layer 3C: hand-written readers for firms running no ATS, and
+  hand-verified boards for firms whose careers walk could not reach one
+- `bodies.py` — fetch detail pages: descriptions for postings whose verdict one
+  could change, and the real place list for a Workday `N Locations` summary
 - `jobstream.py` — Layer 4: Sweden's national delta feed, cursor in `feed_state`
 - `jobroom_ch.py` — Layer 4: Switzerland; walks from both ends around a
   10,000-result window
@@ -239,9 +244,27 @@ Load-bearing. If a change appears to require breaking one, stop and raise it.
 
 Priority affects **what to build next**, not what to ingest.
 
-- **Focus:** Stockholm, Copenhagen, Amsterdam, Switzerland, Hong Kong, Singapore
-- **Deprioritized:** Germany, US, London/UK, China, Dubai. Existing US data
-  (`sec_adv`, `sec_bd`) stays; it is simply not where the next effort goes.
+- **Focus:** Stockholm, Copenhagen, Amsterdam, Switzerland, Hong Kong,
+  Singapore, **New York, Chicago, Boston**
+- **On the board, ranked below focus:** the rest of the US (`us_other`)
+- **Deprioritized:** Germany, London/UK, China, Dubai
+
+**The US was promoted out of `deprioritized` at the user's instruction, and the
+numbers say it should have been there already.** It carries 876 postings rated
+`adjacent` or better against 887 for all six older focus hubs combined, and New
+York alone carries 468 — more than Hong Kong, Stockholm, Amsterdam, Switzerland
+and Copenhagen put together.
+
+**It is three metros plus a residual, not one country**, which is the rule the
+rest of `_HUBS` already follows: a focus hub is a city plus a real commuting
+belt, and the rest of the country gets its own value. A single national hub
+would be the `sweden` mistake at continental scale — every insurance clerk in
+Omaha ranking level with a Jane Street desk. Measured: the three metros hold 74%
+of the American postings this board rates positively in 27% of its volume — New
+York 468, Chicago 107, Boston 75, all the rest 148. The Bay Area (31), Texas
+(31) and Miami (15) are out because of *what* their positives are — wealth
+advisers, tax principals, real-estate capital markets. `us_other` is on the
+board, unlike `sweden_other` and `denmark_other`, which are gated.
 
 **One deliberate exception, at the user's instruction: the *board* gates on
 geography.** The universe rule is unchanged — no row is deleted, no registry is
@@ -489,6 +512,52 @@ nothing public — Da Vinci Derivatives is the standing example.
 - **Paylocity, Rippling and Phenom render their lists client-side** — the 41
   "job ids" a naive count finds in Paylocity's HTML are analytics and CSS.
   Recorded as investigated.
+- **Greenhouse's own copy-paste snippet did not match the Greenhouse
+  pattern, and 29 boards sat unread because of it.** The rule allowed
+  `boards.greenhouse.io/embed/job_board?for={board}`; what a firm actually
+  pastes onto its careers page is **`/embed/job_board/js?for={board}`**, with a
+  path segment before the query string. The general host rule underneath then
+  matched and captured `embed`, which `_NOT_A_TOKEN` correctly refused — so the
+  domain landed at **tier A with a NULL token**, the one state `discover.targets`
+  calls out as a board nobody can poll and no sweep revisits. Maven Securities
+  (39 postings across Amsterdam, Chicago and Hong Kong), GSA Capital, Geneva
+  Trading, Acadian and Vatic were all in it. **A NULL token on a recognised ATS
+  is not a small gap; it is a firm that reads as resolved everywhere and yields
+  nothing forever.**
+- **`job_app?for=` names the board too, and refusing it looked like the careful
+  choice.** That embed is one posting's application form rather than a list, so
+  the first version of the fix skipped it — and `for=` is the *board* in every
+  Greenhouse embed whatever is being embedded. GSA Capital publishes its whole
+  careers page as a list of `job_app` forms and names the board nowhere else, so
+  it stayed tokenless through the fix meant to clear exactly that.
+- **And GSA then added no postings, because its board was already polled under
+  another of its own domains** -- `gsa-coral.com`, a sibling of the same group,
+  resolving to the same Greenhouse token. `jobs`'s upsert keys on
+  `(ats, token, job_id)` and does not move `domain`, so the rows stayed where
+  they first landed. **A tier-A row with a NULL token can be a duplicate of a
+  board already reached; check `SELECT domain FROM jobs WHERE token = ?` before
+  counting the fix as postings.**
+- **Avature serves each customer from the customer's own hostname**, so
+  `careers.twosigma.com` matches no `{board}.vendor.com` pattern and the board
+  *is* the host — the `careers.lynxhedge.se` shape, and the reason
+  `_VENDOR_ASSETS` exists. The giveaway is the vendor's CDN,
+  `templates-static-assets.avacdn.net`. **Its list page is named by the tenant
+  rather than by the vendor**: Two Sigma calls it `/careers/OpenRoles` and
+  Avature's default is `/careers/SearchJobs`, so both the reader and the
+  fingerprint try a list of names — a wrong one answers 404, which cannot be
+  mistaken for an empty board. `extract.AVATURE_LIST_PATHS` is the single
+  definition both read, because two copies of it are two sides of a comparison
+  free to drift.
+- **`_VENDOR_ASSETS` is a second fingerprinting table and had no
+  reader guard.** `EveryFingerprintHasAReaderTest` walked `ATS_PATTERNS` only,
+  so a vendor recognised by its CDN could resolve tier A with a token and poll
+  nothing — the 88-board silence of Stage 14, one table over. It checks both now.
+- **Ranking vendors by how many firms they rescue is the right sweep and the
+  wrong order to build in.** The measured list put Avature ninth at 3 firms.
+  One of those three is **Two Sigma**, which is worth more to this project than
+  ADP's nineteen — the count answers "what is most common", and the question
+  here is "who do I want to work for". **Weight that list by the firms on it
+  before picking the next reader.**
 - **Which ATS to build next is a measurable question, not a guess.** 1,400
   tier-B careers pages were swept for unrecognised third-party *hiring* hosts,
   ranked by how many distinct firms each would rescue: ADP 19, Paylocity 18,
@@ -595,6 +664,70 @@ nothing public — Da Vinci Derivatives is the standing example.
   of 2025 by riksdag decision and their domains now serve AP4's and AP2's sites.
   A roster line naming a dead firm is a permanent miss nobody can close — check
   the page before building a reader for it.
+- **A site that 403s every page can still be publishing a list for crawlers,
+  and Citadel is the case.** Every HTML page and the WordPress REST API answer
+  403; `robots.txt` and the sitemaps answer 200, and `robots.txt` itself reads
+  `Allow: /` with `Crawl-delay: 10` and names two sitemap indexes. Inside them
+  is **`career-sitemap.xml`, regenerated the same day** — 51 postings for
+  Citadel and 85 for Citadel Securities, which is the whole board. That is not
+  a wall worked around; it is the door the site points a crawler at. **Read
+  `robots.txt` and the sitemap index before concluding a 403 means no.**
+- **Two things in that sitemap must not be read.** `<lastmod>` is identical to
+  within seconds across every entry, so it dates the file's regeneration and not
+  the opening — writing it as `posted_at` is the `publication.endDate` mistake
+  from job-room.ch one field over. And the slug is not a location: a few end
+  `-asia` or `-us` and most end in nothing, and the board *gates* on geography,
+  where `unknown` survives and a wrong city does not.
+- **The board is often in the page and not in any vendor's host.** DRW ships all
+  160 postings inside `__NEXT_DATA__` on `/work-at-drw/listings` — with titles,
+  ids and a location *list* — while its stored careers URL was a Cloudinary
+  image. The D. E. Shaw group serves its whole board, 86 cards with title,
+  office and category, as one 900 KB server-rendered page. Renaissance publishes
+  a dozen openings as `Careers.action?jobs=true&selectedPosition={key}` links.
+  None of the three runs an ATS and all three are readable in one request.
+- **A firm can proxy a real ATS through its own domain and name it nowhere.**
+  Bridgewater's careers page carries `data-job-api="/jobboard"`, and
+  `bridgewater.com/jobboard` is a **verbatim Greenhouse departments payload** —
+  board `bridgewater89`, a token no name guess produces. The attribute was the
+  only evidence on the page. Same shape as XTX's `api.xtxcareers.com`.
+- **`data-*` attributes are worth reading when the markup names no vendor.**
+  That is how Bridgewater was found, after `href` scanning had turned up
+  nothing but CSS.
+- **Six of the nine hand-found boards also had the wrong domain**, which is why
+  they are `sites.Site` rows rather than `discover` results: `twosigma.cn` for
+  Two Sigma, `bwasc.com` for Bridgewater, `headlands.com` for Headlands,
+  `gardacp.dk` for Garda, `viviennecourt.com` for VivCourt, and — the expensive
+  one — **`acadian.com` for Acadian Asset Management, which is Acadian
+  *Ambulance*, whose ADP board `myjobs.adp.com/acadianhealth` had been recorded
+  against the asset manager.** A wrong domain is not merely an empty feed here;
+  it is a live feed belonging to somebody else. `sites.register` writes
+  `domain_lookups` under the roster's own spelling, which is the route to fixing
+  one.
+- **A `Site` row with no reader is the cheapest fix in this project.** It names
+  an extractor that already exists and a board a human verified, which is how
+  Nasdaq was recorded and now Two Sigma (Avature), Northern Trust (Workday,
+  ~3,600 postings), Bridgewater, Robeco, Five Rings, Headlands, Garda, Acadian,
+  Teza, Wolverine, Magnetar and VivCourt. Every one was hidden by something the
+  careers walk cannot do — a hop it does not take, a redirect that leaves no
+  markup, a token no name produces — and none of them needed a line of parsing.
+- **Robeco's board is one hop past the page the walk settled on.** `/careers`
+  links to `/careers/job-openings` and only the second carries the Workday host.
+  The walk goes two hops and still missed it, because six fetches is the ceiling
+  and the first three candidates were spent elsewhere.
+- **Three vendors are confirmed closed, and re-checking them cost an hour
+  each.** Eightfold's `/api/apply/v2/jobs` answers **403** on Morgan Stanley's
+  tenant with or without `domain=`; Paylocity's board is still client-rendered,
+  with `/Recruiting/Content/public-jobs-list` serving a stylesheet rather than
+  an app bundle; and Jefferies' `tal.net` portal now answers with an **Altcha
+  CAPTCHA**, which this project does not complete — the same answer as the DFSA
+  register. All three are recorded so the next reader does not re-derive them.
+- **The Hong Kong long tail mostly runs no board at all.** Twenty-one of the
+  hub's unreached firms were probed by hand: eight 404 on every careers path,
+  and of the rest, Nine Masts, Ovata, Oasis and Janchor publish a page with no
+  postings on it, Marshall Wace publishes early-careers only, and Capula's
+  `careers.capula.com` answers 0 bytes. Only Pandtong lists openings on its own
+  host. **That is the same answer tier C gave: the population has no board, and
+  the firms that matter are reached one at a time.**
 - **Handelsbanken publishes its Swedish jobs on LinkedIn only.** The
   `careers.handelsbanken.co.uk` API its own bundle names is the **UK** board. A
   structural limit, not a gap — LinkedIn is deliberately out of scope.
@@ -891,6 +1024,36 @@ learn.
   far enough not to be: `sygeplejerske`, `pædagog`, `lærer` and `rengøring`
   match no Swedish needle. This is why the Jobindex gate is the board's own
   taxonomy.
+- **American English is a different vocabulary, and "the list is in English"
+  hid it for as long as the US was deprioritized.** 3,385 American postings sat
+  at `relevance: unknown` — the same diagnosis the Nordics gave, and the same
+  two-sided repair. From below: `nurse`, `medical` and `clinical` were all
+  present and caught none of `LPN/MA/EMT`, `Cardiac Sonographer`, `Clinic
+  Assistant`, `Dietary Aide` or `Health Unit Coordinator`; `janitor` caught no
+  `Custodial Worker I`. An American **television group** publishes through the
+  same ATS platforms as the trading firms, so `WSMV-Station-Nashville` arrives
+  mixed in with anchors, meteorologists and multimedia journalists.
+- **The whole American batch was dry-run and exactly one needle touched a
+  positively-rated posting.** `environmental services` reaches `Equity Research
+  Associate - Environmental Services` — an equity research seat covering the
+  sector, the `landscape` collision again. The aide's own title went in instead.
+- **Three more American needles were dropped on the principle rather than the
+  count**, all clean on the numbers: `sales lead` is the `salesperson` argument
+  again and this list has refused `sales associate` for years; `security
+  officer` reaches `Chief Information Security Officer` seven times, and a CISO
+  is a corporate function rather than another profession, so the *reason* would
+  have been wrong even where the verdict was not; bare `advanced practice`
+  reaches `Advanced Practice Wealth Banker`, so the two clinical compounds went
+  in instead.
+- **`exchange traded` was on `MARKETS` and never matched, because the corpus
+  writes `ETF`.** Fourteen Invesco and AllianceBernstein desks sat unread —
+  `ETF Strategist`, `Sr. Equity ETF Strategist`. `market making` was the same
+  omission one word over. **`secondaries` failed the same test that admitted
+  them**: all eleven promotions are private-equity, infrastructure and
+  real-estate secondaries, which is `discretionary_investing` arriving under a
+  markets-sounding word. `order management` was already refused for being
+  Motorola's supply chain — the American read found it independently, which is
+  what a rule that holds looks like.
 
 ## Two-sided rules
 
@@ -1011,8 +1174,39 @@ learn.
   postings in a focus hub** read as somewhere they are not. The handle is the
   source's own administrative unit, matched against the **location alone** for
   the same reason US state codes are: `SO`, `BE`, `AG`, `UR` and `GE` are
-  ordinary words in a title. Three cantons are deliberately absent — `AR`, `NE`
-  and `FL` are also Arkansas, Nebraska and Florida.
+  ordinary words in a title.
+- **A tie-break written for one focus hub expires when the other side becomes
+  one too.** `AR`, `NE` and `FL` were left off the canton list because they are
+  also Arkansas, Nebraska and Florida, on the rule that *a false hit in a focus
+  hub is worse than a false miss* — true while only Switzerland was focus.
+  Promoting the US made that rule say nothing, and the question became simply
+  which reading is right, which is a count: `, AR` is **235 postings and every
+  one is Appenzell**, `, NE` is 419 of which **380 are Neuchâtel**, and `, FL`
+  is 980 of which 938 are Florida. So `AR` and `NE` are cantons now and `FL` is
+  still a state. **Nebraska's head count survives because `_HUBS` is read
+  first** and `omaha` is named there. Liechtenstein is the leftover — `Vaduz,
+  FL` and `Schaan, FL` are filed with Switzerland, which is where job-room.ch
+  files them.
+- **Case-folding a country-code pattern is pure loss, and `\b` lets a full stop
+  in.** `_US_STATE` was `re.IGNORECASE`, so an ATS writing the *country* in
+  lowercase gave Bengaluru to Indiana, Berlin and Mainz to Delaware, Casablanca
+  to Massachusetts and Buenos Aires to Arkansas; and `\b` let `Dublin, Co.
+  Dublin, Ireland` read as Colorado **37 times**. Uppercase only, and
+  `(?![.\w])`. **Two codes are wrong more often than right even in upper case**
+  and are off the list entirely: `, IN` is 279 postings of which more than half
+  are Bangalore and Pune, `, DE` is 190 of which more than half are Glatten,
+  Meerane and Stuttgart. Their American half is named instead —
+  `indianapolis`, `wilmington de`, `dover de`.
+- **`georgia` is the `Åre` lesson in a new alphabet.** It reaches Tbilisi and
+  Vancouver's Georgia Street, and buys nothing that `atlanta` and `, GA` do not
+  already hold. Out. `washington` was kept — every hit is the state or the
+  District.
+- **A residual can be the complement of more than one hub, and the value has to
+  be a set to say so.** `_RESIDUAL_OF` mapped one bucket to one focus hub,
+  which is right for `sweden_other`; the US has three metros, so `us_other` is
+  the complement of all of them at once — and its "country words" are the
+  country's names *plus* the three states, since a state is what contains its
+  metro. Without that, `Chicago, Illinois` is one posting claiming two places.
 - **Whenever a new source lands, bucket its `hub` values before believing the
   board**: `other` filling up is what a place-list gap looks like from outside.
 - **A leading four-digit number is a postcode in Denmark and a street number in
@@ -1033,6 +1227,21 @@ learn.
   the pressure a ranking list is under. `2 Locations` is what Workday publishes
   for 6,281 multi-site postings and reading it as `other` claimed we had looked
   — it is `unknown`, and `unknown` is kept.
+- **But `N Locations` is not a posting that named no place, and calling it
+  `unknown` only stopped the bleeding.** It is a posting that named *several*,
+  summarised by a list field too narrow to hold them — and Workday's **detail**
+  endpoint spells them out in `location` + `additionalLocations`. That summary
+  was **8,004 postings, 58% of the whole `hub: unknown` bucket**, and it is
+  exactly the multi-location population, so it cost the board twice: the card
+  said `unstated` where the answer was knowable, and a seat open in Stockholm
+  *and* Copenhagen appeared under neither. `bodies.py` already fetched that
+  page for its description and threw the locations away; it returns
+  `Fetched(description, location)` now, with a second target queue for postings
+  whose location is the placeholder regardless of body or relevance. **Only the
+  placeholder is ever overwritten** — `Remote` is deliberately not treated as
+  one, because the detail endpoint answers it with the requisition's anchor
+  office and writing that would pin a remote posting to a city nobody has to
+  travel to.
 - **`hub` is multi-valued, and a country bucket is a complement rather than a
   second place.** A posting open in Amsterdam and London carries a row for each.
   But `sweden_other` means "in Sweden and *not* Stockholm", so a residual is
@@ -1043,6 +1252,30 @@ learn.
   Three places read `hub` that way and all three had to become `group_concat`.
   `shortlist`'s copy was also unpinned to a lexicon version, so it summed every
   retired tagger as well — two bugs in one line.
+- **Making a dimension multi-valued in the tagger is half the job; the board
+  has to stop collapsing it too.** `hub` was multi-valued end to end *except* in
+  `index.html`'s grouping, which keyed on `hub[0]` — so **group by place**, the
+  one view whose entire question is "what is open in Copenhagen", answered it
+  only under Stockholm for a two-city seat. The comment defending it said
+  filtering and the rail counts still saw both places so only the pile had to
+  pick one; that was the wrong trade, because anyone who filtered to Copenhagen
+  then watched the posting vanish into a pile named for a city they had just
+  filtered out. Every `GROUP_KEY` returns a *list* now, and a card rendering
+  twice is the point rather than a cost. **`GROUP_NAME` had to start reading the
+  key rather than `list[0]`** — a Copenhagen pile led by a Stockholm-first
+  posting was otherwise titled "Stockholm".
+- **A copy of the hub list drifts the moment a hub is added, and there were
+  three of them.** `labels._NEARBY` restated the six focus hubs plus
+  `deprioritized`, so promoting the US would have left the labelling sheet
+  ranking New York level with Bucharest; `coverage.unmeasured_hubs` restated
+  the focus hubs minus Stockholm, so it would have printed five while nine
+  existed — **quietly claiming New York, Chicago and Boston were measured when
+  nothing had measured them**, which is the worse of the two because a coverage
+  report that overstates itself is the one number nobody re-checks. Both are
+  derived now, and `tests/test_tagging.HubTableIsSelfConsistentTest` pins all
+  three against each other. `web/build_data.py` was already derived
+  (`_HUB_ORDER = tuple(tagging._HUBS)`) and needed nothing — which is the
+  pattern to copy.
 
 ## The board's gates
 
@@ -1095,6 +1328,14 @@ ate a hub.
   and wrong the moment they were not: **290 of the 466 Nordic cards became
   `Senior <IT consultant>` above every genuine markets posting at `unknown`**.
   **Whenever a gate is removed, re-read what downstream ranking it was hiding.**
+- **Promoting a geography is the same move and needs the same re-read.**
+  Moving the US into `_FOCUS_HUBS` silently switched off `_fit`'s "outside the
+  focus hubs" notch for ~30,000 postings, which is a whole country's worth of
+  cards moving up a bucket at once. That is the intended effect and it is why
+  the occupation vocabulary had to go in at the same time: the notch had been
+  doing the work an unwritten word list should have been doing, and removing it
+  without the words would have promoted 23,734 American rejects along with the
+  876 wanted ones.
 
 ## Reading the numbers
 
@@ -1119,7 +1360,18 @@ ate a hub.
   **national board** (Singapore 1.6%, Stockholm 2.9%, Switzerland 0.6%,
   Copenhagen 0.5%) carries every job in the country, so the share is low by
   design and the interesting number is what the *ranked* cards look like.
-  **Compare a hub only against a hub fed the same way.**
+  **Compare a hub only against a hub fed the same way.** The US metros are the
+  first case: they are fed by **firm ATS boards**, so compare New York against
+  Amsterdam and Hong Kong, never against Stockholm or Singapore.
+- **A hub's positive count is what settles whether it is a focus hub, and it is
+  worth recomputing before adding one.** The table that decided the US split:
+  New York 468, Chicago 107, Boston 75, all the rest of the US 148 — against
+  Singapore 530, Hong Kong 186, Stockholm 81, Amsterdam 38, Switzerland 35,
+  Copenhagen 17. Boston went in on 75 *and* on what its postings are (State
+  Street model risk and quant research); the Bay Area's 31, Texas's 31 and
+  Miami's 15 stayed out on the same second test — wealth advisers, tax
+  principals and real-estate capital markets. **Read the positives before
+  trusting the count**: it is the same rule as reading what a needle promotes.
 - **`no_markets_signal` fires in proportion to how foreign the language is, and
   that is alarming until you read the postings.** It rejects 63% of
   Switzerland, 27% of Copenhagen, 16% of Stockholm, 3% of Hong Kong — exactly
@@ -1197,6 +1449,23 @@ books its interval **per host** under a lock. Note the shape of the
 measurement, because the first attempt said *1.0x*: a sample of 24 boards was
 pagination against a handful of hosts, where the per-host throttle is the floor.
 **Spread the sample across hosts, or a concurrency change measures nothing.**
+
+**And the same sentence is a bug in the *queue*, not only in the benchmark.**
+`bodies` ran twelve threads over a queue ordered `first_seen DESC` — which
+arrives clustered by tenant, because a board polled this morning contributes its
+whole batch at once. With `MIN_INTERVAL_S` booked per host, twelve workers then
+queue behind one tenant's one-second slot, and the run costs the *sum* of those
+stretches rather than the longest: **335 consecutive `usbank` rows are 335
+seconds however many threads are watching.** Observed live before the fix — 270
+postings resolved in half an hour. `bodies._spread` round-robins the queue over
+its hosts, keeping each host's own order, which takes the longest same-host run
+**335 → 102** and the pass from roughly 90 minutes to roughly 12 for 5,372 rows.
+
+**Selection and fetch order are separate decisions**, and only the second one
+changed: `targets` still picks the newest rows, `_spread` only decides which to
+fetch first among them. **12 minutes is the floor** — the largest tenant has 723
+rows and the throttle allows one a second, so a pass is never shorter than its
+biggest board. That is the number to check before suspecting `_spread`.
 
 **Writes are ~2 minutes per full re-tag and WAL plus `synchronous=NORMAL` is
 worth only 1.1x on them** — it is in `db.connect` for the concurrency, not the

@@ -20,7 +20,7 @@ session.
 
 ## Where it stands
 
-**Stage 32 is the last one written down and every stage is closed**, so the next
+**Stage 33 is the last one written down and every stage is closed**, so the next
 unit of work is a decision rather than a queue: what to widen, what to measure,
 or what to leave alone. The standing sequence is one command, `python -m
 quantscraper daily`, and `python web/publish.py` puts the result on the CDN.
@@ -34,8 +34,19 @@ Candidates, none of them queued:
   per-firm hand work like `sites.py`, not another `discover` sweep — that sweep
   was re-run and re-confirmed rather than extending anything.
 - **The ADP/UKG list has more on it.** Radancy 12 firms, HiBob 5, Talentsoft 4,
-  Avature 3, JazzHR 3, Dayforce 3, Zoho 3, Cornerstone 2. Build down that list,
-  which was measured, not down a list of vendors you have heard of.
+  JazzHR 3, Dayforce 3, Zoho 3, Cornerstone 2. Build down that list, which was
+  measured, not down a list of vendors you have heard of — but **weight it by
+  the firms on it first.** Avature was ninth at 3 firms and one of them was Two
+  Sigma, which Stage 33 built for that reason.
+- **The rest of the focus-hub miss list is per-firm hand work, and most of it
+  has no board to find.** `audit --pipeline` names every one. Twenty-one Hong
+  Kong firms were probed by hand in Stage 33: eight 404 on every careers path
+  and most of the rest publish a careers page with no postings on it. The
+  Swiss remainder is private banks. Neither is another sweep.
+- **Three vendors are closed rather than pending**: Eightfold answers 403 on
+  its jobs API, Paylocity renders client-side, and Jefferies' `tal.net` portal
+  now sits behind an Altcha CAPTCHA. Recorded in `CLAUDE.md` so they are not
+  re-derived.
 - **The sub-$110M US adviser tail has no source**, and neither does
   sponsored-access. Both are recorded as structural in `README.md`.
 - **`job_tags` retention is broken by design** — the primary key omits `tagger`,
@@ -98,6 +109,7 @@ is untouched and one line in `web/build_data.py` reverses it.
 | 30 | The Nordic board: one bucket held junk and misses | 23 ranked cards → 66 |
 | 31 | Every hub read the way Stockholm was | ranked cards +21% across all hubs |
 | 32 | The sixth gate: a board publishing no markets work | 906 cards, no ranked card lost |
+| 33 | The marquee firms, one at a time | 145/253 reached, 1,258 postings |
 
 ---
 
@@ -458,3 +470,146 @@ and it needs no entry there: the sheet's frame requires `labels.anchored`, and
 the markets-title branch added in Stage 30 runs last and converts any anchored
 posting out of `unknown`. A row still at `unknown` therefore has neither. **If
 that branch is ever moved, this stops being true.**
+
+### 33 — The United States promoted, and two location faults it exposed
+
+The user moved the US out of `deprioritized`. The numbers say it should have
+been out already: **876 postings rated `adjacent` or better against 887 for all
+six older focus hubs put together**, and New York alone carries 468.
+
+**Three metros plus a residual, not one national hub.** `new_york`, `chicago`
+and `boston` are focus; `us_other` is on the board and ranks below them, which
+is what makes it unlike `sweden_other`. Measured: the metros hold 74% of the
+positively-rated American postings in 27% of the volume. The Bay Area, Texas and
+Miami stayed out on what their positives *are* — wealth advisers, tax
+principals, real-estate capital markets.
+
+**The location plumbing was wrong in both directions and nothing said so.**
+
+- `_US_STATE` was `re.IGNORECASE` with a `\b`, so it claimed Bengaluru for
+  Indiana, Berlin for Delaware, Casablanca for Massachusetts and `Dublin, Co.
+  Dublin, Ireland` for Colorado 37 times. Uppercase and `(?![.\w])` now, with
+  `IN` and `DE` off the list entirely and their American half named instead.
+- `AR` and `NE` moved to the cantons: 235 postings on `, AR` and every one
+  Appenzell, 419 on `, NE` of which 380 are Neuchâtel. The old rule that kept
+  them American expired the moment both sides became focus hubs.
+- 2,017 American postings **spell the state out** and read as `other`, which
+  the board deletes. Plus 374 saying only `Remote US`.
+
+**Exit (met), measured at lexicon v50 after the whole sequence had run:** New
+York **4,840 postings / 508 positive / 119 relevant** — more `relevant` than any
+other hub on the board, and more than the next two put together. Chicago
+1,598/171/37 sits level with Hong Kong 1,312/190/36; Boston 1,061/84/16 sits
+between Stockholm and Amsterdam. `us_other` 25,264/360/44, shown and ranked
+below the metros. `deprioritized` is down to the 6,504 that are genuinely UK,
+Germany, China and Dubai.
+
+On the board: **New York 921 cards, Chicago 339, Boston 192, elsewhere in the US
+1,628.** Every American needle dry-run over all 296,096 live postings; exactly
+one touched a positively-rated posting (`environmental services` reaches an
+equity research seat) and it was dropped.
+
+### 34 — `N Locations` was never "unknown", and the board collapsed the rest
+
+Two faults with one cause, both reported by the user.
+
+**Workday's list endpoint summarises a multi-site requisition as `2
+Locations`.** That is **8,004 postings, 58% of the whole `hub: unknown`
+bucket** — not postings that named no place, postings that named several. The
+detail endpoint spells them out in `location` + `additionalLocations`, and
+`bodies.py` was already fetching that page for its description and discarding
+them. It returns `Fetched(description, location)` now, with a second target
+queue keyed on the placeholder. Only the placeholder is ever overwritten;
+`Remote` deliberately is not.
+
+**`index.html` grouped on `hub[0]`**, so a Stockholm-and-Copenhagen seat
+appeared under Stockholm only — under *group by place*, the one view whose whole
+question is "what is open in Copenhagen". Every `GROUP_KEY` returns a list now,
+`GROUP_NAME` reads the key rather than `list[0]`, and `hubsOf` narrows to the
+rail's selection so a filter and its piles cannot contradict each other.
+
+**Exit (met):** 3,155 Workday postings resolved from a count to a real place
+list, and **cards carrying more than one hub went 104 → 341** while `unstated`
+fell 1,650 → 929. Verified in the browser against the rebuilt board: a
+New-York-and-Chicago card renders under both places, the three non-hub
+groupings still show it once, and filtering to one city no longer leaves a stray
+one-member pile for the other.
+
+**Resolving a place removes cards as well as adding them, and that is correct.**
+~1,082 of the resolved postings turned out to be in India, the Philippines,
+Poland or Brazil, and are now gated rather than sitting on the board as "we do
+not know". Total cards 7,880 → 6,714 for that reason and the American occupation
+vocabulary together.
+
+**5,041 placeholders remain and 91% of them are by design:** 4,588 are already
+gated for another reason, so the queue never fetches them. The other **453 were
+queued and the fetch failed** — 404s and tenants that refuse — and they stay in
+the queue for the next run, which is what makes the pass resumable.
+
+**A postscript worth its own line: the fetch queue was a one-thread pool.**
+`bodies` ran twelve workers over rows ordered `first_seen DESC`, which arrives
+clustered by tenant — so with the throttle booked per host, the workers queued
+behind one tenant's one-second slot and the run cost the *sum* of those
+stretches. Observed live: **270 postings in half an hour**. `bodies._spread`
+round-robins over hosts, longest same-host run **335 → 102**, roughly 90 minutes
+to roughly 12. The floor is the largest board — 723 rows at one a second.
+
+
+## Stage 33 — the marquee firms, one at a time
+
+**The exit criterion:** every firm `audit --pipeline` named as a focus-hub miss
+is either producing postings, or recorded with the reason there is no board to
+find. Reached, not guessed at.
+
+**What it was.** `audit --pipeline` reported 125/253 roster firms reached, and
+the miss list was the roll-call this project exists for: Citadel, Citadel
+Securities, Two Sigma, D. E. Shaw, DRW, Bridgewater, Renaissance, Northern
+Trust, Wolverine, Headlands, Five Rings, Garda, Acadian, Teza, Magnetar,
+Robeco. Every one of them was tier B or C — a careers page running on nothing
+recognised — which is the blind spot `discover.py` was written for and could
+not close, because none of these firms' board tokens is guessable from the
+name and six of them had the wrong domain stored.
+
+**Three different repairs, and only one of them was code that scrapes.**
+
+1. **A regex gap, worth 29 boards.** The Greenhouse pattern matched
+   `?for={board}` but not `/js?for={board}`, which is the shape Greenhouse's
+   own snippet uses. Those domains resolved *tier A with a NULL token* — a
+   board nobody polls, invisible to every sweep. Maven Securities alone was 39
+   postings across three focus hubs. `job_app?for=` had to be admitted too, for
+   GSA Capital.
+2. **Nine boards found by hand and recorded as `sites.Site` rows with no
+   reader** — the Nasdaq precedent. Two Sigma, Northern Trust, Bridgewater,
+   Robeco, Wolverine, Five Rings, Headlands, Garda, Acadian, Teza, Magnetar,
+   VivCourt. Each names an extractor that already exists, so none needed
+   parsing; what they needed was the right page read once by a person.
+3. **One new ATS and five hand-written readers.** Avature (Two Sigma, 50
+   postings) is a real multi-tenant vendor whose board is the customer's own
+   hostname. Citadel and Citadel Securities are read from the **career sitemap
+   they publish for crawlers**, because every HTML page on both hosts answers
+   403 while `robots.txt` says `Allow: /`. DRW ships its whole board inside
+   `__NEXT_DATA__`; D. E. Shaw serves 86 cards on one page; Renaissance
+   publishes twelve anchors.
+
+**What it bought.** 1,258 postings from firms that were contributing nothing:
+Northern Trust 637, DRW 160, D. E. Shaw 86, Citadel Securities 85, Citadel 51,
+Two Sigma 50, Maven Securities 39, Wolverine 20, Five Rings 17, Bridgewater 16,
+Robeco 14, Geneva Trading 13, Acadian 12, Renaissance 12, Garda 11, Teza 11,
+Vatic 10, Headlands 7, Magnetar 3, VivCourt 3, 323 Trading 1.
+
+GSA Capital is the one that resolved and added nothing: its board was already
+being polled under `gsa-coral.com`, a sibling domain of the same group, so the
+fix corrected the record rather than opening a feed. **A tokenless tier-A row
+can be a duplicate of a board already reached under another of the firm's
+domains** -- worth checking before counting a fix as postings.
+
+`audit --pipeline` moved from **125/253 roster firms reached to 145/253**, and
+the focus hubs from US 41/79 to **57/79**, Amsterdam 8/13 to **11/13**, Hong
+Kong 18/51 to **21/51**, Singapore 9/10 to **10/10**.
+
+**What it did not close, and why that is the answer rather than a gap.**
+Twenty-one Hong Kong firms were probed by hand: eight 404 on every careers
+path, and most of the rest publish a careers page with no postings on it.
+Eightfold (Morgan Stanley), Paylocity (XR Trading) and Jefferies' `tal.net`
+portal are each closed for a stated reason. Those are recorded in `CLAUDE.md`
+so the next reader does not spend the afternoon again.
