@@ -141,13 +141,29 @@ def smartrecruiters(token: str) -> list[Job]:
         # `ref` is a dict of links on most boards and a bare string on some.
         ref = job.get("ref")
         ref = ref if isinstance(ref, dict) else {}
+        # **And where it is a string, both link fields are empty -- which was
+        # every live SmartRecruiters row we hold.** All 1,507 of them across 12
+        # boards had `url` NULL: `ref` is the API's own self-link and
+        # `applyUrl` is `null`, so the two fallbacks above resolved to nothing
+        # and the board rendered cards nobody could open. The code already knew
+        # `ref` came in two shapes and simply gave up on the second.
+        #
+        # The public ad is `jobs.smartrecruiters.com/{company}/{id}` -- verified
+        # against the live board rather than guessed, and the title slug some
+        # boards append is optional. `company.identifier` is preferred over
+        # `token` because it is the payload's own answer to the same question.
+        company = job.get("company")
+        company = company.get("identifier") if isinstance(company, dict) else None
+        posting_id = str(job["id"])
         jobs.append(
             Job(
                 ats="smartrecruiters",
                 token=token,
-                job_id=str(job["id"]),
+                job_id=posting_id,
                 title=job.get("name") or "",
-                url=ref.get("jobAd") or job.get("applyUrl"),
+                url=ref.get("jobAd")
+                or job.get("applyUrl")
+                or f"https://jobs.smartrecruiters.com/{company or token}/{posting_id}",
                 location=", ".join(
                     p for p in (location.get("city"), location.get("country")) if p
                 )
@@ -1135,13 +1151,32 @@ def workday(token: str) -> list[Job]:
         seen_page = this_page
         for job in postings:
             path = job.get("externalPath") or ""
+            title = job.get("title") or ""
+            # **A missing `externalPath` used to become a link to the whole
+            # careers site, which is worse than no link at all.** The URL was
+            # built unconditionally, so an entry without one produced
+            # `{origin}/en-US/{site}` -- the board's own landing page, under
+            # whatever title the entry carried. The reader found two on the
+            # live board, at Nasdaq and Sun Life, and 42 boards held one each:
+            # `job_id` empty, `title` empty, and a card that opens the
+            # recruiting page instead of an advertisement.
+            #
+            # Neither half is dropped silently. **A posting with a title and no
+            # path is kept with no URL** -- principle 4 says classification is a
+            # read-time job and this is a posting, however badly Workday
+            # published it. **An entry with neither is not a posting at all**
+            # and inventing a row for it is the write-time mistake in its purest
+            # form: nothing about it can ever be read, and it cannot be
+            # re-fetched because there is no id to ask for.
+            if not path and not title:
+                continue
             jobs.append(
                 Job(
                     ats="workday",
                     token=token,
-                    job_id=path or job.get("title", ""),
-                    title=job.get("title") or "",
-                    url=f"{origin}/en-US/{site}{path}",
+                    job_id=path or title,
+                    title=title,
+                    url=f"{origin}/en-US/{site}{path}" if path else None,
                     location=job.get("locationsText"),
                     posted_at=job.get("postedOn"),
                 )

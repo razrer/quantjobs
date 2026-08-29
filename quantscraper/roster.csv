@@ -154,6 +154,11 @@ Hong Kong,focus,Keywise Capital Management,Keywise Capital,active,
 Hong Kong,focus,Blue Pool Capital,,active,
 Hong Kong,focus,Janchor Partners,,active,
 Hong Kong,focus,Income Partners Asset Management,,active,Specific: a bare "Income Partners" matches Energy Income Partners and Tetragon Credit Income Partners.
+# The exchange and the central bank. Neither is an SFC licensed corporation,
+# so neither is in sfc_hk or any other register here; both are seeded and both
+# run a live board. HKEX is the larger single source in this hub.
+Hong Kong,focus,Hong Kong Exchanges and Clearing,HKEX|Hong Kong Exchanges,active,Specific: a bare "HKEX" also names its own market-data subsidiaries.
+Hong Kong,focus,Hong Kong Monetary Authority,HKMA,active,Runs the Exchange Fund; publishes its own closing dates.
 # ── Singapore ────────────────────────────────────────────────────────────────
 Singapore,focus,Optiver,,active,
 Singapore,focus,Jane Street,,active,

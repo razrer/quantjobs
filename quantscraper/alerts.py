@@ -137,16 +137,38 @@ def check(connection: sqlite3.Connection, now: datetime | None = None) -> list[A
     return alerts
 
 
+def _expected() -> set[str]:
+    """Every source that is supposed to appear in `runs`.
+
+    **The registries are only half of it, and the missing half cost Singapore
+    ten days.** `check` walks `SELECT DISTINCT source FROM runs`, so a source
+    with no rows is not judged; `coverage` is the backstop for exactly that,
+    and it read `REGISTRIES` alone. The national boards are not registries --
+    they live in the package root, not in `registries/` -- so MyCareersFuture
+    was missing from **both** lists at once and `alerts` printed `all sources
+    healthy` while it had not run since the 17th. Layer 1 and Layer 4 are the
+    same question here: was this source asked, and did it answer.
+
+    Imported inside the function, like `REGISTRIES`, so this module keeps its
+    one promise -- it reads, and it depends on nothing that writes.
+    """
+    from . import jobbsafari, jobindex, jobroom_ch, jobstream, mycareersfuture
+    from .registries import REGISTRIES
+
+    return set(REGISTRIES) | {
+        module.NAME for module in
+        (jobstream, jobroom_ch, jobindex, jobbsafari, mycareersfuture)
+    }
+
+
 def coverage(connection: sqlite3.Connection) -> list[str]:
-    """Registries that have never recorded a run at all.
+    """Sources that have never recorded a run at all.
 
     A source that was added and never wired into a schedule looks identical to
     a healthy one from inside `runs`, because it has no rows to be wrong.
     """
-    from .registries import REGISTRIES
-
     seen = {
         row["source"]
         for row in connection.execute("SELECT DISTINCT source FROM runs")
     }
-    return sorted(set(REGISTRIES) - seen)
+    return sorted(_expected() - seen)

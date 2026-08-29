@@ -1113,6 +1113,35 @@ class SwissTradesTest(unittest.TestCase):
         self.assertEqual(
             [t.value for t in tags if t.dimension == "hub"], ["us_other"])
 
+    def test_an_hkex_site_code_is_hong_kong(self):
+        """HKEX writes the office rather than the city -- `HK-TWO ES 11/F` is
+        Two Exchange Square -- so all 164 postings on its Workday board matched
+        no needle in `_HUBS` and read as `other`, which the board gates. The
+        same failure as `Wallisellen, ZH`, at one employer's scale."""
+        for place in ("HK-CMP 6/F", "HK-TWO ES 11/F", "HK-TKO 5/F",
+                      "HK-ONE ES 30/F", "HK-DTH 9/F"):
+            with self.subTest(place=place):
+                tags = tagging.tag_posting(_posting(title="Analyst", location=place))
+                self.assertEqual(
+                    [t.value for t in tags if t.dimension == "hub"], ["hong_kong"])
+
+    def test_hkexs_other_country_codes_are_read_as_their_cities(self):
+        """`CN-Shenzhen-HyQ` and `UK-London` are the same convention, and both
+        already resolve through `_HUBS` on the city name -- which is why only
+        the Hong Kong half needed a pattern."""
+        for place in ("CN-Shenzhen-HyQ", "UK-London"):
+            with self.subTest(place=place):
+                tags = tagging.tag_posting(_posting(title="Analyst", location=place))
+                self.assertEqual(
+                    [t.value for t in tags if t.dimension == "hub"], ["deprioritized"])
+
+    def test_an_hk_site_code_is_never_read_from_a_title(self):
+        """Anchored and matched against the location alone, for the reason the
+        canton and state patterns are: `hk` is two letters."""
+        tags = tagging.tag_posting(
+            _posting(title="HK-based Analyst", location="Bangalore, India"))
+        self.assertNotIn("hong_kong", [t.value for t in tags if t.dimension == "hub"])
+
     def test_liechtenstein_is_filed_with_switzerland_not_florida(self):
         """`FL` staying a state code leaves Vaduz and Schaan to be named, and
         job-room.ch files them under Switzerland for the same reason."""
@@ -2432,3 +2461,76 @@ class WideningMarketsCreatesItsOwnCollisionsTest(unittest.TestCase):
         needle that could delete a desk."""
         self.assertEqual(_tags(title="Front Office Mitarbeitender")["relevance"],
                          {"adjacent"})
+
+
+class EnglishPluralIsTheSameRankTest(unittest.TestCase):
+    """`_MANAGEMENT` is matched whole, so `Managers` is a word it cannot see.
+
+    The Swedish half of this list has been inflected twice -- `Undersköterskor`
+    for the plural, `Taxiföraren` for the definite -- and the English half
+    never was. `Delivery Managers - Tieto Banktech` escaped `delivery manager`
+    and reached the board, which is where the reader found it.
+
+    Dry-run over 382,034 live titles: 146 hits across the four plurals, one of
+    them rated positively and read by hand. **Four more were measured and
+    dropped on the reason rather than the count** -- see the list.
+    """
+
+    def _rejected_as_management(self, title: str) -> bool:
+        tags = _tags(title=title)
+        return "out_of_reach" in tags.get("exclusion_reason", set())
+
+    def test_the_plural_ranks_the_same_as_the_singular(self):
+        for title in ("Delivery Managers - Tieto Banktech (m/f/d)",
+                      "Senior Managers / Directors to Finance Transformation",
+                      "Logistics Supervisors",
+                      "Business Leaders [No Experience Required]"):
+            with self.subTest(title=title):
+                self.assertTrue(self._rejected_as_management(title))
+
+    def test_a_firms_name_is_not_a_rank(self):
+        """`partners` was measured and dropped: its two positively-rated hits
+        are `Associate, Private Equity, CLSA Capital Partners`, where the word
+        is in the employer's name and the applicant is an associate."""
+        self.assertFalse(
+            self._rejected_as_management("Associate, Private Equity, CLSA Capital Partners"))
+
+    def test_an_occupation_that_looks_like_a_rank_is_not_one(self):
+        """`principals` is sixteen preschool principals, and `presidents` and
+        `heads of` reach only an *assistant to* one. A gate whose reason is
+        wrong is wrong even where its verdict is right."""
+        for title in ("Preschool Principals - BEDOK",
+                      "Assistant to Heads of Propulsion Systems Procurement"):
+            with self.subTest(title=title):
+                self.assertFalse(self._rejected_as_management(title))
+
+
+class SwedishPluralOfAnAccountingTitleTest(unittest.TestCase):
+    """The `-er` plural, spelled out per entry rather than made a suffix rule.
+
+    `Två kundansvariga redovisningskonsulter till affärsområde Värdepapper`
+    reached the board as `adjacent` on *värdepapper* -- a markets word naming
+    the department the accountants serve, not the job. The singular was already
+    on `_OFF_INDUSTRY`; the plural was not.
+
+    As a **compound suffix** `-er` would fire on `researcher` and `developer`,
+    which is why this is a list and `-n`/`-na`/`-rna` is a rule.
+    """
+
+    def _gated(self, title: str) -> bool:
+        return "off_industry" in _tags(title=title).get("exclusion_reason", set())
+
+    def test_the_plural_gates_like_the_singular(self):
+        for title in ("Två kundansvariga redovisningskonsulter till affärsområde Värdepapper / KC",
+                      "Redovisningskonsulter, Kalmar",
+                      "Ekonomiassistenter till kommande uppdrag",
+                      "Redovisning"):
+            with self.subTest(title=title):
+                self.assertTrue(self._gated(title))
+
+    def test_the_researcher_the_suffix_rule_would_have_eaten(self):
+        """The reason this is a list: every one of these ends in `-er`."""
+        for title in ("Quantitative Researcher", "Quant Developer",
+                      "Senior Software Engineer, Trading Systems"):
+            with self.subTest(title=title):
+                self.assertFalse(self._gated(title))

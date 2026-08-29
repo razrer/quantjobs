@@ -409,6 +409,26 @@ nothing public — Da Vinci Derivatives is the standing example.
   `tests/test_workday.py` pins all three.
 - **Workday needs `tenant|wdN|site`.** A tenant alone builds a URL that 404s on
   every poll while the board looks resolved.
+- **A URL built unconditionally from a missing field becomes a link to the
+  vendor's landing page, which is worse than no link.** `extract.workday` did
+  `url=f"{origin}/en-US/{site}{path}"` with `path = externalPath or ""`, so an
+  entry Workday published without a path produced the board's own front door.
+  **42 Workday boards held exactly one each** — empty `job_id`, empty `title`,
+  and a card that opens a recruiting site — and the reader found two of them,
+  at Nasdaq and Sun Life. The two halves are handled separately on purpose: a
+  posting with a **title and no path** is kept with `url=None`, because it is a
+  posting however badly it was published, while an entry with **neither** is not
+  a posting at all — nothing about it can ever be read and there is no id to
+  re-fetch it by. `web/build_data.py` counts `untitled` separately as the guard
+  for the next source that does this.
+- **Every live SmartRecruiters row had a NULL URL — 1,507 of them, across all 12
+  boards — and the code carried a comment describing the cause.** `ref` is a
+  dict of links on some boards and a bare API self-link string on others; where
+  it is a string, `applyUrl` is `null` too, so `ref.get("jobAd") or applyUrl`
+  resolved to nothing and the board rendered cards nobody could open. The public
+  ad is `jobs.smartrecruiters.com/{company}/{id}`, verified against the live
+  board, and the title slug some boards append is optional. **A comment noting
+  that a field comes in two shapes is not the same as handling the second one.**
 - **Workday has a second host and it inverts the URL.** On `myworkdayjobs.com`
   the tenant is the subdomain; on `myworkdaysite.com` the subdomain is a bare
   `wdN` and the tenant moves into the path. The two patterns capture the same
@@ -728,11 +748,81 @@ nothing public — Da Vinci Derivatives is the standing example.
   `careers.capula.com` answers 0 bytes. Only Pandtong lists openings on its own
   host. **That is the same answer tier C gave: the population has no board, and
   the firms that matter are reached one at a time.**
+- **HKEX and the HKMA were in no register at all, and they are the largest
+  single thing missing from Hong Kong.** `sfc_hk` enumerates licensed
+  *corporations* under the SFO; an exchange controller and a central bank are
+  neither, so both sat outside a universe of 79,225 firms while running live
+  boards -- **HKEX 164 postings on Workday, the HKMA 14 on its own vacancies
+  table**. Both are seeded now. HKEX hid for a second reason worth keeping:
+  its careers page is on **`hkexgroup.com`** while the firm's site is
+  `hkex.com.hk`, so a walk that starts at the domain never reaches the hop
+  that names the board. **Before deciding a hub's long tail is empty, check
+  whether its exchange and its central bank are in the universe at all.**
+- **Four Hong Kong roster firms had a domain belonging to somebody else, and
+  Capula is the dangerous one.** `capula.com` is **Capula Ltd, a Staffordshire
+  engineering contractor working on nuclear and power-generation sites**, with
+  a live careers page; the hedge fund is `capulaglobal.com`, whose careers page
+  names `capula-investment-management-ltd.workable.com` and yields 12 postings
+  including a `Quantitative Strategist (PhD)`. That row was tier B, which is
+  what `ats --regrade` re-walks -- so it was one promotion away from polling an
+  engineering firm's board under a hedge fund's name, the `acadian.com` failure
+  waiting to happen rather than one that had. The other three are dead ends
+  with no correct domain known and are recorded as `NULL`: `ortus.com` is
+  **Ortus Fitness, a Spanish gym-equipment maker**, `liquid.com` is the crypto
+  exchange Quoine, `panview.se` is a Swedish image supplier, `trivest.com` is
+  Trivest Partners, a US private-equity firm. All five were `name-weak`
+  matches. **A weak match on a one-word name is worth reading the page for
+  before it is worth polling.**
+- **Hong Kong's hedge-fund long tail really does run no board, and the second
+  measurement agrees with the first.** Stage 33 probed 21 unreached firms by
+  hand; probing the remaining ones the same way found the same answer --
+  Janchor, Nine Masts, Oasis and Blue Pool serve one SPA shell for every path,
+  Ovata's careers page says *No positions available* in as many words, Marshall
+  Wace publishes programmes rather than postings. **Two do publish openings on
+  their own host and are readers now**: Pandtong (13, including
+  `Quantitative researcher` and `Machine learning researcher`) and Anatole (2
+  internships). Pandtong is read in **English** from `/careersEn` -- the same
+  board as `/careers` under the same `name=N` ids, and the lexicon is English,
+  Swedish and Danish, so the Chinese rendering would match none of it.
+- **Scoping `discover` to a register also has to re-order it.** `--source` was
+  added so a hub could be swept at all -- Hong Kong's firms are almost all
+  SFC-only, so `source_count DESC` sorts them behind 27,314 others and no
+  `--limit` ever reaches one. Scoping alone was not enough: inside *one*
+  register that ordering stops meaning "an operating company rather than a fund
+  share class" and starts meaning "a multinational", because the firms several
+  registers hold are the banks licensed everywhere. The first HK-scoped sweep
+  probed **ING, Societe Generale, Intesa Sanpaolo, Natixis, RBC and Bank of
+  China -- 50 firms, 0 boards, not one of them a Hong Kong company.** Scoped
+  sweeps order by `row_count` instead.
 - **Handelsbanken publishes its Swedish jobs on LinkedIn only.** The
   `careers.handelsbanken.co.uk` API its own bundle names is the **UK** board. A
   structural limit, not a gap — LinkedIn is deliberately out of scope.
 
 ## National boards (Layer 4)
+
+- **Hong Kong has no national board this project can read, and that is settled
+  rather than pending.** The question is the obvious one to ask -- Singapore's
+  statutory portal is the board's largest source, so where is Hong Kong's? It
+  exists and it is closed. The Labour Department's **Interactive Employment
+  Service** (`jobs.gov.hk`, `www2.jobs.gov.hk`) publishes a `robots.txt` whose
+  last line is `Disallow: /`, above it `Disallow: /0/api/*` and
+  `Disallow: /isps/Web/WebForm/JobSeeker/Job/*`, and an allow-list of about
+  forty paths that are corporate pages plus four *sector* landing pages --
+  elderly care, catering, retail, construction. None is finance. **That is the
+  exact inverse of MyCareersFuture**, whose `robots.txt` reads `Disallow:` with
+  a sitemap, and the two portals are the same kind of institution. The
+  commercial boards close the rest: `hk.jobsdb.com`, the dominant one, disallows
+  `*?` and `*/job/`, so a search sweep is outside its rules by construction;
+  **`efinancialcareers.hk` and `ctgoodjobs.hk` answer HTTP 405 to every path
+  including their own homepages** -- a WAF refusing this client, and changing
+  the user agent to get past it is evasion. `recruit.com.hk` pages by ASP.NET
+  `__doPostBack` and publishes no hitcount, so a sweep of it could not be
+  checked for truncation. `jobmarket.com.hk` is the one that is open,
+  enumerable and honest -- its own taxonomy, GET paging, and `Record=N` on
+  every page -- and its **entire board is 3,639 postings**, of which
+  banking-finance is 234. Measured before building anything: it is not a
+  Singapore, and Hong Kong's supply has to come from employers instead.
+  `data.gov.hk` carries no vacancy dataset either.
 
 - **A 401 can be our own URL, and it cost this project a source for months.**
   job-room.ch was recorded as blocked on a registered API programme on the
@@ -832,6 +922,60 @@ nothing public — Da Vinci Derivatives is the standing example.
   Ashby prints *"unless a specific application deadline is stated"* on every
   posting it hosts. The board sorts an approaching deadline above everything
   else, so a wrong one nails the wrong card to the top of the page for weeks.
+- **A 429 is not a 503 and must not share its retry schedule.** `_send` backed
+  off `2 ** attempt` for both, so a rate limit spent its entire three-attempt
+  budget **inside three seconds** and then raised. MyCareersFuture died ~400
+  pages into a `daily --full` that way, having written 37,562 postings.
+  `Retry-After` is honoured when the server sends one, clamped so an absurd
+  value cannot hang a run, and a 429 otherwise waits 30s/90s/300s. Slowing down
+  is what a 429 *asks for*; it is the compliant response, as distinct from
+  changing the user agent or probing for the threshold, which is evasion.
+- **`api.mycareersfuture.gov.sg` answers a sustained sweep in words.** HTTP 429
+  with `x-amzn-errortype: ForbiddenException` and a header somebody typed:
+  `scrapper: contact us via the feedback form if you have legitimate reasons`.
+  It is a **rate threshold, not a ban** — it lifts within the hour and
+  low-volume requests answer 200 either side of it. The host runs at one request
+  per four seconds (`http.HOST_INTERVAL_S`), and **that rate completes a full
+  sweep: 958 pages, 95,536 postings against 95,561 advertised, no refusal,
+  ~70 minutes.** Backing off was the whole fix; nobody had to find the
+  threshold. Whether to write to them via the feedback form they name is item 5
+  of `ACTION-REQUIRED.md` and is courtesy, not necessity. Note
+  `www.mycareersfuture.gov.sg/robots.txt` says
+  `Disallow:` with a sitemap, i.e. crawl freely; the **API host publishes no
+  robots.txt at all**, and the two hosts do not say the same thing.
+- **A crashed poll left no row, and `alerts` then reported every source
+  healthy.** This is the job-room.ch failure one step along: `_record_poll`
+  closed *"a source nobody asked about"* and left open *"a source that was asked
+  and did not come back"*, because it runs **after** the sweep returns.
+  Singapore was down, 37,562 rows landed, `runs` held nothing, and `alerts`
+  printed `all sources healthy`. `cli._poll` wraps every Layer 4 sweep and
+  records `ok=0` on the way out, which is the contract `_fetch` has had for the
+  registries since the beginning. **A report that cannot fail is not a report.**
+- **`alerts.coverage` read `REGISTRIES` alone, so the national boards were
+  missing from *both* of its lists at once.** `check` walks
+  `SELECT DISTINCT source FROM runs` and therefore cannot judge a source with
+  no rows; `coverage` is the backstop for exactly that, and it only knew the
+  Layer 1 modules — the national boards live in the package root rather than in
+  `registries/`. So a Layer 4 source that had never recorded a run was invisible
+  to the check *and* to the check's backstop. `alerts._expected()` is the union
+  now. **A backstop that shares the blind spot it exists to cover is not a
+  backstop** — and a source in neither list is how `all sources healthy` was
+  printed for ten days over a dead Singapore.
+- **A refusal mid-walk ends the walk; it does not throw the walk away.** The
+  pages already fetched cost the portal something, and they are committed. What
+  a traceback destroys is the *arithmetic* — how much of the board was reached.
+  `Sweep.blocked` carries the portal's own sentence and `problem` reports it
+  **before** the shortfall check, because a refused sweep reported as
+  "truncation" reads as our paging being wrong when the portal has simply
+  declined. A refused `--since` top-up is a failure too: there is nothing
+  incremental about being turned away.
+- **A sweep that dies half way makes `last_seen` unreadable, and that is the
+  real cost.** After the crash, 54,159 Singapore rows sat last-seen 17 August
+  still carrying a future deadline and **nothing could say whether they were
+  withdrawn or merely never reached** — the two are distinguishable only by a
+  walk that finished. One finished walk resolved it to 29,262 genuinely
+  withdrawn, 1,800 of them still claiming a future deadline. **The remedy for
+  an ambiguous `last_seen` is a completed sweep, not a query.**
 - **A source that collected nothing looks exactly like a source nobody asked
   about.** job-room.ch was built, guarded and proved against a live portal, and
   `jobs` held **not one Swiss row**. Every report in this pipeline is per source,
@@ -887,6 +1031,76 @@ learn.
 - **A department is nothing but the desk's name, so it must never reject the
   role.**
 - **Whenever a needle gets shorter, re-check what text it is matched against.**
+- **`MARKETS` is a role list, `judge` step 9 read it from the body, and that was
+  the single largest hole the reader's own rejections found.** The module says
+  so in its own comments twice — "a markets word in the title is about the job;
+  the same word in the body may only be about the employer's customers" — and
+  `labels.anchored` says it a third time; step 9's absence test read
+  `markets_role or markets_body` anyway, so **one word anywhere in a description
+  switched `no_markets_signal` off entirely**. Of the 40 postings the reader
+  hand-rejected off the live board, **19 escaped there**: Adidas's `Part-Time
+  Sales Consultants` and Fortum's `Balance Settlement Specialist` on bare
+  *trading*, Karolinska Institutet's `Projektadministratör` on *front office* —
+  a hospital's reception desk — a `Swedish Content Writer` on *market data*,
+  Accenture's `Service Now business architect` on *structuring*, and Baker
+  McKenzie's antitrust associate on *capital markets*. It reads `markets_role`
+  only now: **2,504 postings moved `unknown → rejected` and 29 `adjacent →
+  rejected`, no `relevant` card was lost**, and every one of the 29 was read by
+  hand — thirteen are one Singapore recruiter's `HSBC Life Wealth Management
+  Advisor`, the rest investor relations, wealth management and a consulting
+  grade ladder. **Nothing a body can prove is lost**, because the branch above
+  it is a body test: `quant_body` is markets *activity*, and a description
+  naming any still holds the posting open. **Steps 7 and 8 still read the body
+  and must** — there the title has already been recognised as an engineer or an
+  analyst, so the body corroborates a reading rather than supplying the only one
+  there is.
+- **A stricter step 9 amplifies every inflection gap in the lists above it, and
+  that is the thing to re-measure after tightening it.** 61 of the 2,506
+  removals reach step 9 only because a plural was invisible one list earlier —
+  `Solutions Architect` for `solution architect`, `Investment Analysts` for
+  `analyst`, `Account Managers` for `account manager`. Measured, the verdict is
+  the same either way in all but one case and only the recorded *reason*
+  differs, so this was left alone. **`solutions architect` is the one worth
+  adding** and is not added yet: 328 live titles, and unlike the others its list
+  (`ENGINEERING`) is two-sided, so the gap costs a *keep* — `Solutions
+  Architect, RBC Capital Markets` should be reaching step 7 with its markets
+  anchor and is falling off the end instead.
+- **The English half of `_MANAGEMENT` had never been inflected and the Swedish
+  half had been inflected twice.** `Delivery Managers - Tieto Banktech` escaped
+  `delivery manager` and reached the board; `Undersköterskor` and `Taxiföraren`
+  had each already cost a rule. Dry-run over 382,034 live titles: `managers`,
+  `directors`, `leaders` and `supervisors` are 146 hits with one rated
+  positively, and it reads correctly by hand. **Four more were measured and
+  dropped, three of them on the *reason* rather than the count**: `partners` has
+  84 hits whose two positives are `Associate, Private Equity, CLSA Capital
+  Partners` — the word is in the *firm's name* and the applicant is an
+  associate; `principals` is sixteen preschool principals, an occupation and not
+  a rank; `presidents` and `heads of` reach only an *assistant to* one.
+- **A Swedish `-er` plural must be a list and never a suffix rule.** `-n`, `-na`
+  and `-rna` are safe as a compound suffix; `-er` would fire on `researcher` and
+  `developer`. `redovisningskonsulter` and `ekonomiassistenter` are spelled out
+  beside their singulars for that reason.
+- **Investment banking is out of scope, and the gap was every IB title that does
+  not spell the words.** `investment banking`, `equity capital markets` and
+  `debt capital markets` had been on `NON_QUANT_FINANCE` for a long time, which
+  is why `Equity Capital Markets - Associate` was already off the board — so the
+  family read as handled. `corporate finance` was the hole: **94 live titles, 19
+  of them on the board**, carrying `Analytiker I EY Parthenon Corporate
+  Finance`, `Corporate Finance Specialist` and `SEB Corporate Finance and
+  Corporate Finance Growth Analysts`. Its four positively-rated hits are three
+  `Corporate Finance Executive (Commodity Trading)` at one Singapore recruiter
+  and an `Analyst, Corporate Finance & Treasury`, none of them quant. **`mergers`
+  is one needle for both spellings**, because `&` folds to a space so `Mergers &
+  Acquisitions` and `Mergers and Acquisitions` share only that word.
+- **Three IB-sounding needles were measured and dropped, and two of them name
+  markets desks rather than banking coverage.** `origination` promotes 39 titles
+  whose positives are LSEG's `Fixed Income Origination` and Guggenheim's `UIT
+  Trading & Origination`; `corporate banking` is on `MARKETS` deliberately and
+  carries 89 positively-rated titles, so moving it would be a different decision.
+  The third is **`m a`, the folded form of `M&A`** — 173 titles against 29 for
+  `mergers`, and four of its positives could not be accounted for by reading the
+  title. **A two-letter needle is the `AQR` and `tbe` shape**: it will find
+  something, and what it finds cannot be checked by eye.
 - **One word, two lists, two answers — check the other list.** `_MANAGEMENT` had
   treated `vp` and bare `director` as unreachable since the user asked for
   director titles to go, while `_SENIORITY` still called them `senior_6_10`.
@@ -1166,6 +1380,16 @@ learn.
   sat in the `stockholm` tuple, so every Swedish ad read Stockholm. Harmless
   while geography ranked; under a gate it deletes postings for being somewhere
   they are not.
+- **A single *employer* can be its own administrative unit, and HKEX is.** Its
+  Workday board writes the office rather than the city — `HK-CMP 6/F`,
+  `HK-TWO ES 11/F`, `HK-TKO 5/F` — so **all 164 postings matched no needle and
+  read as `other`**, which the board gates. Same failure as `Wallisellen, ZH`
+  at one firm's scale, and the same handle: `_HK_SITE` is anchored on the raw
+  location, never `fold(location, title)`, because `hk` is two letters. HKEX
+  writes `CN-Shenzhen-HyQ` and `UK-London` by the same convention and both
+  already resolve on the city, so only the Hong Kong half needed a pattern.
+  Dry-run first: **not one live posting in the corpus wrote a location
+  beginning `HK-`**, so it can claim nothing already read correctly.
 - **A national board writes the *administrative* place, and each country picks a
   different one.** Jobindex writes a postcode and a town (`2650 Hvidovre`),
   Jobbsafari a municipality (`Ludvika`), job-room.ch a town and a **canton
@@ -1290,6 +1514,45 @@ ate a hub.
   Stage one is a *gate*; everything else in the rail *ranks*. This is the one
   place in the pipeline where a classifier removes rather than reorders, and it
   stays consistent with principle 4 by never touching the database.
+- **The board's one *promotion* rule had the gate rule backwards, and it cost
+  the whole first screen.** A closing date pinned a card above everything else,
+  whatever the sort said. A deadline says a posting expires; it says nothing
+  about whether this reader wants it — so pinning every dated card promotes on
+  the **absence** of a verdict, which is the gate rule read in a mirror.
+  Measured: **776 cards pinned, 763 of them Singapore, and 558 with no verdict
+  at all** — `Admin Assistant`, `Desktop Engineer - Shift Based`, a Copenhagen
+  hotel night porter — above all 224 cards the board rates `apply_now` or
+  `strong`. In the board's own firm tiles that is **426 tiles before the first
+  unpinned card**. From the reader's seat an empty-looking board and a board
+  with 426 tiles of agency listings in front of it are the same thing, and
+  *"there are very few jobs on the board"* is what it gets reported as.
+- **Requiring a verdict was the fix and it was not enough, because one source
+  owns the field.** Restricting the pin to anything the tagger had read left
+  **83 tiles, and 116 of the 118 postings were still Singapore** — a gate on
+  evidence cannot rebalance a field 98% of which comes from one place. The pin
+  takes `SHORTLIST` (`apply_now`, `strong`) and holds **10 tiles**; the board
+  then opens on Flow Traders, Two Sigma and Point72. **Two sets, deliberately
+  named separately**: `WORTH` is the "Worth reading" preset (which includes
+  `plausible`) and `SHORTLIST` is what `build_data.py` counts when it prints
+  *"N worth reading"* — the same phrase already meant two things in this
+  project, and naming both is how they stop being confused.
+- **A rule written for a *rare* signal becomes the sort order when the signal
+  stops being rare.** The pin was designed when JobStream published a closing
+  date and almost nothing else did. MyCareersFuture publishes one on **every**
+  row and is now **1,777 of the board's 1,813 dated cards, 98%** — so a
+  tie-break quietly became the ordering. `mycareersfuture.py`'s own docstring
+  predicted this in the sentence beginning *"Note the downstream
+  consequence"*, and predicting it was not the same as fixing it. **Whenever a
+  source lands that publishes a field the board treats as special, re-read what
+  that field now outranks** — this is the `_fit` "outside the focus hubs" notch
+  lesson (a gate removed makes downstream branches reachable) with the arrow
+  pointing the other way.
+- **Read the board before believing a report of it.** *"Very few jobs"* was
+  measured against the archived `board` branch and the board had **grown**:
+  5,211 cards to 8,469, `apply_now` 16 to 44, `strong` 79 to 180. Nothing had
+  been lost; what changed was what stood in front of it. **A complaint about
+  volume can be a complaint about order** — check the top of the page, not only
+  the totals.
 - **A gate must fire on evidence, never on the absence of it.** `out_of_reach`
   reads the rank from the title only and skips `unknown`, so a posting that
   never stated a grade stays on the board. Same reason `unknown` survives the
@@ -1386,6 +1649,25 @@ ate a hub.
   residual is mostly the deliberate backfill queue — bare `Analyst`,
   `Associate`, `Data Scientist` — which `judge` refuses to reject on a title
   alone and should keep refusing.
+- **A fifth of the board came off and the shortlist did not move, which is what
+  a good tightening looks like from outside.** Stages 35 and 36 together: 8,513
+  cards → 6,666, 1,515 firms → 1,137, and **"worth reading" unchanged at 224**.
+  The hand sheet's relevance agreement went **71.7% → 83.6% with zero false
+  rejections in it at either end**. When a change removes volume, the number to
+  read is the one that should *not* have moved — a shortlist that shrinks with
+  the junk means the needle was too wide, and no aggregate count says so.
+- **The reader's reclassify clicks measure the direction the labelling sheet
+  cannot, and they are worth re-reading whenever a batch accumulates.** `sample`
+  draws from a frame built to find false *rejections* — the failure this project
+  calls expensive — and by that measure the tagger is clean: **zero false
+  rejections in 152 hand-labelled rows**. The clicks measure the opposite
+  failure and found plenty: of 137 postings marked `rejected`, **97 were already
+  gated and 40 were still on the board**. Read them as four families, because
+  only two are bugs — a body-markets escape (19), an inflection gap (2), the
+  reader's own standing "`discretionary_investing` ranks rather than rejects"
+  call (9), and a markets word in the *title* of a back-office seat (5). **Check
+  which family a row is in before writing a needle for it**; two of the four are
+  working as instructed.
 - **A labelled disagreement and a labelled non-answer are different facts, and
   one number hid it.** `labels` prints both: `wrong` is what a lexicon fix can
   move, `unanswered` is not, and only the first is evidence of a bug.

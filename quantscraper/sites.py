@@ -687,6 +687,215 @@ def rentec() -> list[Job]:
 
 
 # --------------------------------------------------------------------------
+# Hong Kong -- three employers whose whole board is a list on their own page.
+#
+# Both were found by hand after `audit --pipeline` reported Hong Kong at
+# 21/51, the worst of the focus hubs. Neither runs an ATS, neither is
+# reachable by a name guess, and the hub has no national board to fall back
+# on: Hong Kong's statutory portal, the Labour Department's Interactive
+# Employment Service, ends its `robots.txt` with `Disallow: /` and names
+# `/0/api/*` explicitly. That is the exact inverse of Singapore, whose
+# `robots.txt` reads `Disallow:` with a sitemap -- so where Singapore is a
+# 95,000-posting sweep, Hong Kong is per-firm work like this.
+
+
+_PANDTONG_JOB = re.compile(
+    r"""onclick="window\.location\s*=\s*'/joblistEn\?name=(\d{1,4})[^']{0,40}'"""
+    r"[\s\S]{0,300}?"
+    r'<p class="job-title"[^>]{0,200}>([\s\S]{0,160}?)</p>',
+    re.I,
+)
+
+
+def pandtong() -> list[Job]:
+    """Pandtong Quantitative Research, from its own English careers page.
+
+    A Hong Kong quant shop, and one of only two firms in the hub's unreached
+    list that publish openings on their own host rather than serving a page
+    with nothing on it. Thirteen of them, applied for by email; there is no
+    vendor to fingerprint and no feed to guess.
+
+    **The English page is read rather than the Chinese one, and `name` is why
+    that is safe.** `/careers` and `/careersEn` are the same board under two
+    renderings and the `name=N` key is shared between them -- `name=1` is
+    `Quantitative researcher` and `量化研究员`, `name=4` is `C++ Developer`
+    and `C++开发工程师`. Reading the Chinese titles would put them in front of
+    a lexicon that is English, Swedish and Danish and would match none of it,
+    which is the `sygeplejerske` problem in a script with no word boundaries
+    at all. Taking the English rendering is not a filter: the id is the same
+    row either way.
+
+    No location is written. Every posting is Hong Kong, but the page does not
+    say so, and `unknown` survives the board's geography gate while a guess
+    that turns out wrong does not.
+    """
+    url = "https://pandtong.com/careersEn"
+    body = http.get_text(url, timeout=25, retries=2)
+    if "job-title" not in body:
+        raise SiteChanged("pandtong: careersEn carries no job-title element")
+    jobs: list[Job] = []
+    seen: set[str] = set()
+    for match in _PANDTONG_JOB.finditer(body):
+        job_id, title = match.groups()
+        name = _text(title)
+        if not name or job_id in seen:
+            continue
+        seen.add(job_id)
+        jobs.append(
+            Job(
+                ats="site",
+                token="pandtong",
+                job_id=job_id,
+                title=name,
+                url=f"https://pandtong.com/joblistEn?name={job_id}&lan=En",
+                location=None,
+                department=None,
+            )
+        )
+    if not jobs:
+        raise SiteChanged("pandtong: job-title elements found but none parsed")
+    return jobs
+
+
+# Anatole publishes each opening as a PDF job description under one heading.
+# The heading is the anchor; the link text is the title.
+_ANATOLE_BLOCK = re.compile(
+    r"Current Opportunities([\s\S]{0,4000}?)</div>", re.I
+)
+_ANATOLE_JOB = re.compile(
+    r'href="(/uploads/[^"]{0,200}\.pdf)"[^>]{0,120}>([\s\S]{0,160}?)</a>', re.I
+)
+
+
+def anatole() -> list[Job]:
+    """Anatole Investment Management, whose openings are PDF links.
+
+    Two of them, both internships, which is worth stating because the board
+    will rank them low and should: this user has already graduated. They are
+    read anyway for the same reason nothing else here is filtered at ingest --
+    principle 4 -- and because the *anchor* is what this reader is really
+    buying. When Anatole advertises an analyst seat it will appear under the
+    same heading and arrive unasked.
+
+    The PDF itself is never fetched. The link text is the title, and the
+    filename repeats it; there is no description to gain and a PDF reader is
+    a dependency this project does not have.
+    """
+    url = "https://anatole-inv.com/careers"
+    body = http.get_text(url, timeout=25, retries=2)
+    block = _ANATOLE_BLOCK.search(body)
+    if block is None:
+        raise SiteChanged("anatole: careers page has no Current Opportunities block")
+    jobs: list[Job] = []
+    seen: set[str] = set()
+    for match in _ANATOLE_JOB.finditer(block.group(1)):
+        href, title = match.groups()
+        name = _text(title)
+        if not name or href in seen:
+            continue
+        seen.add(href)
+        jobs.append(
+            Job(
+                ats="site",
+                token="anatole",
+                job_id=href.rsplit("/", 1)[-1].removesuffix(".pdf"),
+                title=name,
+                url=urllib.parse.urljoin(url, href),
+                location=None,
+                department=None,
+            )
+        )
+    if not jobs:
+        raise SiteChanged("anatole: Current Opportunities block lists no PDF link")
+    return jobs
+
+
+# --------------------------------------------------------------------------
+# The Hong Kong Monetary Authority
+#
+# The vacancies table: one row per opening, the title in an anchor whose href
+# carries the recruitment reference, and the employer's own stated closing date
+# in the cell beside it.
+_HKMA_ROW = re.compile(
+    r'<td[^>]{0,120}>\s*<a href="([^"]{0,200}/recruit-([0-9a-z-]{4,40})/)"[^>]{0,120}>'
+    r"([\s\S]{0,200}?)</a>\s*</td>\s*<td[^>]{0,120}>([\s\S]{0,80}?)</td>",
+    re.I,
+)
+_HKMA_DATE = re.compile(r"^(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})$")
+_HKMA_MONTHS = {
+    m: i
+    for i, m in enumerate(
+        "jan feb mar apr may jun jul aug sep oct nov dec".split(), start=1
+    )
+}
+
+
+def _hkma_deadline(cell: str) -> str | None:
+    """`3 October 2026` -> `2026-10-03`, and anything else -> None.
+
+    The table prints `-` where a posting has no closing date, and that is the
+    majority of the reason this parses strictly rather than reaching for a
+    date library. A deadline the board cannot trust is worse than none: it
+    sorts an approaching date above everything else.
+    """
+    match = _HKMA_DATE.match((_text(cell) or "").strip())
+    if match is None:
+        return None
+    day, month, year = match.groups()
+    number = _HKMA_MONTHS.get(month[:3].lower())
+    if number is None:
+        return None
+    return f"{year}-{number:02d}-{int(day):02d}"
+
+
+def hkma() -> list[Job]:
+    """The Hong Kong Monetary Authority, from its own vacancies table.
+
+    **In no register, which is why it is seeded rather than discovered.** The
+    HKMA is Hong Kong's central bank and a genuine quant employer -- it runs
+    the Exchange Fund -- but it is a statutory body rather than an SFC
+    licensed corporation, so `sfc_hk` cannot see it and nor can anything else
+    in `registries/`. The same is true of HKEX beside it.
+
+    It publishes a small HTML table, one row per opening, and the second
+    column is headed *Closing Date(s)* and holds the employer's own stated
+    date. That is the field JobStream sets and almost nothing else does, so it
+    is written -- parsed strictly, because half the rows print `-` instead and
+    a guessed deadline pins the wrong card to the top of the board.
+    """
+    url = "https://www.hkma.gov.hk/eng/about-us/join-us/current-vacancies/"
+    body = http.get_text(url, timeout=25, retries=2)
+    if "current-vacancies/recruit-" not in body:
+        raise SiteChanged("hkma: vacancies page lists no recruit- link")
+    jobs: list[Job] = []
+    seen: set[str] = set()
+    for match in _HKMA_ROW.finditer(body):
+        href, reference, title, closing = match.groups()
+        name = _text(title)
+        if not name or reference in seen:
+            continue
+        seen.add(reference)
+        jobs.append(
+            Job(
+                ats="site",
+                token="hkma",
+                job_id=reference,
+                title=name,
+                url=urllib.parse.urljoin(url, href),
+                # Written rather than left None: every seat here is in Hong
+                # Kong, the authority has one office, and `_HUBS` reads the
+                # words. Unlike HKEX's site codes there is nothing to decode.
+                location="Hong Kong",
+                department=None,
+                deadline=_hkma_deadline(closing),
+            )
+        )
+    if not jobs:
+        raise SiteChanged("hkma: recruit- links found but no table row parsed")
+    return jobs
+
+
+# --------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
@@ -796,6 +1005,45 @@ SITES: tuple[Site, ...] = (
     Site("robeco|wd3|robecoexternalcareers", "robeco.com", "Robeco", None, ats="workday"),
     Site("vivcourt", "vivcourt.com", "Vivienne", None, ats="greenhouse"),
     Site("323trading", "323trading.nl", "323 Trading", trading_323),
+    # ---- Hong Kong --------------------------------------------------------
+    #
+    # Capula is here for the **domain**, and it is the `acadian.com` mistake
+    # exactly: `domains` resolved "Capula Investment Management" to
+    # `capula.com`, which is a Staffordshire *engineering* contractor working
+    # on nuclear and power-generation sites, and that firm has a live careers
+    # page. A wrong domain here is not an empty feed, it is somebody else's
+    # feed. The hedge fund is `capulaglobal.com`, whose careers page names
+    # `capula-investment-management-ltd.workable.com` -- a board the Workable
+    # extractor already reads, so no reader is needed.
+    Site(
+        "capula-investment-management-ltd",
+        "capulaglobal.com",
+        "Capula Investment Management",
+        None,
+        ats="workable",
+    ),
+    Site("pandtong", "pandtong.com", "Pandtong Quantitative Research", pandtong),
+    Site("anatole", "anatole-inv.com", "Anatole Investment Management", anatole),
+    # HKEX and the HKMA are in **no register this project reads**, and that is
+    # the structural point rather than an oversight: `sfc_hk` enumerates
+    # licensed *corporations*, and an exchange controller and a central bank
+    # are neither. Both are real Hong Kong markets employers and between them
+    # they are worth more postings than the hub's entire hedge-fund long tail.
+    #
+    # HKEX needs no reader -- it runs Workday. What hid it is that its careers
+    # page is on `hkexgroup.com` while the firm's site is `hkex.com.hk`, so a
+    # walk that starts at the domain never reaches the hop that names the
+    # board. `_HK_SITE` in `tagging.py` is the other half: HKEX writes the
+    # office rather than the city, `HK-TWO ES 11/F`, and without it all 164
+    # postings read as `other` and the board gates them.
+    Site(
+        "hkex|wd3|HKEXCareerPage",
+        "hkexgroup.com",
+        "Hong Kong Exchanges and Clearing",
+        None,
+        ats="workday",
+    ),
+    Site("hkma", "hkma.gov.hk", "Hong Kong Monetary Authority", hkma),
 )
 
 BY_TOKEN = {site.token: site for site in SITES}

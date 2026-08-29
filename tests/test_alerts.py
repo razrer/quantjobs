@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import sqlite3
 import unittest
+import urllib.error
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from quantscraper import alerts, cli, db
 
@@ -134,6 +136,86 @@ class Layer4PollsAreVisibleTest(unittest.TestCase):
             cli._record_poll(connection, "jobbsafari", db.now(), 48_000)
         cli._record_poll(connection, "jobbsafari", db.now(), 5_421)
         self.assertIn("shrank", {a.kind for a in alerts.check(connection)})
+
+
+class CrashedPollsAreVisibleTest(unittest.TestCase):
+    """The same gap one step along, and it cost Singapore.
+
+    `_record_poll` runs *after* a sweep returns, so a sweep that **crashes**
+    recorded nothing at all. MyCareersFuture died ~400 pages into a
+    `daily --full` on an HTTP 429 having written 37,562 postings, `runs` held
+    no row for it, and `alerts` printed `all sources healthy`.
+    """
+
+    def test_a_crashed_sweep_is_recorded_before_it_is_re_raised(self):
+        connection = _memory(self)
+        def sweep():
+            raise urllib.error.HTTPError("https://x", 429, "", None, None)
+        with self.assertRaises(urllib.error.HTTPError):
+            cli._poll(connection, "mycareersfuture", sweep)
+        row = connection.execute("SELECT source, row_count, ok, error FROM runs").fetchone()
+        self.assertEqual((row["source"], row["row_count"], row["ok"]),
+                         ("mycareersfuture", 0, 0))
+        self.assertIn("429", row["error"])
+
+    def test_alerts_stops_saying_healthy(self):
+        connection = _memory(self)
+        with self.assertRaises(RuntimeError):
+            cli._poll(connection, "mycareersfuture",
+                      lambda: (_ for _ in ()).throw(RuntimeError("HTTP Error 429: ")))
+        self.assertIn("fail", {a.kind for a in alerts.check(connection)})
+
+    def test_a_sweep_that_returns_is_untouched(self):
+        """The wrapper must not record anything itself on the happy path --
+        `_record_poll` owns that, and two rows per sweep would move the
+        baseline `alerts` compares against."""
+        connection = _memory(self)
+        started, value = cli._poll(connection, "jobbsafari", lambda: "swept")
+        self.assertEqual(value, "swept")
+        self.assertTrue(started)
+        self.assertEqual(connection.execute("SELECT COUNT(*) FROM runs").fetchone()[0], 0)
+
+    def test_every_layer_4_poller_goes_through_it(self):
+        """A poller wired straight to its module is invisible when it crashes,
+        which is exactly the state this test exists to keep out. Checked by
+        reading the source, the same way `EveryFingerprintHasAReaderTest` does:
+        the alternative is five near-identical network tests."""
+        source = Path(cli.__file__).read_text(encoding="utf-8")
+        for command, module in (
+            ("_singapore", "mycareersfuture"), ("_denmark", "jobindex"),
+            ("_sweden", "jobbsafari"), ("_switzerland", "jobroom_ch"),
+            ("_jobstream", "jobstream"),
+        ):
+            start = source.index(f"def {command}(")
+            end = source.find(chr(10) + "def ", start + 1)
+            body = source[start : end if end > 0 else len(source)]
+            self.assertIn("_poll(", body, f"{command} does not record a crash")
+            self.assertNotIn(f"= {module}.run(", body,
+                             f"{command} calls {module}.run outside _poll")
+
+
+class CoverageReachesLayer4Test(unittest.TestCase):
+    """`check` cannot judge a source with no rows, so `coverage` is the
+    backstop -- and it read `REGISTRIES` alone, which does not contain the
+    national boards. MyCareersFuture was missing from both lists at once and
+    `alerts` printed `all sources healthy` for ten days."""
+
+    def test_a_national_board_that_never_ran_is_named(self):
+        connection = _memory(self)
+        self.assertIn("mycareersfuture", alerts.coverage(connection))
+
+    def test_every_layer_4_poller_is_expected_to_report(self):
+        for name in ("jobtech", "jobroom", "jobindex", "jobbsafari", "mycareersfuture"):
+            self.assertIn(name, alerts._expected(), name)
+
+    def test_a_board_that_has_run_is_not_named(self):
+        connection = _memory(self)
+        cli._record_poll(connection, "mycareersfuture", db.now(), 95_536)
+        self.assertNotIn("mycareersfuture", alerts.coverage(connection))
+
+    def test_the_registries_are_still_covered(self):
+        from quantscraper.registries import REGISTRIES
+        self.assertTrue(set(REGISTRIES) <= alerts._expected())
 
 
 if __name__ == "__main__":

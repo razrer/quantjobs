@@ -832,13 +832,21 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
 
     <div class="notes">
       <p><b>Ordering.</b> A posting whose closing date is inside the pin window
-      sits above everything else, soonest first, whatever the sort says. The pin
-      window is the <code>pin</code> control — set it to <em>nothing</em> to sort
+      sits above everything else, soonest first, whatever the sort says &mdash;
+      but only if it is on the shortlist (<em>apply now</em> or <em>strong</em>).
+      A closing date says a posting expires; it says nothing about whether you
+      want it, so pinning every dated card promoted the ones nothing had read
+      above the ones worth opening. Everything else keeps its place in the sort
+      you picked, and <em>Closing date</em> still orders purely by deadline
+      &mdash; that is where to look for anything further down that is about to
+      close. The pin window is
+      the <code>pin</code> control &mdash; set it to <em>nothing</em> to sort
       purely by the spine you picked.</p>
-      <p><b>Closing dates are read, never guessed.</b> Only JobStream publishes
-      one as a field, and it publishes one on every ad, so every Swedish posting
-      here has a real deadline and the rest have none. They are deliberately not
-      mined out of descriptions: hundreds of Swedish ads carry the sentence
+      <p><b>Closing dates are read, never guessed.</b> Two sources publish one
+      as a field &mdash; MyCareersFuture on every Singapore row, which is 98% of
+      the dated cards here, and JobStream on every Swedish ad. Everything else
+      has none. They are deliberately not mined out of descriptions: hundreds
+      of Swedish ads carry the sentence
       <em>“tjänsten kan tillsättas innan sista ansökningsdag”</em> with no date
       in it, and Ashby prints <em>“unless a specific application deadline is
       stated”</em> on everything it hosts. A guessed date would pin the wrong
@@ -955,6 +963,18 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
   const label = (v) => LABEL[v] || String(v).replace(/_/g, " ");
 
   const FIT_RANK = { apply_now: 4, strong: 3, plausible: 2, stretch: 1, out_of_scope: 0, unknown: 0 };
+
+  // The postings this board says are worth a person's time. Named once and
+  // read in three places -- the "Worth reading" preset, its count, and the
+  // deadline pin -- because two copies of it are two sides of a comparison
+  // free to drift, which is the argument `extract.AVATURE_LIST_PATHS` makes.
+  const WORTH = new Set(["apply_now", "strong", "plausible"]);
+
+  // The shortlist, and a strictly tighter thing than `WORTH` -- this is what
+  // `web/build_data.py` counts when it prints "N worth reading" on every build.
+  // Two meanings of one phrase already lived in this project; naming both is
+  // how they stop being mistaken for each other.
+  const SHORTLIST = new Set(["apply_now", "strong"]);
 
   // --- dates ---------------------------------------------------------------
 
@@ -1224,8 +1244,8 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
 
   const PRESETS = [
     { key: "worth", label: "Worth reading",
-      apply: (s) => { s.sel.fit = ["apply_now", "strong", "plausible"]; },
-      test: (j) => ["apply_now", "strong", "plausible"].includes(j.fit) },
+      apply: (s) => { s.sel.fit = [...WORTH]; },
+      test: (j) => WORTH.has(j.fit) },
     // The nine focus hubs, which is `tagging._FOCUS_HUBS` spelled with spaces.
     // `us other` is deliberately absent even though the board shows it: this
     // preset is the metros, and the rest of the country ranks below them the
@@ -1346,11 +1366,44 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
   // Pinned first, soonest first, and only then the chosen spine. This is the
   // one ordering rule the board will not let a sort override, because a closing
   // date is the only thing on a card that expires.
+  //
+  // **It must promote on evidence, exactly as a gate must remove on it.** A
+  // deadline says a posting expires; it says nothing about whether this
+  // reader wants it -- so pinning every dated card promotes on the *absence*
+  // of a verdict, which is the gate rule read backwards. Measured before this
+  // clause went in: 776 cards sat above everything else, 763 of them from
+  // MyCareersFuture, and **558 carried no verdict at all** -- `Admin
+  // Assistant`, `Desktop Engineer - Shift Based`, a Copenhagen hotel night
+  // porter -- while all 224 postings this board rates `apply_now` or `strong`
+  // sat below them. In this page's own firm tiles that is **426 tiles before
+  // the first unpinned card, now 83** -- and from the reader's seat a board
+  // behind 426 tiles of agency listings and an empty board are the same thing.
+  //
+  // The rule was written when a closing date was *rare*: JobStream published
+  // one and almost nothing else did. Singapore publishes one on every row and
+  // is now 98% of the dated cards, so a rule about a rare signal quietly
+  // became the sort order. **Whenever a source lands that publishes a field
+  // the board treats as special, re-read what that field now outranks.**
+  //
+  // **`SHORTLIST` and not `WORTH`, at the reader's instruction, and the numbers
+  // are the argument.** Restricting the pin to what has a verdict at all still
+  // left 83 tiles above the page and 116 of the 118 postings were Singapore,
+  // because that source publishes 98% of every closing date here. At the
+  // shortlist it is 10 tiles, and the board opens on Flow Traders, Two Sigma
+  // and Point72 with a short expiring block above them instead of behind 83
+  // tiles of agency listings. A `plausible` card closing today is not lost --
+  // it is one click away under the `Closing date` sort, and the `closing`
+  // facet still counts it.
+  //
+  // Nothing is hidden by this. An unpinned card keeps its place in the chosen
+  // spine, `sort: due` still orders purely by closing date, and the `closing`
+  // facet still counts every dated posting.
   function order(list) {
     const spine = SPINES[state.sort] || SPINES.smart;
     // `pin: 0` means nothing is pinned, not "pin the ones closing today" --
     // which is what `left <= 0` alone quietly did.
-    const pinned = (j) => state.pin > 0 && j.left !== null && j.left >= 0 && j.left <= state.pin;
+    const pinned = (j) => state.pin > 0 && j.left !== null && j.left >= 0
+                          && j.left <= state.pin && SHORTLIST.has(j.fit);
     return list.slice().sort((a, b) => {
       const pa = pinned(a), pb = pinned(b);
       if (pa !== pb) return pa ? -1 : 1;

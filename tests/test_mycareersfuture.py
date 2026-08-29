@@ -10,8 +10,10 @@ Run with: python -m unittest discover -s tests
 
 from __future__ import annotations
 
+import email
 import sqlite3
 import unittest
+import urllib.error
 
 from quantscraper import db, mycareersfuture as mcf
 
@@ -221,6 +223,95 @@ class ShortfallTest(unittest.TestCase):
         _install(self, _FakePortal([_full(40)], total=40))
         swept = mcf.run(connection)
         self.assertIn("broken source", swept.problem or "")
+
+
+class RefusalTest(unittest.TestCase):
+    """The portal answers a sustained sweep with HTTP 429 and a hand-written
+    `scrapper` header. Before this, that killed the process ~400 pages in: the
+    rows were committed, the arithmetic was lost, `runs` got no row and
+    `alerts` then reported every source healthy while Singapore was down."""
+
+    def _blocked_after(self, pages: int) -> "_FakePortal":
+        # Distinct rows per page: identical ones would trip the walk's own
+        # repeated-page stop and the refusal under test would never be reached.
+        portal = _FakePortal(
+            [_full(100, start=n * 100) for n in range(pages + 2)], total=95_561
+        )
+        real = portal.fetch_page
+        # The live headers, verbatim. `scrapper` is theirs, spelling and all.
+        headers = email.message_from_string(
+            "x-amzn-errortype: ForbiddenException\n"
+            "scrapper: contact us via the feedback form if you have"
+            " legitimate reasons\n"
+        )
+
+        def fetch_page(number, *, category=None):
+            if number >= pages:
+                raise urllib.error.HTTPError(
+                    "https://api.mycareersfuture.gov.sg/v2/jobs",
+                    429, "", headers, None,
+                )
+            return real(number, category=category)
+
+        portal.fetch_page = fetch_page
+        return _install(self, portal)
+
+    def test_a_refusal_ends_the_walk_instead_of_killing_the_process(self):
+        connection = _memory(self)
+        self._blocked_after(3)
+        swept = mcf.run(connection)  # must not raise
+        self.assertEqual(swept.pages, 3)
+        self.assertEqual(swept.seen, 300)
+        self.assertEqual(
+            connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0], 300,
+            "the pages already read are what cost the portal something; keep them",
+        )
+
+    def test_a_refusal_can_never_read_as_a_clean_sweep(self):
+        connection = _memory(self)
+        self._blocked_after(3)
+        swept = mcf.run(connection)
+        self.assertIsNotNone(swept.problem, "a refused sweep reported success")
+
+    def test_a_refused_top_up_is_a_failed_top_up(self):
+        """`partial` silences the shortfall arithmetic, and must not silence
+        this: there is nothing incremental about being turned away."""
+        connection = _memory(self)
+        self._blocked_after(1)
+        swept = mcf.run(connection, since="2026-01-01")
+        self.assertTrue(swept.partial)
+        self.assertIsNotNone(swept.problem)
+
+    def test_the_report_carries_the_portals_own_words(self):
+        connection = _memory(self)
+        self._blocked_after(2)
+        problem = mcf.run(connection).problem
+        self.assertIn("429", problem)
+        self.assertIn("ForbiddenException", problem)
+        self.assertIn("feedback form", problem)
+        self.assertIn("95,561", problem, "say what was missed, not only that it stopped")
+
+    def test_a_refusal_is_not_reported_as_truncation(self):
+        """Truncation reads as *our* paging being wrong. It was not."""
+        connection = _memory(self)
+        self._blocked_after(2)
+        self.assertNotIn("truncation", mcf.run(connection).problem)
+
+    def test_any_other_http_error_still_raises(self):
+        """429 is the one the portal uses to say slow down. A 500 is a broken
+        source and must not be quietly absorbed into a short sweep."""
+        connection = _memory(self)
+        portal = _FakePortal([_full(100)], total=95_561)
+
+        def fetch_page(number, *, category=None):
+            raise urllib.error.HTTPError(
+                "https://x", 500, "", email.message_from_string(""), None
+            )
+
+        portal.fetch_page = fetch_page
+        _install(self, portal)
+        with self.assertRaises(urllib.error.HTTPError):
+            mcf.run(connection)
 
 
 class MappingTest(unittest.TestCase):

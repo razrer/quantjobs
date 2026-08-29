@@ -537,3 +537,147 @@ class ANationalFeedIsNotABoard(unittest.TestCase):
         bad lexicon week would have taken it under."""
         self.assertEqual(lexicon.board_profile(13, 12, 19_783)[0], "mixed")
         self.assertEqual(lexicon.board_profile(9, 12, 19_783)[0], "non_markets")
+
+
+class AnEmployersMarketsWordIsNotTheJobs(unittest.TestCase):
+    """Step 9's absence test reads the **role**, never the body.
+
+    `MARKETS` is documented three times over as a role list -- "in a body it
+    belongs to the employer, not the job" -- and step 9 read it from the body
+    anyway, where one word switched the `no_markets_signal` rejection off
+    entirely. Every title below is a real posting the reader hand-rejected off
+    the live board, quoted with the word that rescued it.
+
+    The rule only bites where the title matched **no list at all**. An engineer
+    or an analyst has already been recognised by steps 7 and 8, which still
+    read the body on purpose: there it corroborates a reading rather than
+    supplying the only one there is.
+    """
+
+    # (title, the sentence carrying the word that used to rescue it)
+    RESCUED = (
+        ("Balance Settlement Specialist",
+         "Our trading operations run around the clock. "),
+        ("Part-Time Sales Consultants",
+         "Store trading hours include weekends. "),
+        ("Projektadministratör med inriktning kommunikation för TEF-Health",
+         "The front office will direct visitors to the ward. "),
+        ("Service Now business architect (IRM)",
+         "You will be structuring the incident taxonomy. "),
+        ("Delivery Managers - Tieto Banktech",
+         "Our customers include trading houses across the Nordics. "),
+        ("Electrical Power Engineer",
+         "The grid connects to the trading hub at Nord Pool. "),
+    )
+
+    def test_a_markets_word_in_the_body_no_longer_rescues(self):
+        for title, sentence in self.RESCUED:
+            with self.subTest(title=title):
+                call = lexicon.judge(title, description=sentence * 20)
+                self.assertEqual(call.verdict, "reject")
+                self.assertEqual(call.reason, "no_markets_signal")
+
+    def test_a_named_corporate_function_rejects_on_its_own_word(self):
+        """Two of the reader's rejections are named occupations rather than
+        unreadable titles, and the reason must say so: `Swedish Content Writer`
+        is marketing and Coeli's `Corporate Secretary` is governance. Both
+        carry a body too short for step 9 to read anyway."""
+        for title in ("Swedish Content Writer", "Corporate Secretary",
+                      "Assistant Company Secretary (fixed term contract)"):
+            with self.subTest(title=title):
+                call = lexicon.judge(
+                    title,
+                    description="We publish market data commentary. " * 20,
+                )
+                self.assertEqual(call.verdict, "reject")
+                self.assertEqual(call.reason, "corporate_function")
+
+    def test_the_same_word_in_the_title_still_holds_it_open(self):
+        """The role is where the list was always meant to be read. A settlement
+        seat that says which market it settles is a different posting."""
+        call = lexicon.judge(
+            "Fixed Income Settlement Specialist",
+            description="Our trading operations run around the clock. " * 20,
+        )
+        self.assertNotEqual(call.verdict, "reject")
+
+    def test_a_body_naming_markets_activity_still_holds_it_open(self):
+        """The escape is narrowed, not closed -- `quant_body` is tested first,
+        and no employer writes *statistical arbitrage* about its customers."""
+        call = lexicon.judge(
+            "Balance Settlement Specialist",
+            description="You will support the statistical arbitrage desk. " * 20,
+        )
+        self.assertNotEqual(call.verdict, "reject")
+
+    def test_a_title_with_no_body_is_still_not_rejected(self):
+        """Absence is only evidence when it was measured over a document."""
+        call = lexicon.judge("Balance Settlement Specialist", description="")
+        self.assertNotEqual(call.verdict, "reject")
+
+    def test_steps_seven_and_eight_still_read_the_body(self):
+        """A title the module *did* recognise keeps its two-sided test. This is
+        the half that must not move: `Software Engineer, Trading Systems` is in
+        scope, and the body is how an engineer at a fund is told from one at a
+        payments company."""
+        for title in ("Data Analyst", "Backend Engineer"):
+            with self.subTest(title=title):
+                call = lexicon.judge(
+                    title,
+                    description="We are a hedge fund with a large trading "
+                    "desk in Amsterdam. " * 20,
+                )
+                self.assertNotEqual(call.verdict, "reject")
+
+
+class InvestmentBankingIsOutOfScopeTest(unittest.TestCase):
+    """At the reader's instruction. `investment banking`, `equity capital
+    markets` and `debt capital markets` were already on the list -- the gap was
+    every IB title that does not spell the words "investment banking".
+
+    `corporate finance` is the one that mattered: 94 live titles, 19 on the
+    board, and it is what three of the reader's own hand-rejections were riding
+    on. Every needle below was dry-run over the live corpus and its
+    positively-rated hits read by hand.
+    """
+
+    IB = (
+        "Analytiker I EY Parthenon Corporate Finance | Stockholm",
+        "Associates to Corporate Finance (Stockholm) - Aug 2027",
+        "Mergers & Acquisitions Director",
+        "Senior Consultant, Mergers and Acquisitions (M&A) Tax",
+        "Analyst - Leveraged Finance | SEB, Stockholm",
+        "Associate - Strategic Advisory (Capital Markets - ECM)",
+        "Associate, Apollo Capital Solutions - DCM",
+        "Transaction Advisory Services Manager",
+    )
+
+    def test_the_ib_desk_rejects(self):
+        for title in self.IB:
+            with self.subTest(title=title):
+                call = lexicon.judge(title, description="We advise clients. " * 30)
+                self.assertEqual(call.verdict, "reject")
+
+    def test_a_quantitative_title_is_untouched(self):
+        """Step 5 keeps every quantitative title before step 6 runs, so the
+        widening cannot reach one."""
+        for title in ("Quantitative Analyst, Corporate Finance",
+                      "Quantitative Researcher - M&A Analytics"):
+            with self.subTest(title=title):
+                call = lexicon.judge(title, description="We advise clients. " * 30)
+                self.assertEqual(call.verdict, "keep")
+
+    def test_the_needles_measured_and_dropped_stay_dropped(self):
+        """Each of these was clean on the count and wrong on the reading.
+
+        `origination` and `corporate banking` name **markets desks** -- LSEG's
+        `Fixed Income Origination` and 89 positively-rated corporate-banking
+        titles -- and `M&A` folded to a two-letter needle matching 173 titles
+        against 29 for `mergers`, which is the `AQR` and `tbe` shape.
+        """
+        for title in ("Senior Associate Americas Fixed Income Origination",
+                      "UIT Trading & Origination Senior Associate",
+                      "Investment & Corporate Banking - Asset Backed Debt Syndicate"):
+            with self.subTest(title=title):
+                call = lexicon.judge(title, description="Join our desk. " * 30)
+                self.assertNotEqual(call.verdict, "reject")

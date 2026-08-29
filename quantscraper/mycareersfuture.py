@@ -6,7 +6,20 @@ an Employment Pass. So for exactly the roles a foreigner could take, the portal
 is a register substantially complete *by law* -- the property that makes
 `fi_se` and the SEC bulk files worth more than any search box.
 
-No key, no quota, no session cookie.
+No key and no session cookie -- but there **is** a quota, and it is not
+published. A sustained walk at one request per second ran about 400 pages and
+then every request came back HTTP 429 with `x-amzn-errortype:
+ForbiddenException` and a header somebody typed by hand: `scrapper: contact us
+via the feedback form if you have legitimate reasons`. It is a rate threshold
+and not a ban -- it lifts within the hour, and low-volume requests answer 200 on
+either side of it. This host therefore runs at one request per four seconds
+(`http.HOST_INTERVAL_S`), which is what a 429 asks for, and a refusal ends the
+sweep with a report rather than a traceback. **Measured at that rate: 958 pages
+and 95,536 postings against 95,561 advertised, no refusal, about 70 minutes.**
+Four seconds is the number that works, and it was arrived at by backing off
+rather than by probing for the limit. Whether to write to them via the feedback
+form they name is item 5 of `ACTION-REQUIRED.md` and is courtesy rather than
+necessity.
 
 **Two enumerable surfaces, and the obvious one is the wrong one.**
 
@@ -52,9 +65,14 @@ name and has no column to live in yet.
 
 **`deadline` is `metadata.expiryDate`, a published field**, set on every row
 walked and genuinely chosen by the employer -- 7-, 14- and 30-day runs all
-appear. Note the downstream consequence: the board pins an approaching deadline
-above everything else, and this source hands it ~85,000 dated postings where the
-rest of the corpus has almost none.
+appear. **The downstream consequence was predicted here and then happened
+anyway, so it is worth stating as a fact rather than a risk:** this source is
+**98% of every dated card on the board**, and the board pins an approaching
+deadline above everything else. That turned a tie-break into the sort order --
+776 cards above the page, 763 of them from here, 558 of them postings the
+tagger had never managed to read. `web/index.html`'s `order()` now pins only
+the shortlist. **Any future source publishing a closing date at scale lands in
+the same place; re-read what the field outranks before believing the board.**
 
 **`department` stays NULL deliberately.** The portal has no department field.
 It does publish `positionLevels` and `minimumYearsExperience`, and both are
@@ -70,6 +88,7 @@ import html
 import json
 import re
 import sqlite3
+import urllib.error
 import urllib.parse
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -140,6 +159,11 @@ class Sweep:
     advertised: int  # what the portal said the total was on the first page
     repeats: int  # rows the moving index served twice
     partial: bool  # a `since` top-up, so `advertised` is not the target
+    # What the portal said when it stopped serving, if it did. A refusal is a
+    # different fact from a short walk and must not be reported as one: the
+    # arithmetic below would call it "truncation", which reads as our paging
+    # being wrong when the portal has in fact declined.
+    blocked: str | None = None
 
     @property
     def shortfall(self) -> int:
@@ -148,6 +172,13 @@ class Sweep:
     @property
     def problem(self) -> str | None:
         """The one thing a caller has to check. None means the sweep is sound."""
+        # Checked before `partial`, because a top-up that was refused is a
+        # failed top-up -- there is nothing incremental about being turned away.
+        if self.blocked:
+            got = f"collected {self.seen:,d} postings over {self.pages:,d} pages"
+            if self.advertised:
+                got += f" of the {self.advertised:,d} advertised"
+            return f"{self.blocked} -- {got} before the portal stopped serving"
         if self.partial:
             return None
         if self.seen < MIN_EXPECTED:
@@ -251,6 +282,23 @@ def _job(row: dict) -> Job:
     )
 
 
+def _refusal(exc: urllib.error.HTTPError) -> str:
+    """The portal's own words for why it stopped, when it supplies any.
+
+    It answers a sustained sweep with HTTP 429 carrying
+    `x-amzn-errortype: ForbiddenException` and a header typed by a person:
+    `scrapper: contact us via the feedback form if you have legitimate
+    reasons`. That sentence is the most useful thing in the whole response and
+    it belongs in the report rather than in a traceback nobody reads -- it
+    names the route the operators want used, which is a decision for the
+    reader and is written up in `ACTION-REQUIRED.md`.
+    """
+    note = (exc.headers.get("scrapper") or "").strip()
+    kind = (exc.headers.get("x-amzn-errortype") or "").strip()
+    said = f"HTTP {exc.code}" + (f" {kind}" if kind else "")
+    return f"{said}: {note}" if note else said
+
+
 def fetch_page(number: int, *, category: str | None = None) -> tuple[list[dict], int]:
     """One page of the listing. Returns its rows and the total it advertises."""
     assert PAGE_SIZE <= 100, "the API rejects a limit above 100 with HTTP 400"
@@ -314,22 +362,34 @@ def run(
     """
     seen: set[str] = set()
     written = repeats = pages = advertised = 0
+    blocked: str | None = None
 
-    for rows, total in walk(since=since, max_pages=max_pages):
-        pages += 1
-        advertised = advertised or total
-        fresh = []
-        for row in rows:
-            if not row.get("uuid"):
-                continue
-            if row["uuid"] in seen:
-                repeats += 1
-                continue
-            seen.add(row["uuid"])
-            fresh.append(_job(row))
-        # The portal publishes no employer website, so there is no domain to
-        # bridge to `firms`; the UEN it does publish has nowhere to go yet.
-        written += db.upsert_jobs(connection, None, fresh)
+    try:
+        for rows, total in walk(since=since, max_pages=max_pages):
+            pages += 1
+            advertised = advertised or total
+            fresh = []
+            for row in rows:
+                if not row.get("uuid"):
+                    continue
+                if row["uuid"] in seen:
+                    repeats += 1
+                    continue
+                seen.add(row["uuid"])
+                fresh.append(_job(row))
+            # The portal publishes no employer website, so there is no domain
+            # to bridge to `firms`; the UEN it does publish has nowhere to go.
+            written += db.upsert_jobs(connection, None, fresh)
+    except urllib.error.HTTPError as exc:
+        # **A refusal ends the walk; it does not throw the walk away.** Every
+        # page already read is committed, and the pages are what cost the
+        # portal something -- so the run reports what it holds and why it
+        # stopped, rather than dying in a traceback that loses the arithmetic
+        # and leaves `runs` with nothing for `alerts` to see. `problem` is set,
+        # so this can never be mistaken for a clean sweep.
+        if exc.code != 429:
+            raise
+        blocked = _refusal(exc)
 
     return Sweep(
         pages=pages,
@@ -338,4 +398,5 @@ def run(
         advertised=advertised,
         repeats=repeats,
         partial=since is not None,
+        blocked=blocked,
     )

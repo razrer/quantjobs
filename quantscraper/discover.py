@@ -424,16 +424,53 @@ def record(connection: sqlite3.Connection, found: list[Discovery]) -> None:
         )
 
 
-def targets(connection: sqlite3.Connection, limit: int) -> list[sqlite3.Row]:
+def targets(
+    connection: sqlite3.Connection,
+    limit: int,
+    source: str | None = None,
+) -> list[sqlite3.Row]:
     """Firms with a domain and no board worth polling, most promising first.
 
     Three states qualify, and the third is the one that hides. Tier B and C are
     the visible queue. **Tier A with a NULL token** is a board nobody can poll
     -- it reads as a successful classification in every summary and yields
     nothing forever, and AQR sat in it with 48 live postings.
+
+    **`source` scopes the sweep to one registry, and without it a focus hub is
+    unreachable.** The ordering is `source_count DESC` -- how many registries
+    saw the firm -- which is the right priority for a global queue and puts
+    every single-register firm behind every multi-register one. Hong Kong's
+    3,626 licensed corporations are almost all SFC-only, so they sort behind
+    27,314 other firms and a `--limit` sweep never reaches one of them. That is
+    a *priority* silently acting as a filter, which is the shape principle 1
+    forbids: scoping the queue is how a hub gets swept without reordering it.
     """
+    scope = ""
+    # **Scoping the queue also has to re-order it, and leaving that out made
+    # the first Hong Kong sweep useless.** The global ordering leads on
+    # `source_count DESC` -- how many registries saw the firm -- which is a
+    # proxy for "an operating company rather than a fund share class" and is
+    # right for a queue drawn from every register at once. Inside *one*
+    # register it stops measuring that and starts measuring "is this a
+    # multinational", because the firms several registers hold are the banks
+    # licensed in every jurisdiction. Scoped to `sfc_hk` it put ING, Societe
+    # Generale, Intesa Sanpaolo, Natixis, RBC and Bank of China at the head of
+    # a queue meant to find Hong Kong's own firms: 50 probed, 0 boards, and
+    # not one of them a Hong Kong company. `row_count` still separates a firm
+    # from a share class, and it does it without that side effect.
+    order = "f.source_count DESC, f.row_count DESC, f.name"
+    parameters: list[object] = []
+    if source is not None:
+        scope = """
+          AND EXISTS (
+              SELECT 1 FROM firm_members m
+              WHERE m.firm_id = f.firm_id AND m.source = ?
+          )"""
+        order = "f.row_count DESC, f.name"
+        parameters.append(source)
+    parameters.append(limit)
     return connection.execute(
-        """
+        f"""
         SELECT f.name, d.domain
         FROM firms f
         JOIN domain_lookups d ON d.query = f.name
@@ -446,11 +483,11 @@ def targets(connection: sqlite3.Connection, limit: int) -> list[sqlite3.Row]:
           )
           AND NOT EXISTS (
               SELECT 1 FROM jobs j WHERE j.domain = d.domain
-          )
-        ORDER BY f.source_count DESC, f.row_count DESC, f.name
+          ){scope}
+        ORDER BY {order}
         LIMIT ?
         """,
-        (limit,),
+        tuple(parameters),
     ).fetchall()
 
 

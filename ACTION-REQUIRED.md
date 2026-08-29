@@ -100,7 +100,107 @@ in `quantscraper/sites.py`. The 136 postings drop out on the next rebuild.
 
 ---
 
-## 5. Sponsored-access firms have no public list
+## 5. MyCareersFuture answers a sustained sweep with "contact us via the feedback form"
+
+**This is the one place a site has addressed us in words, and it is your call
+what to do about it.** Nothing is blocked meanwhile -- Singapore is still the
+board's largest source.
+
+A full sweep is ~956 requests. At the project's standing one-per-second it ran
+about 400 pages and then every request came back:
+
+```
+HTTP 429
+x-amzn-errortype: ForbiddenException
+scrapper: contact us via the feedback form if you have legitimate reasons
+```
+
+That second header is not boilerplate; somebody typed it. **The block is a rate
+threshold and not a ban** -- it lifted within the hour and low-volume requests
+answered 200 on either side of it.
+
+**What I did:** slowed this host to one request per four seconds
+(`http.HOST_INTERVAL_S`), which is what a 429 asks for, and made a refusal end
+the sweep with a report rather than a traceback. **What I did not do:** change
+the user agent, retry around the limit, or probe for where the threshold sits.
+Those are evasion, and the note above is the site telling us who to ask instead.
+
+**Measured after the change, and it settles the practical half.** A full sweep
+at four seconds ran **958 pages and 95,536 postings against the 95,561 the
+portal advertised** — 25 short, 0.03%, inside the tolerance — with no refusal
+anywhere in it. It takes about 70 minutes instead of 25 and it is the first
+MyCareersFuture run ever to reach the `runs` table, so `alerts` can see the
+source at all now. **The stale-row cost is paid too**: what had looked like
+54,159 rows of unknown status resolved to 29,262 genuinely withdrawn, and only
+**1,800** of those still claim a future deadline.
+
+**So nothing is forced, and one thing is still yours:**
+
+- **Whether to write to them.** They named the route — the feedback form on
+  `mycareersfuture.gov.sg`. It is no longer necessary; it is courtesy, and a
+  personal job-hunt tool reading a statutory portal once a week at one request
+  every four seconds is close to the "legitimate reasons" the header invites.
+  Say the word and I will draft what to send; I will not send it.
+- **If you would rather it were cheaper anyway**, `run(since=...)` exists and
+  the portal is sorted newest-first, so a top-up is ~20-50 requests. The cost
+  is stated in `mycareersfuture.run`'s docstring: only a full walk refreshes
+  `last_seen` on every live posting, which is the sole way a withdrawn
+  Singapore posting is ever noticed. The sweep is `--full` only, so it already
+  runs weekly rather than daily.
+
+To drop Singapore altogether: remove the `singapore` step from `_daily` in
+`cli.py`. The rows stay in the database either way.
+
+---
+
+## 6. Hong Kong's statutory job portal disallows crawling, and I stopped
+
+**Your call, and it is the mirror image of item 1.** Nothing is blocked; Hong
+Kong is improved by other means and the numbers are in `PLAN.md`.
+
+You asked whether Hong Kong has a national board like Singapore's. **It does,
+and it is closed.** The Labour Department's Interactive Employment Service
+(`jobs.gov.hk`) publishes a `robots.txt` that ends:
+
+```
+Disallow: /isps/Web/WebForm/JobSeeker/Job/*
+Disallow: /0/api/*
+Disallow: /
+```
+
+above an allow-list of roughly forty paths — corporate pages, plus sector
+landing pages for elderly care, catering, retail and construction. **None is
+finance.** That is the exact inverse of MyCareersFuture, whose `robots.txt`
+reads `Disallow:` with a sitemap, and the two are the same kind of institution:
+a government portal carrying every advertised job in the territory.
+
+**Why I stopped where I went ahead in Denmark.** Item 1's argument was that
+Jobindex's rules are shaped for search-engine crawlers — the "don't index the
+same posting under a thousand URLs" pattern — and that the site publishes RSS
+URLs carrying the very parameter it disallows. Neither is true here. `jobs.gov.hk`
+disallows the **whole site** and names its **API** separately; there is no
+reading on which the job pages are meant to be open and only the URL shapes
+closed. A blanket `Disallow: /` is not a canonicalisation rule.
+
+**What overturning it would buy**, if you want it: this is the one source that
+would do for Hong Kong what MyCareersFuture does for Singapore — a hub fed by a
+national board rather than by firm boards, which is the difference between
+1,414 postings and 127,262. **What it costs** is that this project would be
+reading a government portal that has asked, in the one machine-readable place
+it has to ask, not to be read.
+
+Two other Hong Kong boards need no decision, because they refused rather than
+asked: **`efinancialcareers.hk` and `ctgoodjobs.hk` answer HTTP 405 to every
+path, homepage included.** eFC's `robots.txt` even names two job sitemaps for
+`User-agent: *` — and the sitemaps 405 as well. Changing the user agent to get
+past a WAF is evasion, so those are recorded as closed. `hk.jobsdb.com`
+disallows `*?` and `*/job/`, which its own search cannot avoid.
+
+To do nothing: this stays as it is, and Hong Kong stays employer-fed.
+
+---
+
+## 7. Sponsored-access firms have no public list
 
 Recorded rather than asked: a firm dealing exclusively on its own account is
 exempt from investment-firm licensing under MiFID II Art. 2(1)(d), and one
@@ -120,6 +220,8 @@ undo it.
 |---|---|
 | **A plain `Senior` no longer removes a posting.** It gated 9,914 postings, 947 in Stockholm and Copenhagen, and in the Nordics what it took was not leadership — a Nordic bank stamps *Senior* on a three-year grade. It still ranks last. | Put `"senior_6_10"` back in `_OUT_OF_REACH` in `tagging.py`, bump `TAGGER`, re-run `tag`. |
 | **Markets seats that are not quant work rank instead of rejecting** — `Rates Sales - SEK Focus` at Nordea, `Commodities Sales to FICC Markets` at SEB. Your words were *"it is ok if it picks up junk, i can remove them myself"*. This overrides the hand-labelled sheet, which rejected nine such rows in a row. | Take `"discretionary_investing"` out of `SOFT` in `tag_posting`, bump `TAGGER`, re-run. |
+| **The closing-date pin promotes only the shortlist** (`apply_now`, `strong`) — *your call, taken on the numbers*. It was pinning every dated posting above everything: **776 cards, 763 Singapore, 558 with no verdict at all** (`Admin Assistant`, `Desktop Engineer - Shift Based`) above all 224 shortlist cards. In firm tiles, 426 before the first unpinned card. Restricting it to anything the tagger had read still left 83 tiles, 116 of 118 postings Singapore, because that source publishes 98% of every closing date here. At the shortlist it is 10 tiles and the board opens on Flow Traders, Two Sigma and Point72. Nothing is hidden — a `plausible` card closing today is under the `Closing date` sort. | Widen `SHORTLIST` to `WORTH` in `pinned` in `order()` in `web/index.html`, or drop the clause entirely to go back to pinning every dated card. |
+| **A markets word in a *body* no longer stops `no_markets_signal`** — *taken from your own reclassify clicks, and measured before it went in*. 19 of the 40 postings you marked `rejected` were escaping on one word in a description that belonged to the employer rather than the job: Adidas's `Part-Time Sales Consultants` on *trading*, Karolinska Institutet's `Projektadministratör` on *front office*, a `Swedish Content Writer` on *market data*. Over all 382,034 live postings it moves **2,504 from `unknown` to `rejected`** and 29 from `adjacent`, takes **2,209 cards off the board** and loses **no `relevant` card at all**. All 29 `adjacent` losses were read by hand — thirteen are one Singapore recruiter's `HSBC Life Wealth Management Advisor`, the rest investor relations and wealth management. A body naming markets *activity* still holds a posting open, so nothing a description can prove is lost. | Restore `markets_body` to the `has_body` test at the end of `lexicon.judge`, bump `TAGGER`, re-run `tag`. |
 | **A sixth board gate**, `non_markets_board`: a board publishing no markets work *and* a title the tagger could not read. Removes 906 cards and empties `resolute.com`, `greystar.com`, `tink.com`, `carrier.com` and two radio stations. No hub lost a ranked card. | Delete the `non_markets_board` line from `GATES` in `web/build_data.py` and rebuild. No re-tag. |
 | **`Hide pure trader roles` starts *off*.** The board never removes anything silently, so a hidden set leaves a crumb above the grid. It hides 159 postings when clicked. | One word in `FRESH()` in `web/index.html`. |
 | **Södertälje is Stockholm.** 35 km and on the commuter rail, by the same forty-kilometre rule that puts Køge in the Copenhagen belt. Norrtälje (70), Nynäshamn (58) and Nykvarn (50) stayed out. | Move the word from `stockholm` to `sweden_other` in `tagging._HUBS`. |

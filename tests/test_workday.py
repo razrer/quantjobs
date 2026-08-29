@@ -137,3 +137,55 @@ class WorkdayConstantTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WorkdayEntryWithoutAPathTest(unittest.TestCase):
+    """A missing `externalPath` must not become a link to the careers site.
+
+    The URL was built unconditionally, so an entry without a path produced
+    `{origin}/en-US/{site}` -- the board's own landing page. The reader found
+    two of these on the live board, at Nasdaq and Sun Life, and **42 Workday
+    boards held one each**: empty `job_id`, empty `title`, and a card that
+    opens a recruiting page instead of an advertisement. A link to the wrong
+    page is worse than no link, because only one of the two wastes a click.
+    """
+
+    @staticmethod
+    def _page(*entries: dict) -> bytes:
+        return json.dumps({"total": len(entries), "jobPostings": list(entries)}).encode()
+
+    def _read(self, *entries: dict):
+        with mock.patch.object(extract.http, "post_json",
+                               side_effect=[self._page(*entries)]):
+            return extract.workday("tenant|wd3|site")
+
+    def test_an_entry_with_neither_a_path_nor_a_title_is_not_a_posting(self):
+        """Nothing about it can ever be read and it cannot be re-fetched --
+        there is no id to ask for. Inventing a row is the write-time mistake."""
+        jobs = self._read({"locationsText": "London"})
+        self.assertEqual(jobs, [])
+
+    def test_a_title_with_no_path_is_kept_and_carries_no_url(self):
+        """Principle 4: this *is* a posting, however badly Workday published
+        it, so it is kept -- with `url=None` rather than a fabricated one."""
+        jobs = self._read({"title": "Quantitative Researcher",
+                           "locationsText": "Amsterdam"})
+        self.assertEqual(len(jobs), 1)
+        self.assertIsNone(jobs[0].url)
+        self.assertEqual(jobs[0].job_id, "Quantitative Researcher")
+
+    def test_the_ordinary_entry_is_untouched(self):
+        jobs = self._read({"title": "Quant Trader", "externalPath": "/job/QT_1",
+                           "locationsText": "London"})
+        self.assertEqual(jobs[0].url,
+                         "https://tenant.wd3.myworkdayjobs.com/en-US/site/job/QT_1")
+        self.assertEqual(jobs[0].job_id, "/job/QT_1")
+
+    def test_a_malformed_entry_does_not_cost_the_page_beside_it(self):
+        """The guard skips one entry, never the rest of the page."""
+        jobs = self._read(
+            {"title": "Quant Trader", "externalPath": "/job/QT_1"},
+            {"locationsText": "London"},
+            {"title": "Quant Researcher", "externalPath": "/job/QR_2"},
+        )
+        self.assertEqual([j.job_id for j in jobs], ["/job/QT_1", "/job/QR_2"])

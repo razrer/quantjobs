@@ -36,7 +36,7 @@ from . import db, lexicon
 # Bump on every lexicon change: the diff between two versions over the same
 # corpus is a free regression test, and it is the only way to tell "the
 # classifier improved" from "the market moved".
-TAGGER = 50
+TAGGER = 52
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS job_tags (
@@ -294,6 +294,23 @@ _MANAGEMENT = _terms(
     "scrum master", "agile coach", "chapter lead", "tribe lead",
     "vice president", "vp", "avp", "svp", "president",
     "supervisor", "foreman", "principal consultant",
+    # **The English plural, which a token-matched needle cannot see.** `Delivery
+    # Managers - Tieto Banktech` escaped `delivery manager` and reached the
+    # board -- the Swedish inflection lesson in the language the list is
+    # written in. Dry-run over 382,034 live titles: 146 hits, one of them rated
+    # positively, and it reads correctly by hand -- Oliver Wyman's
+    # `Associates/Engagement Managers/Principals - Banking`, a consulting grade
+    # ladder advertised as one posting.
+    #
+    # **Four more plurals were measured and dropped, three of them on the
+    # reason rather than the count.** `partners` is 84 titles whose two
+    # positives are `Associate, Private Equity, CLSA Capital Partners` -- the
+    # *firm's name*, where the applicant is an associate; `principals` is
+    # sixteen preschool principals, an occupation and not a rank; `presidents`
+    # and `heads of` reach only an *assistant to* one, so the word describes
+    # somebody the applicant works for. A gate whose reason is wrong is wrong
+    # even where its verdict is right.
+    "managers", "directors", "leaders", "supervisors",
     # Nordic. `projektledare` and `gruppchef` are the same job as the two
     # above, and the compound rule below catches the rest of the family.
     "projektledare", "teamledare", "gruppledare", "verksamhetsledare",
@@ -1153,7 +1170,22 @@ _OFF_INDUSTRY = _terms(
     # rather than the wrong industry, so they stay rejected on relevance --
     # still on the board, one click away.
     "accountant", "accounting clerk", "bookkeeper",
-    "redovisningsekonom", "redovisningskonsult", "ekonomiassistent",
+    # The Swedish `-er` plural of the two entries below it, which the singular
+    # needle cannot see -- the `undersköterskor` gap on a list that is matched
+    # whole rather than by suffix. `Två kundansvariga redovisningskonsulter
+    # till affärsområde Värdepapper` reached the board as `adjacent` on
+    # *värdepapper*, a markets word sitting in the name of the department the
+    # accountants serve. Nine titles between them, none rated positively.
+    # `-er` is spelled out per entry rather than made a rule: as a compound
+    # suffix it would fire on `researcher` and `developer`.
+    "redovisningsekonom", "redovisningskonsult", "redovisningskonsulter",
+    "ekonomiassistent", "ekonomiassistenter",
+    # Bare `redovisning` -- the activity rather than the job title, which is
+    # how a Swedish advertisement often heads an accounting seat: the reader
+    # rejected one titled simply `Redovisning`, and it carries 102 characters
+    # of body, too few for the absence test to read. 19 live titles, none
+    # rated positively, all of them accounting.
+    "redovisning",
     "loneadministrator", "lonespecialist", "ekonomiadministrator",
     # sales, Swedish. The English sales words are all too close to markets
     # sales to gate on; the Swedish ones name shop and telephone work only.
@@ -1615,6 +1647,25 @@ _CH_CANTON = re.compile(
 _US_STATE = re.compile(
     r",\s*(A[LKZ]|C[AOT]|FL|GA|HI|I[ADL]|K[SY]|LA|M[ADEINOST]|"
     r"N[CDHJMVY]|OH|OK|OR|PA|RI|S[CD]|T[NX]|UT|V[AT]|W[AIVY]|DC)(?![.\w])")
+
+# **An employer's own site codes are an administrative unit too, and HKEX's
+# are the whole Hong Kong Exchange.** Its Workday board writes the office, not
+# the city -- `HK-CMP 6/F`, `HK-TWO ES 11/F`, `HK-TKO 5/F`, `HK-ONE ES 30/F`
+# -- so all 164 postings matched no needle in `_HUBS` and fell through to
+# `other`, which the board gates. That is the `Wallisellen, ZH` failure at one
+# employer's scale: the place was written down and we could not read it.
+#
+# Matched against the **raw location** and anchored, for the same reason the
+# canton and state patterns are: `hk` is two letters and `_HUBS` is matched
+# against the title as well, where it would eventually catch something. The
+# prefix is HKEX's own country code -- it writes `CN-Shenzhen-HyQ` and
+# `UK-London` the same way, and both of those already resolve through `_HUBS`
+# on the city name, so only the Hong Kong half needs this.
+#
+# Dry-run before it went in: **not one live posting in the corpus writes a
+# location beginning `HK-`**, so the pattern can claim nothing that is already
+# being read correctly.
+_HK_SITE = re.compile(r"^HK-")
 
 # **City before country.** `sweden` used to sit in the `stockholm` tuple, so
 # every Swedish advertisement read Stockholm -- Kiruna and Visby included.
@@ -2740,6 +2791,9 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
     elif state := _US_STATE.search(raw):
         hubs = ["us_other"]
         add("hub", "us_other", f"us state {state.group(1).upper()!r}", "strong")
+    elif _HK_SITE.match(raw):
+        hubs = ["hong_kong"]
+        add("hub", "hong_kong", f"site code {raw[:20]!r}", "strong")
     elif raw and not _NO_PLACE.match(raw):
         hubs = ["other"]
         add("hub", "other", f"{raw[:40]!r}", "strong")

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import datetime
+import email.utils
 import gzip
 import http.cookiejar
 import ssl
@@ -50,6 +52,41 @@ _OPENER = urllib.request.build_opener(
 # registries doing us a favour; there is no reason to hammer them.
 MIN_INTERVAL_S = 1.0
 
+# Hosts that have said, in a response, that one second is too fast. **This is
+# compliance, not tuning**: a 429 exists to make a client slow down, so slowing
+# down is the requested behaviour -- as distinct from changing the user agent,
+# rotating an address or imitating a browser, none of which this project does.
+#
+# `api.mycareersfuture.gov.sg` answers a sustained sweep with HTTP 429 carrying
+# `x-amzn-errortype: ForbiddenException` and a header the operators typed by
+# hand: `scrapper: contact us via the feedback form if you have legitimate
+# reasons`. Low-volume requests answer 200 either side of it, so the threshold
+# is volume rather than this tool -- but the note is a statement of their
+# wishes, and it is written up in `ACTION-REQUIRED.md` for the reader to settle
+# rather than treated as a number to tune against. The interval here is
+# deliberately conservative and was not found by probing for the limit, which
+# would be the same hammering wearing a lab coat.
+#
+# `apply.workable.com` is the second entry and it was found the same way --
+# by being told. `discover` probes ten ATS vendors per candidate token, so a
+# board-discovery sweep is, from Workable's side, one client asking about
+# thousands of boards that do not exist; it began answering 429 partway
+# through a Hong Kong sweep and kept answering it for unrelated reads of a
+# board that *does* exist. Four seconds is the same conservative number, for
+# the same reason: the rate was not probed for.
+HOST_INTERVAL_S = {
+    "api.mycareersfuture.gov.sg": 4.0,
+    "apply.workable.com": 4.0,
+}
+
+# How long a 429 is honoured for when the server names no `Retry-After`. A 429
+# is not a transient blip like a 503 -- it is the server saying the *rate* is
+# wrong -- so it gets its own schedule rather than the generic `2 ** attempt`,
+# which spent its whole budget in three seconds and walked into the wall three
+# times. Capped so a hostile or mistaken `Retry-After` cannot hang a run.
+_BACKOFF_429_S = (30.0, 90.0, 300.0)
+MAX_RETRY_AFTER_S = 300.0
+
 _last_hit: dict[str, float] = {}
 # Domain resolution probes thousands of *different* hosts, so it is worth doing
 # in parallel -- the per-host interval barely applies when no two requests share
@@ -61,12 +98,42 @@ _throttle_lock = threading.Lock()
 def _throttle(host: str) -> None:
     with _throttle_lock:
         now = time.monotonic()
-        wait = MIN_INTERVAL_S - (now - _last_hit.get(host, 0.0))
+        interval = HOST_INTERVAL_S.get(host, MIN_INTERVAL_S)
+        wait = interval - (now - _last_hit.get(host, 0.0))
         # Reserve the slot before sleeping, so concurrent callers for the same
         # host queue up behind each other instead of all waking together.
         _last_hit[host] = now + max(wait, 0.0)
     if wait > 0:
         time.sleep(wait)
+
+
+def _retry_after(exc: urllib.error.HTTPError, attempt: int) -> float:
+    """How long to wait after `exc`, preferring the server's own answer.
+
+    `Retry-After` is either a number of seconds or an HTTP date, and both
+    forms occur. A server that names a wait has told us the one thing we would
+    otherwise be guessing, so it wins -- clamped, because an absurd value in
+    that header would otherwise hang a run for as long as the header says.
+    """
+    if exc.code != 429:
+        return float(2**attempt)
+    header = (exc.headers.get("Retry-After") or "").strip()
+    stated: float | None = None
+    if header.isdigit():
+        stated = float(header)
+    elif header:
+        # Raises on a malformed date rather than returning None, and a broken
+        # header must not turn a rate limit into a crash -- the fallback below
+        # is a perfectly good answer.
+        try:
+            when = email.utils.parsedate_to_datetime(header)
+        except (TypeError, ValueError):
+            when = None
+        if when is not None:
+            stated = (when - datetime.datetime.now(when.tzinfo)).total_seconds()
+    if stated is not None and stated > 0:
+        return min(stated, MAX_RETRY_AFTER_S)
+    return _BACKOFF_429_S[min(attempt, len(_BACKOFF_429_S) - 1)]
 
 
 def _send(
@@ -108,6 +175,15 @@ def _send(
             retryable = exc.code == 429 or exc.code >= 500
             if not retryable or attempt == retries - 1:
                 raise
+            # **A 429 is not a 503 and must not share its schedule.** A 5xx is
+            # a blip and `2 ** attempt` is right for it; a 429 is the server
+            # saying the rate is wrong, and answering that by trying again one
+            # second later is both useless and rude. Measured: a MyCareersFuture
+            # sweep spent its entire three-attempt budget inside three seconds
+            # and died ~400 pages in, losing forty minutes of walk and leaving
+            # nothing in `runs` to say so.
+            time.sleep(_retry_after(exc, attempt))
+            continue
         except (urllib.error.URLError, TimeoutError):
             if attempt == retries - 1:
                 raise

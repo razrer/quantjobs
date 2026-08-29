@@ -59,6 +59,31 @@ def _record_poll(
     )
 
 
+def _poll(connection, source: str, sweep: Callable[[], object]):
+    """Run one Layer 4 sweep, recording it in `runs` **even when it raises**.
+
+    **This is the half of the job `_record_poll` left open, and it cost a
+    source.** `_record_poll` runs after the sweep returns, so a sweep that
+    *crashes* records nothing at all -- and a source with no row in `runs` is
+    exactly what `alerts` cannot see. MyCareersFuture died ~400 pages into a
+    `daily --full` on an HTTP 429, wrote 37,562 postings and no run, and
+    `alerts` then reported **"all sources healthy"** while Singapore was down.
+    That is the job-room.ch failure one step along: not a source nobody asked
+    about, but a source that was asked and did not come back.
+
+    `_fetch` has recorded a failed registry since the beginning; this brings the
+    national boards to the same contract. The exception is re-raised, so the
+    caller still fails and `daily` still counts the step as failed -- the only
+    thing that changes is that the database now says so.
+    """
+    started_at = db.now()
+    try:
+        return started_at, sweep()
+    except Exception as exc:
+        db.record_run(connection, source, started_at, 0, ok=False, error=str(exc))
+        raise
+
+
 def _fetch(names: list[str], database: str) -> int:
     connection = db.connect(database)
     failures = 0
@@ -193,7 +218,9 @@ def _ats(database: str, limit: int, workers: int, reprobe: bool = False) -> int:
     return 0
 
 
-def _discover(database: str, limit: int, roster: bool, workers: int) -> int:
+def _discover(
+    database: str, limit: int, roster: bool, workers: int, source: str | None = None
+) -> int:
     connection = db.connect(database)
     if roster:
         wanted = discover.roster_targets(connection, audit.load_roster())
@@ -201,9 +228,11 @@ def _discover(database: str, limit: int, roster: bool, workers: int) -> int:
     else:
         wanted = [
             discover.Target(row["name"], (row["name"],), row["domain"])
-            for row in discover.targets(connection, limit)
+            for row in discover.targets(connection, limit, source)
         ]
         frame = f"{len(wanted)} firms with a domain and no pollable board"
+        if source:
+            frame += f" in {source}"
 
     attempted, found, hits = discover.run(connection, wanted, workers)
     if not attempted:
@@ -226,8 +255,10 @@ def _discover(database: str, limit: int, roster: bool, workers: int) -> int:
 
 def _singapore(database: str, since: str | None) -> int:
     connection = db.connect(database)
-    started_at = db.now()
-    swept = mycareersfuture.run(connection, since=since)
+    started_at, swept = _poll(
+        connection, mycareersfuture.NAME,
+        lambda: mycareersfuture.run(connection, since=since),
+    )
     _record_poll(connection, mycareersfuture.NAME, started_at, swept.seen,
                  partial=swept.partial, problem=swept.problem)
     print(
@@ -246,8 +277,10 @@ def _singapore(database: str, since: str | None) -> int:
 
 def _denmark(database: str, since: str | None, only: list[int] | None) -> int:
     connection = db.connect(database)
-    started_at = db.now()
-    swept = jobindex.run(connection, since=since, only=only)
+    started_at, swept = _poll(
+        connection, jobindex.NAME,
+        lambda: jobindex.run(connection, since=since, only=only),
+    )
     _record_poll(connection, jobindex.NAME, started_at, swept.seen,
                  partial=swept.partial, problem=swept.problem)
     print(
@@ -286,8 +319,9 @@ def _denmark(database: str, since: str | None, only: list[int] | None) -> int:
 
 def _sweden(database: str, pages: int | None) -> int:
     connection = db.connect(database)
-    started_at = db.now()
-    swept = jobbsafari.run(connection, pages=pages)
+    started_at, swept = _poll(
+        connection, jobbsafari.NAME, lambda: jobbsafari.run(connection, pages=pages)
+    )
     _record_poll(connection, jobbsafari.NAME, started_at, swept.seen,
                  partial=swept.partial, problem=swept.problem)
     print(
@@ -317,8 +351,9 @@ def _sweden(database: str, pages: int | None) -> int:
 
 def _switzerland(database: str, days: int | None) -> int:
     connection = db.connect(database)
-    started_at = db.now()
-    swept = jobroom_ch.run(connection, days)
+    started_at, swept = _poll(
+        connection, jobroom_ch.NAME, lambda: jobroom_ch.run(connection, days)
+    )
     # No `partial` here: every poll of this portal is a window, and an ad-hoc
     # `--days 6` is an outlier rather than a subset. `alerts` compares against
     # a median precisely so one outlier cannot move the baseline.
@@ -399,8 +434,9 @@ def _jobstream(database: str, since_text: str | None = None) -> int:
         else None
     )
     since = override or jobstream.cursor(connection)
-    started_at = db.now()
-    seen, written, withdrawn = jobstream.run(connection, override)
+    started_at, (seen, written, withdrawn) = _poll(
+        connection, jobstream.NAME, lambda: jobstream.run(connection, override)
+    )
     # A replay of a window already polled is a deliberate subset, the same as
     # `--since` one country over.
     _record_poll(connection, jobstream.NAME, started_at, seen,
@@ -1023,6 +1059,12 @@ def main(argv: list[str] | None = None) -> int:
         help="sweep the audit roster instead of the general queue",
     )
     discover_command.add_argument("--workers", type=int, default=6)
+    discover_command.add_argument(
+        "--source",
+        help="scope the general queue to one registry, e.g. sfc_hk. Without it"
+        " the queue is ordered by how many registries saw a firm, so a hub"
+        " whose firms hold a single licence is never reached by --limit",
+    )
 
     singapore_command = commands.add_parser(
         "singapore", help="sweep MyCareersFuture, Singapore's statutory portal"
@@ -1224,7 +1266,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "jobstream":
         return _jobstream(args.db, args.since)
     if args.command == "discover":
-        return _discover(args.db, args.limit, args.roster, args.workers)
+        return _discover(
+            args.db, args.limit, args.roster, args.workers, args.source
+        )
     if args.command == "bodies":
         return _bodies(args.db, args.limit, args.workers)
     if args.command == "singapore":

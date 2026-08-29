@@ -312,3 +312,13 @@ VICI Holdings,,US,Prop trading firm,
 Wallsoft Labs,,,Prop trading firm,
 26 Miles Capital,,US,Quant hedge fund,
 Quant Matter,Singapore,SG,Crypto market maker,
+# ── Hong Kong: markets employers that are in no register this project reads ──
+# `sfc_hk` enumerates licensed *corporations* under the SFO. An exchange
+# controller and a central bank are neither, so both were absent from a
+# universe of 79,225 firms while running live boards -- HKEX on Workday
+# (164 postings) and the HKMA on its own vacancies table (14, with the
+# employer's own closing dates). This is the same shape as the Amsterdam
+# sponsored-access rows at the top of this file: not a gap in the scraper, a
+# gap in what a licensing register is *for*.
+Hong Kong Exchanges and Clearing,Hong Kong,HK,Exchange operator,https://www.hkexgroup.com
+Hong Kong Monetary Authority,Hong Kong,HK,Central bank,https://www.hkma.gov.hk

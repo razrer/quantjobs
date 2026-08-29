@@ -97,7 +97,7 @@ import re
 from dataclasses import dataclass
 from functools import lru_cache
 
-VERSION = 7
+VERSION = 9
 
 # Everything that is not a letter, digit, `+` or `#` is a separator. Those two
 # are kept because `c++` and `c#` name things a posting is graded on, and
@@ -537,7 +537,16 @@ CORPORATE = _terms(
     "personal assistant", "office administrator", "office coordinator",
     "facilities", "procurement", "purchasing", "supply chain", "logistics",
     "marketing", "brand", "communications", "public relations", "press officer",
-    "copywriter", "social media", "graphic designer", "ux designer",
+    "copywriter", "content writer", "social media", "graphic designer",
+    "ux designer",
+    # The company-secretary family, and it is a *governance officer* rather
+    # than an assistant -- the two-word phrases only, because bare `secretary`
+    # would be the `administrator` trap on the list below. Coeli's `Corporate
+    # Secretary` was one of the reader's hand-rejections and it carries a body
+    # too short for the absence test to read. Dry-run: 89 live titles, not one
+    # rated positively, and they are DBS, LSEG, Apex and T. Rowe Price -- real
+    # markets employers, whose company secretary is still not this line of work.
+    "corporate secretary", "company secretary",
     "ui designer", "product designer", "designer", "design lead",
     "community manager", "customer success", "event manager",
     "legal counsel", "counsel", "paralegal", "attorney", "lawyer", "solicitor",
@@ -614,6 +623,46 @@ NON_QUANT_FINANCE = _terms(
     # deliberately absent -- 166 titles carry it and three of them are quant
     # seats at RBC and a treasury desk; the two IB desks are named instead.
     "investment banking", "equity capital markets", "debt capital markets",
+    # **The rest of the IB desk, at the reader's instruction that investment
+    # banking is out of scope.** The three words above were already here, which
+    # is why `Equity Capital Markets - Associate` at Rothschild was off the
+    # board -- the gap was every IB title that does not spell "investment
+    # banking".
+    #
+    # `corporate finance` is the one that mattered: 94 live titles, 19 of them
+    # on the board, and it is what `Analytiker I EY Parthenon Corporate
+    # Finance`, `Corporate Finance Specialist` and `SEB Corporate Finance and
+    # Corporate Finance Growth Analysts` were all riding on. Its four
+    # positively-rated hits were read -- three `Corporate Finance Executive
+    # (Commodity Trading)` at one Singapore recruiter and an `Analyst,
+    # Corporate Finance & Treasury` -- and none is quant work. A quantitative
+    # title is safe regardless: step 5 has already kept it before step 6 runs.
+    #
+    # `mergers` is one needle for both spellings, because `&` folds to a space
+    # and `Mergers & Acquisitions` and `Mergers and Acquisitions` share only
+    # that word. `ecm` and `dcm` were kept after reading all 36 between them:
+    # every one is an IB desk bar `Gap ECM Marketing Lead`, a retailer's
+    # content management, which rejects anyway.
+    #
+    # **Three that look obviously right were dropped:**
+    #
+    # - **`m a`**, the folded form of `M&A`. 173 titles against 29 for
+    #   `mergers`, and four of the positives could not be accounted for by
+    #   reading the title -- a two-letter needle is the `AQR` and `tbe` shape,
+    #   and `mergers` already covers the family.
+    # - **`origination`** promotes 39 and its two positives are `Senior
+    #   Associate Americas Fixed Income Origination` at LSEG and `UIT Trading &
+    #   Origination` at Guggenheim. Those are markets desks, not IB coverage.
+    # - **`corporate banking`** is on `MARKETS` deliberately and carries 89
+    #   positively-rated titles. Moving it here would be a different decision
+    #   from this one.
+    #
+    # `restructuring`, `ipo` and `syndicate` were measured and left: the first
+    # two are ambiguous outside IB, and `syndicate` is four titles whose one
+    # positive is an asset-backed debt syndication desk.
+    "corporate finance", "mergers", "investment bank", "leveraged finance",
+    "ecm", "dcm", "transaction advisory", "deal advisory", "capital raising",
+    "loan syndication", "sponsor coverage", "investment banking division",
     "sales agent", "sales development", "account handler", "financial planner",
     "claim representative", "client manager", "deposit specialist",
     "commercial banking", "business banking", "premier banking",
@@ -1009,9 +1058,34 @@ def judge(
     #    chemistry; both landed in the keep list until this returned a maybe
     #    instead. A full body with no markets word anywhere in it, by contrast,
     #    is real evidence -- absence measured over a whole document.
+    #
+    #    **`markets_body` used to switch this rejection off, and that is the
+    #    single largest hole the reader's hand-rejections found.** Of the 40
+    #    postings they marked `rejected` on the live board, 19 escaped here on
+    #    one `MARKETS` word in a body belonging to an employer rather than to
+    #    the job: Adidas's `Part-Time Sales Consultants` and Fortum's `Balance
+    #    Settlement Specialist` on bare *trading*, Karolinska Institutet's
+    #    `Projektadministratör` on *front office* -- a hospital's reception
+    #    desk -- a `Swedish Content Writer` on *market data*, and Accenture's
+    #    `Service Now business architect` on *structuring*.
+    #
+    #    This module already says so twice and did not act on it here:
+    #    `MARKETS` is a **role** list, banned from holding ordinary English
+    #    because in a body it describes the employer's customers. So the
+    #    absence test now reads the role only. Nothing is lost that a body can
+    #    prove, because the branch above it is a body test: `quant_body` is
+    #    markets *activity*, and a posting whose description names any is still
+    #    held open. What is refused is the weaker claim -- that a firm
+    #    mentioning markets somewhere makes an unreadable title into a job
+    #    worth reading.
+    #
+    #    Only this step changes. Steps 7 and 8 still read `markets_body`, and
+    #    should: there the title has already been recognised as an engineer or
+    #    an analyst, so the body is corroborating a reading rather than
+    #    supplying the only one there is.
     if quant_body:
         return Verdict("undecided", None, quant_body, "weak")
-    if has_body and not (markets_role or markets_body):
+    if has_body and not markets_role:
         return Verdict("reject", "no_markets_signal", None, "weak")
     return Verdict("undecided", None, markets_role or markets_body, "weak")
 

@@ -380,6 +380,7 @@ def main() -> None:
     # emptied, which is the check you would actually run.
     by_board: dict[str, int] = {}
     untagged = 0
+    untitled = 0
     for row in connection.execute(
         "SELECT ats, token, job_id, domain, employer, title, url, location,"
         # Withdrawn postings keep their row and stop being offered. The board
@@ -398,6 +399,18 @@ def main() -> None:
         # without a re-tag, and whenever a `tag` is interrupted.
         if mine is None:
             untagged += 1
+            continue
+
+        # **A card with no title is not a posting, whatever the row says.** Not
+        # a gate and not a classifier -- a gate removes a posting the reader
+        # would not want, and this removes a record with nothing on it to read.
+        # It printed as a blank card whose link went to the employer's whole
+        # recruiting site, which is how the reader found it at Nasdaq and Sun
+        # Life; `extract.workday` no longer creates them, and this is the guard
+        # for the next source that does. Counted separately so it can never
+        # grow quietly -- a rising number here is an extractor breaking.
+        if not (row["title"] or "").strip():
+            untitled += 1
             continue
 
         # **Stage one, and the only filters on this page that remove rather
@@ -543,6 +556,12 @@ def main() -> None:
             "        of which, the boards it emptied: "
             + ", ".join(f"{name} {count:,d}" for name, count in top)
         )
+    if untitled:
+        # Also not a gate. A record with no title on it cannot be read by the
+        # reader or by the tagger, and the only honest thing to do with one is
+        # not to render it.
+        print(f"{untitled:>7,d} held   untitled      (no title -- an extractor "
+              f"wrote a record with nothing on it)")
     if untagged:
         # Not a gate: these were never read. It is a queue depth, and the
         # answer is to run `tag`, which is why it prints separately.
