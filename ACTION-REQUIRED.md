@@ -200,7 +200,34 @@ To do nothing: this stays as it is, and Hong Kong stays employer-fed.
 
 ---
 
-## 7. Sponsored-access firms have no public list
+## 7. 469 model labels are waiting for you to read them
+
+`quantscraper/agent_labels.csv` holds 469 postings labelled by twelve model
+labellers in one pass. **They gate nothing and they are not scored by default**
+-- `labels.SHEETS` is still `labels.csv` plus `auto_labels.csv`. This is the
+same state `auto_labels.csv` was in before you read it, and reading it is what
+turned that one into evidence.
+
+**What they are worth.** As a *measurement* they were valuable: they put the
+tagger at 83.6% on your own hand sheet with **zero false rejections**, and they
+found two real issues (both needing `lexicon.board_profile`, both written up in
+`CLAUDE.md`). As *labels* they are noisier than yours -- they called
+`Slack Administrator` and `IT Support Engineer` "adjacent", and called
+`Junior Quantitative Analyst (Credit & FI)` "rejected".
+
+**What I did not do.** I did not tune the lexicon against them. Every rule they
+flagged turned out to be right when measured -- softening `desk support` or
+`crypto_web3` would have cost hundreds of correct rejections to rescue about
+twenty postings. Changing a classifier on unread model labels is the thing
+`TAGGING.md` warns about in its own words: a model grading a model.
+
+**If you want them to count**, read the file and correct what you disagree
+with, then add it to `labels.SHEETS`. **If you would rather they did not
+exist**, delete the file -- nothing reads it.
+
+---
+
+## 8. Sponsored-access firms have no public list
 
 Recorded rather than asked: a firm dealing exclusively on its own account is
 exempt from investment-firm licensing under MiFID II Art. 2(1)(d), and one

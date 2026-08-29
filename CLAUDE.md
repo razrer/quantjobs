@@ -1668,6 +1668,56 @@ ate a hub.
   call (9), and a markets word in the *title* of a back-office seat (5). **Check
   which family a row is in before writing a needle for it**; two of the four are
   working as instructed.
+- **Twelve model labellers were run over 471 postings and the finding was that
+  the classifier is right, which is a result and not a failure.** Scored
+  separately: the **hand sheet is 83.6% on relevance with zero false
+  rejections**, and seniority containment is **14/14 leadership kept off the
+  board, 0 openings lost to the rank gate**. Of 469 model labels only **nine**
+  disagreed in the expensive direction, and reading them, seven are the model
+  being wrong or the tagger being defensibly right.
+- **Model labels must not go in `labels.csv`, and that is what the two sheets
+  are for.** They were written there once and it was wrong: `labels.csv` is the
+  *hand* sheet and `auto_labels.csv`'s own comment says a machine sheet becomes
+  evidence only after **the user has read and confirmed it** -- "the step that
+  turns it from an echo into evidence". Unreviewed model labels live in
+  `agent_labels.csv` and gate nothing.
+- **A model labeller told to prefer `adjacent` when torn will label almost
+  anything `adjacent`.** The instruction was *"when genuinely torn between
+  `rejected` and `adjacent`, choose `adjacent`"* -- sound on its own and it
+  produced `adjacent` for `Slack Administrator`, `IT Support Engineer`,
+  `Network Security Engineer`, `AI Marketing Technologist Lead` and
+  `Account Management Lead - SMB`. The same run labelled
+  `Junior Quantitative Analyst (Credit & FI)` **rejected**. **Read what a
+  labeller promotes before treating its disagreements as bugs** -- it is the
+  needle dry-run rule applied to the grader instead of the lexicon.
+- **The two rules the model sheet flagged loudest are both correct, and the
+  measurement is what settles it.** `desk support` removes **9,072** live
+  postings and a hand-read of thirty in focus hubs is `CLEANING OPERATIONS
+  MANAGER`, `EV Battery Operations Supervisor`, `Rental Operations Agent`,
+  `HR Operations Lead` -- bare `operations` and `compliance` in
+  `_DESK_ADJACENT` are doing the work, and the *verdict* is right even where
+  "desk support" is the wrong *reason*. `crypto_web3` removes **686**, of which
+  637 never say crypto in the title -- and they are Kraken (`payward.com`, 40),
+  Galaxy, BitGo, Blockchain Capital, Castle Island. **Softening either would
+  cost hundreds of correct rejections to rescue about twenty postings.**
+- **A count threshold does not separate a crypto firm from crypto boilerplate.**
+  The obvious fix for the ~20 mainstream managers caught by `crypto_web3`
+  (State Street, T. Rowe Price, LSEG, ProFunds) is to demand two mentions.
+  Measured, the distributions are identical: **445 of 617 correct crypto-firm
+  rejections also mention it exactly once**, against 16 of 20 false ones. The
+  discriminator is the *board*, not the posting -- `lexicon.board_profile`
+  again, which is also the answer for a small quant shop whose
+  `Machine learning researcher` reads `unknown`.
+- **The body-level markets anchor is 96% precise and does not need fixing.**
+  102 postings are kept by a single body quant phrase plus a body markets word;
+  **`trading` alone does 68 of them and they are XTX and Squarepoint
+  engineers**, correctly kept. The bad ones are three: a neuroscience
+  `Principal Research Scientist` anchored on *asset management*, an insurance
+  `Catastrophe Risk Modeler` on *risk analytics*, and the `Computational
+  Chemist` on **`reference data`** -- the same posting `_markets`'s own
+  docstring names as the failure it was written to stop. One posting each;
+  `reference data` stays in `MARKETS` because it is a real markets title on the
+  other 38.
 - **A labelled disagreement and a labelled non-answer are different facts, and
   one number hid it.** `labels` prints both: `wrong` is what a lexicon fix can
   move, `unanswered` is not, and only the first is evidence of a bug.
