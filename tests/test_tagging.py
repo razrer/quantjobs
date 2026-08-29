@@ -2336,9 +2336,15 @@ class EveryHubReadTheSameWayTest(unittest.TestCase):
         """`Valuation Analyst - Real Estate Advisory` and `Forensic Litigation
         & Valuation Services` are what the bare word reaches. SimCorp's
         `Valuation Product Area` is reached by `simcorp` instead, which is the
-        specific handle rather than the general one."""
+        specific handle rather than the general one.
+
+        **It is `rejected` now rather than `unknown`, and that is the point of
+        the test being met better.** The assertion was `unknown` because
+        nothing in the lexicon read the title at all; `real estate` on
+        `advisory_client` reads it, and a real-estate valuation analyst is a
+        rejection rather than a posting nobody looked at."""
         self.assertEqual(self._rel("Valuation Analyst - Real Estate Advisory"),
-                         {"unknown"})
+                         {"rejected"})
         # The specific handle, which is a product name no other industry uses.
         # It reaches AP4's `Systemförvaltare SimCorp Dimension` -- a title that
         # otherwise reads as a caretaker.
@@ -2371,11 +2377,26 @@ class InvestingTitleIsAMarketsTitleTest(unittest.TestCase):
 
     def test_it_reaches_adjacent_rather_than_unknown(self):
         for title in ("Investment Analyst, Public Equity",
-                      "Associate, Private Credit",
-                      "Regional Wealth Management Specialist"):
+                      "Associate, Private Credit"):
             with self.subTest(title=title):
                 tags = _tags(title=title)
                 self.assertEqual(tags["relevance"], {"adjacent"})
+
+    def test_but_wealth_advisory_is_rejected_at_the_readers_instruction(self):
+        """**This reverses one row of the test above, and only that row.**
+        `discretionary_investing` ranks rather than rejects because a markets
+        seat belongs below the quant work rather than off the board -- true of
+        `Investment Analyst, Public Equity` and still true. Wealth advisory
+        came out of that set when the reader asked for the board to be
+        scannable in five minutes: it is advice to individuals rather than a
+        markets seat, twelve labellers marked 94 such cards noise, and
+        `wealth management` reaches no posting rated `relevant` or
+        `less_relevant` anywhere in 382,220 live titles.
+
+        One line in `_EXCLUSION["wealth_advisory"]` reverses it."""
+        tags = _tags(title="Regional Wealth Management Specialist")
+        self.assertEqual(tags["relevance"], {"rejected"})
+        self.assertIn("wealth_advisory", tags["exclusion_reason"])
 
     def test_the_evidence_still_names_the_category(self):
         """`list --exclude discretionary_investing` has to keep working."""

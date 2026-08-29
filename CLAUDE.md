@@ -1668,6 +1668,54 @@ ate a hub.
   call (9), and a markets word in the *title* of a back-office seat (5). **Check
   which family a row is in before writing a needle for it**; two of the four are
   working as instructed.
+- **Reading the *board* is a different exercise from reading a *sample*, and it
+  is the one that finds noise.** 24 labellers marked all 1,885 cards in
+  Singapore, Hong Kong and Stockholm `noise` or `keep` with a reason from a
+  fixed vocabulary: **1,318 noise to 548 keep — Singapore 73%, Stockholm 74%,
+  Hong Kong 53%.** The reason histogram is the useful part, because it says
+  what kind of noise rather than which postings: `enterprise_it` 250,
+  `ops_support` 224, `other_industry` 205, `consulting` 133,
+  `corporate_function` 131, `sales_relationship` 115, `generic_software` 114,
+  `wealth_retail` 94. Saved as `board_triage.csv`.
+- **Mine the needles from the labels, then dry-run them; do not take the rules
+  the labellers propose.** Asked for generalisable rules, they returned
+  confident lists that included *firm is HKMA* — which would delete the Market
+  Risk and Fixed Income seats that hub had just gained — plus bare `consultant`,
+  bare `intern`, `credit analyst`, `C++ developer` and `low latency`, the last
+  two being postings this project deliberately keeps. **The counts they
+  produced are evidence; the rules they wrote are not.** Every needle shipped
+  was taken from a noise title, required to appear in no keep title, and then
+  dry-run over all 382,220 live postings.
+- **The dry-run is what makes the difference, and it killed nine of the
+  obvious candidates.** Dropped for reaching a posting rated `relevant` or
+  `less_relevant`: `mortgage` (`Quantitative Strategist, Mortgage-Backed
+  Securities`), `calypso` (`Quantitative Analyst, Front Office (Calypso)`),
+  `murex` (nine, including `Murex Credit Risk System Analyst`),
+  `business analyst` (`Product Developer / Business Analyst`), `system analyst`
+  (`System Analyst - Quantitative Pricing`), `support analyst` (`Options Quant
+  Support Analyst`), `application developer` (`Low Latency Trading Application
+  Developer`), `business development` (`Trader - Fixed Income Business
+  Development`), `banking industry` (`Credit Analyst (Banking Industry)`).
+  Three more went after checking the survivors against the labels:
+  `control analyst` took `Valuation Control Analyst at Swedbank`,
+  `systems analyst` took `Systems Analyst - Equities Trading Systems`,
+  `application support` took `Senior Trading Application Support Engineer`.
+  **`business analyst` was the single largest candidate at 52 hits in the
+  unknown bucket and it still had to go** -- volume is not the test.
+- **`unknown` in Singapore is a vocabulary gap and not a missing body, which
+  is the opposite of the corpus-wide finding.** 801 of 1,499 Singapore cards
+  carry no relevance verdict and the labellers called **693 of them noise** --
+  but only **8% have no usable description**, against 38% in Hong Kong and 44%
+  in Stockholm. The tagger is reading these bodies and still cannot place them.
+  Do not reach for `bodies` here; reach for occupation vocabulary.
+- **Opening the board on `fit: Worth reading` looks like the answer and is not:
+  measured, it hides more than it removes.** It would take Singapore from
+  1,499 cards to 371 -- close to the 403 the labellers kept, which is what
+  makes it tempting -- but the *sets* disagree. Against the reading it shows
+  324 cards of which 146 are noise and **hides 225 the labellers would have
+  kept: 44% recall.** The cause is that `fit: unknown` is excluded from
+  `WORTH` and the labellers kept 100 of that bucket, so the preset gates on
+  the absence of a verdict, which is the one thing the board's gates never do.
 - **Twelve model labellers were run over 471 postings and the finding was that
   the classifier is right, which is a result and not a failure.** Scored
   separately: the **hand sheet is 83.6% on relevance with zero false

@@ -36,7 +36,7 @@ from . import db, lexicon
 # Bump on every lexicon change: the diff between two versions over the same
 # corpus is a free regression test, and it is the only way to tell "the
 # classifier improved" from "the market moved".
-TAGGER = 52
+TAGGER = 54
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS job_tags (
@@ -970,6 +970,66 @@ _EXCLUSION = {
         "eventkoordinator", "sociala medier", "paid social",
         "seo specialist", "sem specialist", "copywriter", "grafisk designer",
         "fotograf",
+    ),
+    # **Three categories mined from the board rather than imagined**, after the
+    # reader said Singapore's 1,499 cards were too many to scan. 1,866 board
+    # cards across Singapore, Hong Kong and Stockholm were read and marked
+    # noise or keep; every phrase below was then taken from the *noise* titles,
+    # required to appear in no *keep* title, and dry-run over all 382,220 live
+    # postings. **Anything reaching a posting rated `relevant` or
+    # `less_relevant` was dropped**, which is what killed the obvious ones:
+    # `mortgage` reaches `Quantitative Strategist, Mortgage-Backed Securities`,
+    # `calypso` reaches `Quantitative Analyst, Front Office (Calypso)`,
+    # `business analyst` reaches `Product Developer / Business Analyst`,
+    # `system analyst` reaches `System Analyst - Quantitative Pricing`,
+    # `support analyst` reaches `Options Quant Support Analyst`, and
+    # `business development` reaches `Trader - Fixed Income Business
+    # Development`. Three more were dropped after the survivors were measured
+    # against the labels: `control analyst` took `Valuation Control Analyst at
+    # Swedbank`, `systems analyst` took `Systems Analyst - Equities Trading
+    # Systems`, `application support` took `Senior Trading Application Support
+    # Engineer`. What is left fires on 236 of the 1,866 judged cards at **99%
+    # precision** against the reading.
+    #
+    # They are `_EXCLUSION` rather than `_OFF_INDUSTRY` deliberately: that list
+    # is the first branch and outranks a quant title, so `real estate` there
+    # would one day delete `Quantitative Analyst, Real Estate Debt`. Here they
+    # reach `rejecting`, which is read *after* the core check.
+    "wealth_advisory": (
+        "wealth management", "wealth advisor", "wealth adviser", "wealth planner",
+        "wealth solutions", "private bank", "private banking", "private wealth",
+        "private client",
+    ),
+    # The vendor's name in a title is the job: nobody writes `SAP` or `Avaloq`
+    # across a quant posting. `murex` and `calypso` are absent on the evidence
+    # -- both reach postings the tagger rates positively, which is the whole
+    # reason the dry-run exists.
+    "banking_platform": (
+        "sap", "avaloq", "temenos", "finacle", "peoplesoft", "xceptor",
+        "actimize", "pega", "t24", "software asset management",
+        "end user services", "service management", "service desk", "help desk",
+        # `application support engineer` was here for one build and came out:
+        # it took `Senior Trading Application Support Engineer` at Wells Fargo,
+        # which is a markets seat. Bare `application support` had already been
+        # dropped for the same collision and the longer form inherited it --
+        # **a needle rejected for a reason does not become safe by growing a
+        # word.**
+    ),
+    # Advisory, client-facing and corporate seats. `senior consultant` is the
+    # large one at 405 live titles and none of them rated positively; bare
+    # `consultant` is deliberately absent, because `Business Consultant,
+    # Quantitative Data` is a real posting.
+    "advisory_client": (
+        "management consultant", "senior consultant", "implementation consultant",
+        "solutions consultant", "functional consultant", "technical consultant",
+        "pre sales", "presales", "ey parthenon",
+        "relationship manager", "account executive", "customer service",
+        "client service", "product specialist", "telemarketer",
+        "real estate", "estate planning",
+        "cash management", "trade finance", "investor relations", "post trade",
+        "treasury specialist", "operation analyst", "fund administration",
+        "corporate secretarial", "transaction banking", "business systems analyst",
+        "data steward",
     ),
     "crypto_web3": ("crypto", "web3", "defi", "blockchain", "nft"),
     "heavy_systems": ("fpga", "verilog", "kernel bypass", "embedded systems"),
