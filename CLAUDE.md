@@ -1503,6 +1503,53 @@ learn.
 
 ## The board's gates
 
+**Seven gates now**, and the seventh is the reader's own click. `hand_rejected`
+reads `labels.csv` — the corrections `python -m quantscraper corrections` pulls
+off the live board — and removes what the reader has already said no to. Until
+it existed a Reject click lived in one browser's `localStorage` and the card
+came back on the next build, in a new browser, or on another machine.
+
+- **A rejection has to survive the repost, and that is why it is keyed on a
+  fingerprint as well as on the row.** `~anradus pte. ltd.` posts `Quant
+  Researcher #77900` to MyCareersFuture every five days — four live cards, four
+  different job ids, and a **byte-identical 2,737-character description**.
+  Rejecting the 11 August one has to reject the 27 August one, so
+  `build_data.hand_rejections` returns both the exact keys and the
+  `dedup.fingerprint` of every rejected posting.
+- **Only `labels.csv` feeds that gate.** It is the hand sheet. `agent_labels.csv`
+  and `board_triage.csv` are model output and gate nothing — a gate that removed
+  1,318 cards because a Haiku labeller called them noise would be the thing
+  `TAGGING.md` warns about, wired straight into the page.
+- **The de-duplicator's dangerous direction is hiding a real opening, not
+  showing an advertisement twice.** `dedup.fingerprint` is
+  `(firm, location, description-hash)` and the **location is what makes it
+  safe**: Jane Street writes one description per role and posts it in every
+  office, so hashing the body alone merges its Hong Kong `Software Engineer`
+  with its London one and the London job disappears. With the location in the
+  key that pair stays apart, and only the two Hong Kong `Quantitative
+  Researcher` postings sharing one text collapse — which is a duplicate from
+  the reader's seat whatever the requisition numbers say.
+- **The title is the fallback and the description is preferred, because each
+  is blunt where the other is sharp.** `(title, firm, location)` alone merges
+  genuinely different Apex openings, because Workday writes `2 Locations` as a
+  location. A description under `dedup.MIN_BODY` is boilerplate — "apply
+  within" is identical across postings with nothing in common — so short
+  bodies fall back to the title.
+- **299 of 6,086 cards were repeats, 103 of them in Singapore.** The survivor is
+  the newest of its cluster, because a recruiter's oldest repost is the one
+  most likely to have been filled, and the count rides on the card as `×N`
+  rather than the others vanishing without a word.
+- **`firms[].n` deliberately still counts the folded copies.** It is what the
+  firm advertised, and a recruiter posting one job eleven times has advertised
+  once — but the tile count is about the board's shape, not the reader's queue.
+
+**`web/serve.py` sends `Cache-Control: no-store`, and the reason is an hour
+lost.** `SimpleHTTPRequestHandler` sends `Last-Modified` and no cache header,
+which lets a browser cache heuristically — and it does. A rebuilt `data.js`
+kept serving the previous build across a reload *and* a new tab, so the board
+showed the old card count while the file on disk was current. The entire point
+of that server is to look at the build you just made.
+
 **Six gates, and they are the whole list**, in `web/build_data.py`'s `GATES`:
 `off_industry` (another profession), `off_location`, `out_of_reach` (director,
 VP, manager, project leader, product owner), `phd_required`, `rejected` (the

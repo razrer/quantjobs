@@ -29,6 +29,19 @@ class Handler(SimpleHTTPRequestHandler):
     def log_message(self, format: str, *args) -> None:
         pass  # a correction is confirmed on the card itself; the console adds nothing
 
+    def end_headers(self) -> None:
+        """Never let the browser hold a stale `data.js`.
+
+        `SimpleHTTPRequestHandler` sends `Last-Modified` and no
+        `Cache-Control`, which lets a browser cache heuristically -- and it
+        does: a rebuilt `data.js` kept serving the previous build from memory
+        across a reload and a new tab, so the board showed yesterday's cards
+        and yesterday's card count while the file on disk was current. The
+        entire point of this server is to look at the build you just made.
+        """
+        self.send_header("Cache-Control", "no-store, must-revalidate")
+        super().end_headers()
+
     def do_POST(self) -> None:
         if self.path != "/correction":
             self.send_error(404)

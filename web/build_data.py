@@ -46,7 +46,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from quantscraper import lexicon, tagging  # noqa: E402
+from quantscraper import dedup, labels as labels_mod, lexicon, tagging  # noqa: E402
 
 DB = Path(__file__).resolve().parent.parent / "employers.sqlite3"
 OUT = Path(__file__).resolve().parent / "data.js"
@@ -88,12 +88,58 @@ GATES = {
     # claim of the six: a posting removed by any of the others should be
     # attributed to that one.
     "non_markets_board": "a board that publishes no markets work, and a title nothing could read",
+    # **The seventh, and the only one whose evidence is the reader's own
+    # click.** A Reject on the board posts to `functions/correction_writer`,
+    # `python -m quantscraper corrections` pulls it into `labels.csv`, and
+    # until now nothing read it back: the card was hidden in that one browser's
+    # `localStorage` and returned on the next build, in a new browser, or on
+    # another machine. It fires on the strongest evidence this project has --
+    # the reader read the posting and said no.
+    "hand_rejected": "you rejected this on the board",
 }
 
 # Below this a board has too few postings for its profile to mean anything, and
 # `lexicon.board_profile` returns None. Kept as a name here because the gate
 # has to fail towards keeping when it cannot judge -- an unprofiled board is
 # not a non-markets one.
+def hand_rejections(connection) -> tuple[set[tuple[str, str, str]], set[str]]:
+    """What the reader rejected, by key *and* by fingerprint.
+
+    Returns `(keys, fingerprints)`. The keys are exact -- the three columns a
+    correction carries -- and the fingerprints are what make the rejection
+    stick to a **reposted** copy of the same advertisement, which is the whole
+    reason this is not just a key lookup. Anradus reposts `Quant Researcher
+    #77900` every five days under a new MyCareersFuture id and a byte-identical
+    description; rejecting the 11 August one has to reject the 27 August one.
+
+    **Only `labels.csv` is read, and that is deliberate.** It is the hand sheet
+    -- the reader's own clicks, pulled off the live board by `corrections`, and
+    their own labelling. `agent_labels.csv` and `board_triage.csv` are model
+    output and gate nothing; a gate that removed 1,318 cards because a Haiku
+    labeller called them noise would be the thing `TAGGING.md` warns about,
+    wired straight into the page.
+    """
+    keys: set[tuple[str, str, str]] = set()
+    for label in labels_mod.load(labels_mod.PATH):
+        if label.relevance == "rejected":
+            keys.add((label.ats, label.token, label.job_id))
+    if not keys:
+        return keys, set()
+    prints: set[str] = set()
+    for ats, token, job_id in keys:
+        row = connection.execute(
+            "SELECT domain, employer, title, location, description FROM jobs"
+            " WHERE ats = ? AND token = ? AND job_id = ?", (ats, token, job_id),
+        ).fetchone()
+        if row is None:
+            continue
+        prints.add(dedup.fingerprint(
+            firm_key(row["domain"], row["employer"]),
+            row["location"], row["title"], row["description"],
+        ))
+    return keys, prints
+
+
 def board_profiles(tags: dict) -> dict[tuple[str, str], str]:
     """`(ats, token) -> profile`, measured from what each board publishes.
 
@@ -371,6 +417,10 @@ def main() -> None:
     # Measured before the loop, because it needs every board whole -- see
     # `board_profiles`. Nothing else on this page reads across postings.
     profiles = board_profiles(tags)
+    # The reader's own rejections, by key and by fingerprint. Read once: the
+    # fingerprint of a rejected posting costs a row lookup each and there are
+    # a few hundred of them at most.
+    rejected_keys, rejected_prints = hand_rejections(connection)
     firms: dict[str, dict] = {}
     jobs = []
     gated: dict[str, int] = {reason: 0 for reason in GATES}
@@ -462,11 +512,24 @@ def main() -> None:
             hit = "non_markets_board"
             label = row["employer"] or row["domain"] or f"{row['ats']}/{row['token']}"
             by_board[label] = by_board.get(label, 0) + 1
+        key = firm_key(row["domain"], row["employer"])
+
+        # **The reader's own click, and the copy that came back wearing a new
+        # id.** Checked after the tagger's gates so a posting removed for a
+        # readable reason is still attributed to that reason -- the same
+        # ordering argument `non_markets_board` makes above.
+        fingerprint = dedup.fingerprint(
+            key, row["location"], row["title"], row["description"])
+        if hit is None and (
+            (row["ats"], row["token"], row["job_id"]) in rejected_keys
+            or fingerprint in rejected_prints
+        ):
+            hit = "hand_rejected"
+
         if hit:
             gated[hit] += 1
             continue
 
-        key = firm_key(row["domain"], row["employer"])
         if key not in firms:
             firms[key] = {
                 "name": row["employer"] or display_name(names.get(row["domain"], []), key),
@@ -523,11 +586,23 @@ def main() -> None:
         if snippet:
             job["about"] = snippet
 
+        # Stripped again by `dedup.collapse`; it never reaches `data.js`.
+        job["fp"] = fingerprint
         jobs.append(job)
 
     # A stable base order. The board re-sorts on every render -- deadline
     # first, then whichever spine is selected -- so this only decides ties.
     jobs.sort(key=lambda j: (j["posted"], j["title"]), reverse=True)
+
+    # **One card per advertisement.** Sorted newest-first above, so the first
+    # card of a cluster is the freshest and `collapse` keeps it; the count
+    # rides on it as `dup` and the card says so, because a board that removes
+    # silently is the thing this file is most careful about. `firms[].n` is
+    # left alone deliberately: it counts what the firm advertised, and a
+    # recruiter posting one job eleven times has still advertised once.
+    before = len(jobs)
+    jobs = dedup.collapse(jobs)
+    collapsed = before - len(jobs)
     payload = {
         "built": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "tagger": tagging.TAGGER,
@@ -545,6 +620,9 @@ def main() -> None:
         f"  ({shortlist:,d} worth reading, {dated:,d} with a closing date,"
         f" {OUT.stat().st_size / 1e6:.1f} MB)"
     )
+    if collapsed:
+        print(f"{collapsed:>7,d} folded into a card already shown"
+              f"  (same firm, same place, same text)")
     # Said out loud on every run. A gate that removes postings silently is how
     # a widened lexicon quietly eats a hub, and this is the only number that
     # would show it.

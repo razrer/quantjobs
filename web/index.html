@@ -436,6 +436,14 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
 .card:focus-within { z-index: 40; }
 .card[data-saved="1"] { border-color: var(--accent); }
 .card[data-rejected="1"] { opacity: 0.42; }
+/* A folded repost. `build_data.py` keeps the newest of a cluster and puts the
+   count here rather than dropping the others without a word -- the board never
+   removes silently, so the crumb goes on the card that survived. */
+.dup {
+  margin-left: 0.4rem; padding: 0 0.3rem;
+  font-family: var(--font-mono); font-size: 0.6875rem;
+  color: var(--ink-faint); border: 1px solid var(--rule-firm); border-radius: 3px;
+}
 
 .card-top {
   display: flex;
@@ -904,6 +912,19 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
       <code>file://</code> or a bare <code>http.server</code> instead, a
       correction still works on the page but only <em>export corrections</em>
       in the filter rail gets it into that file.</p>
+      <p><b>A rejection sticks across rebuilds now, and across a reposting.</b>
+      Once a Reject reaches <code>labels.csv</code>, the next build drops that
+      posting before the page is written -- so it does not come back in a new
+      browser or on another machine. It also drops any posting with the same
+      <em>fingerprint</em>: same firm, same stated location, same description.
+      One Singapore recruiter reposts the identical advertisement every five
+      days under a fresh id, and rejecting it once is meant to be the end of
+      it.</p>
+      <p><b>&times;N on a card means the same advertisement was posted N
+      times</b> -- same firm, same place, same text -- and only the newest is
+      shown. The location is part of that test on purpose: a firm that sends
+      one description to every office is hiring in every office, so Hong Kong
+      and London stay two cards rather than becoming one.</p>
     </div>
   </main>
 </div>
@@ -1574,7 +1595,10 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
       <h3 class="clamp2">${job.url
         ? `<a href="${attr(job.url)}" target="_blank" rel="noopener">${esc(job.title)}</a>`
         : esc(job.title)}</h3>
-      <div class="who"><span class="firm" data-firm="${attr(job.firm)}" title="Show only this firm">${esc(job.firmName)}</span></div>
+      <div class="who"><span class="firm" data-firm="${attr(job.firm)}" title="Show only this firm">${esc(job.firmName)}</span>${
+        job.dup > 1
+          ? `<span class="dup" title="This advertisement was posted ${job.dup} times with the same text, in the same place, by the same firm. The newest is shown.">×${job.dup}</span>`
+          : ""}</div>
       <div class="where">
         ${(job.hub || []).map((h) => `<span class="hub">${esc(label(h))}</span>`).join("")}
         ${job.loc ? `<span class="loc">${esc(job.loc)}</span>` : ""}
