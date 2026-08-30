@@ -238,6 +238,81 @@ firms by hand — add any you encounter to `registries/seed_firms.csv`.
 
 ---
 
+## 9. Two mid-tier boards were found and deliberately not landed
+
+Both turned up in the sweep that reached Grasshopper, and each is one line to
+reverse if you disagree.
+
+**Tibra Capital** — `tibra.com` fingerprints cleanly to
+`apply.workable.com/tibra-capital-1`, and the board serves **zero postings**, so
+`discover.corroborate` returns nothing and there is no evidence it is Tibra's
+board rather than a stale account someone opened. The `-1` suffix is what makes
+me doubt it: a vendor hands that out when the plain name is taken. Recording it
+would be a board polling silence forever, which this project treats as worse
+than a gap — so it is out until it either publishes a posting or a human reads
+the page. Landing it is a `Site` row.
+
+**Quantlab** — `quantlab.com` fingerprints to Jobvite, and the token is not
+guessable: the careers page itself answers **403** to this client, and so does
+`jobs.jobvite.com/quantlab`. The three other tokens tried (`quantlabfinancial`,
+`qlab`, `quantlabgroup`) return zero postings, which is what a *wrong* token
+looks like — a 403 on the plain name is a refusal, and reads as the right token
+behind a wall. **I did not change the user agent to get past it**, per the same
+rule that closed `efinancialcareers.hk`. If you want Quantlab, the route is
+reading the token off the page in a browser and handing it over; I will not
+probe for the threshold.
+
+Also worth knowing, and not a blocker: `ats_resolution` currently carries **77
+tier-A rows with a NULL token** — boards nobody can poll and no sweep revisits —
+and **172 tier-A boards with a token that have never produced a posting**. Most
+of the first group is SuccessFactors, which is a confirmed dead end. The second
+group contains real mis-resolutions and is item 10.
+
+---
+
+## 10. A VC's careers page links to its portfolio companies' boards
+
+Found by asking which ATS tokens more than one *unrelated* domain claims --
+the signal `_NOT_A_TOKEN` was built from. Most hits are honest: Bain Capital's
+four domains, Stifel's three, Danske Bank's three, Geneva Trading's two. Two
+classes are not.
+
+**The one already fixed** is vendor infrastructure: `teamtailor/na` (three
+domains) and `smartrecruiters/oneclick-ui` (two). Both are in `_NOT_A_TOKEN`
+now, dry-run first, and all five rows held zero postings.
+
+**The one still open is venture firms.** A VC publishes its portfolio's
+openings on its own careers page, the walk fingerprints the first board it
+sees, and the VC is recorded as owning a company it merely invested in:
+
+| token | claimed by |
+|---|---|
+| `ashby/clubhouse` | `graphventures.com`, `irregular.vc`, `dreamers.vc` |
+| `greenhouse/arxroboticsgmbh` | `hvcapital.com`, `speedinvest.com` |
+| `greenhouse/bicyclehealth` | `fcventures.com`, `signalfire.com` |
+| `greenhouse/hippo70` | `fifthwall.com` (and `hippo.com`, correctly) |
+
+This is the `palmersquare.com` → `jobs.lever.co/heyrowan` failure with a
+different cause -- there the careers page linked to syndicated content, here it
+links to a portfolio company. **It is contained**: `upsert_jobs` keys on
+`(ats, token, job_id)`, so the second domain to claim a board writes nothing,
+and none of these are firms this project wants. The cost is that the VC's own
+board is never looked for again.
+
+**I did not ship a guard**, because I could not find one that is safe. The
+obvious rule -- "refuse a board whose postings do not name the firm" -- is what
+`discover.corroborate` already does, and moving it into `ats.fingerprint` would
+apply a *name* test to the walk, which is the one place this project has
+deliberately kept name-free. Reading the postings costs a fetch per domain on a
+1,400-domain sweep. Say the word if you want it behind a flag.
+
+**Separately, `btig.com` resolves to `workday/usbank|wd1|US_Bank_Careers`.**
+BTIG is a broker-dealer and not a US Bank entity, unlike `elavon.com` on the
+same token, which is. One wrong row rather than a class; it is cleared and
+re-queued if you want it done.
+
+---
+
 ## Reversible calls, each one line
 
 These are preferences rather than facts. None blocks anything; each says how to

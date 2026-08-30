@@ -262,6 +262,18 @@ _NOT_A_TOKEN = {
     # domains agree on is the vendor's infrastructure, not anyone's board.
     "career", "careers", "jobs", "job", "analytics", "staticfe", "portal",
     "login", "account", "accounts", "profile", "profiles",
+    # Two more found by the same signal, by asking which tokens more than one
+    # unrelated domain claims. `teamtailor/na` is held by `vincicompass.com`,
+    # `patria.com` and `crossmint.com` -- a placeholder the vendor writes where
+    # a board name is missing, not a board. `smartrecruiters/oneclick-ui` is
+    # the apply widget, held by `octopusinvestments.com` and `statkraft.se`.
+    # Both pieces of the second are listed because this is an *all* rule, so a
+    # real board that merely contains one of them still survives.
+    #
+    # Dry-run over all 1,150 tier-A tokens before adding: the three `na` rows
+    # and the two `oneclick-ui` rows are the only matches, and **all five hold
+    # zero postings**, so nothing that ever produced a posting is refused.
+    "na", "oneclick", "ui",
     *(f"v{n}" for n in range(1, 10)),
 }
 
