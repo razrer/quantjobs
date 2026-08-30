@@ -37,6 +37,7 @@ dimensions, so this is the difference between a 30 MB file and a 50 MB one.
 
 from __future__ import annotations
 
+import csv
 import html
 import json
 import re
@@ -96,6 +97,20 @@ GATES = {
     # another machine. It fires on the strongest evidence this project has --
     # the reader read the posting and said no.
     "hand_rejected": "you rejected this on the board",
+    # **The eighth, and the only one whose evidence is a model's.** Enabled at
+    # the reader's instruction after 24 labellers read all 1,885 cards in
+    # Singapore, Hong Kong and Stockholm and called 1,318 of them noise.
+    #
+    # It is a *separate* gate from `hand_rejected` and not a wider reading of
+    # it, because the two are not the same evidence and the build has to say
+    # how much each removed. And it is **guarded**: a model rejection cannot
+    # overturn a tagger that read the posting as `relevant` or
+    # `less_relevant`. Ungated it would delete `Cubist Senior Data Scientist`
+    # and `Cubist Data Scientist` at Point72, Arrowstreet's `Quantitative
+    # Developer Intern` and Quantbot's `Quantitative Researcher Internship` --
+    # 84 postings the classifier rates positively, which is the failure this
+    # project calls expensive. The guard costs 74 of 1,318 removals.
+    "model_rejected": "a model labeller called this noise",
 }
 
 # Below this a board has too few postings for its profile to mean anything, and
@@ -123,8 +138,12 @@ def hand_rejections(connection) -> tuple[set[tuple[str, str, str]], set[str]]:
     for label in labels_mod.load(labels_mod.PATH):
         if label.relevance == "rejected":
             keys.add((label.ats, label.token, label.job_id))
-    if not keys:
-        return keys, set()
+    return keys, _fingerprints(connection, keys)
+
+
+def _fingerprints(connection, keys) -> set[str]:
+    """The fingerprint of every posting in `keys`, so a rejection survives a
+    repost -- see `dedup`."""
     prints: set[str] = set()
     for ats, token, job_id in keys:
         row = connection.execute(
@@ -137,7 +156,37 @@ def hand_rejections(connection) -> tuple[set[tuple[str, str, str]], set[str]]:
             firm_key(row["domain"], row["employer"]),
             row["location"], row["title"], row["description"],
         ))
-    return keys, prints
+    return prints
+
+
+def model_rejections(connection) -> tuple[set[tuple[str, str, str]], set[str]]:
+    """What the model sheets rejected, by key and by fingerprint.
+
+    `agent_labels.csv` holds 469 relevance labels from twelve labellers;
+    `board_triage.csv` holds 1,866 noise/keep verdicts from twenty-four more,
+    covering every card then on the board in the three hubs. Both are model
+    output. They gate here at the reader's explicit instruction, and only
+    through `model_rejected`, which cannot overturn a positive tagger reading.
+
+    Missing files are not an error: these sheets are evidence someone chose to
+    produce, and the board has to build without them.
+    """
+    keys: set[tuple[str, str, str]] = set()
+    agent = Path(labels_mod.PATH).with_name("agent_labels.csv")
+    if agent.exists():
+        for label in labels_mod.load(agent):
+            if label.relevance == "rejected":
+                keys.add((label.ats, label.token, label.job_id))
+    triage = Path(labels_mod.PATH).with_name("board_triage.csv")
+    if triage.exists():
+        with triage.open(encoding="utf-8-sig", newline="") as handle:
+            for row in csv.DictReader(handle):
+                if (row.get("verdict") or "").strip() != "noise":
+                    continue
+                parts = (row.get("id") or "").split(":", 2)
+                if len(parts) == 3:
+                    keys.add(tuple(parts))
+    return keys, _fingerprints(connection, keys)
 
 
 def board_profiles(tags: dict) -> dict[tuple[str, str], str]:
@@ -421,6 +470,9 @@ def main() -> None:
     # fingerprint of a rejected posting costs a row lookup each and there are
     # a few hundred of them at most.
     rejected_keys, rejected_prints = hand_rejections(connection)
+    # The model sheets, gating at the reader's instruction. Guarded at the use
+    # site: they cannot overturn a positive tagger reading.
+    model_keys, model_prints = model_rejections(connection)
     firms: dict[str, dict] = {}
     jobs = []
     gated: dict[str, int] = {reason: 0 for reason in GATES}
@@ -520,11 +572,19 @@ def main() -> None:
         # ordering argument `non_markets_board` makes above.
         fingerprint = dedup.fingerprint(
             key, row["location"], row["title"], row["description"])
+        posting_key = (row["ats"], row["token"], row["job_id"])
         if hit is None and (
-            (row["ats"], row["token"], row["job_id"]) in rejected_keys
-            or fingerprint in rejected_prints
+            posting_key in rejected_keys or fingerprint in rejected_prints
         ):
             hit = "hand_rejected"
+        # **A model may remove what the tagger could not place, and no more.**
+        # `relevant` and `less_relevant` are the two readings this project
+        # treats as expensive to lose, so a labeller does not get to overturn
+        # them -- `adjacent` and `unknown` it does.
+        elif hit is None and relevance not in ("relevant", "less_relevant") and (
+            posting_key in model_keys or fingerprint in model_prints
+        ):
+            hit = "model_rejected"
 
         if hit:
             gated[hit] += 1

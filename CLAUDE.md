@@ -1503,7 +1503,7 @@ learn.
 
 ## The board's gates
 
-**Seven gates now**, and the seventh is the reader's own click. `hand_rejected`
+**Eight gates now.** The seventh is the reader's own click. `hand_rejected`
 reads `labels.csv` — the corrections `python -m quantscraper corrections` pulls
 off the live board — and removes what the reader has already said no to. Until
 it existed a Reject click lived in one browser's `localStorage` and the card
@@ -1516,10 +1516,25 @@ came back on the next build, in a new browser, or on another machine.
   Rejecting the 11 August one has to reject the 27 August one, so
   `build_data.hand_rejections` returns both the exact keys and the
   `dedup.fingerprint` of every rejected posting.
-- **Only `labels.csv` feeds that gate.** It is the hand sheet. `agent_labels.csv`
-  and `board_triage.csv` are model output and gate nothing — a gate that removed
-  1,318 cards because a Haiku labeller called them noise would be the thing
-  `TAGGING.md` warns about, wired straight into the page.
+- **`labels.csv` feeds that gate unconditionally, and the model sheets feed a
+  separate one.** `model_rejected` reads `agent_labels.csv` and
+  `board_triage.csv` — 469 model relevance labels and 1,866 model noise/keep
+  verdicts — and is **on at the reader's instruction**. Two gates rather than
+  one wider gate, because the evidence is not the same and the build has to be
+  able to say how much each removed.
+- **The guard on `model_rejected` is the whole reason it is safe: a model may
+  remove what the tagger could not place, and may not overturn it.** It fires
+  only where relevance is `unknown` or `adjacent`. Ungated it deletes `Cubist
+  Senior Data Scientist` and `Cubist Data Scientist` at Point72, Arrowstreet's
+  `Quantitative Developer Intern` and Quantbot's `Quantitative Researcher
+  Internship` — **84 postings the classifier rates positively**, which is the
+  failure this project calls expensive. The guard costs 74 of 1,318 removals
+  and `tests/test_dedup.ModelRejectionGuardTest` pins it.
+- **Measured: the board went 5,787 → 4,757 and the shortlist did not move.**
+  Singapore 1,499 → 439, Hong Kong 286 → 146, Stockholm 133 → 38, and
+  `apply_now + strong` unchanged at 216. That is what a good tightening looks
+  like from outside — the number to read is the one that should *not* have
+  changed.
 - **The de-duplicator's dangerous direction is hiding a real opening, not
   showing an advertisement twice.** `dedup.fingerprint` is
   `(firm, location, description-hash)` and the **location is what makes it
