@@ -1637,8 +1637,20 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
   const PAGE = 60;
   const MEMBERS = 80;
   let queue = [], drawn = 0, opened = new Set();
+  // The reader's own open/closed choice per facet, read off the DOM before each
+  // rebuild. A key absent here is a facet nobody has touched, which is what
+  // falls back to the configured default. Same idea as `opened` one pane over:
+  // the rail is rebuilt wholesale on every commit, so anything the reader did
+  // to it lives only in the DOM until something writes it down.
+  const facetOpen = new Map();
 
   function render() {
+    // How deep the reader had drawn before this render. `commit()` re-renders on
+    // every filter click and every reclassify, and the grid is rebuilt from
+    // nothing each time -- so without this a reader who had clicked "show more"
+    // up to several hundred cards is thrown back to the first sixty by a single
+    // tick, which reads as the board forgetting what it was showing.
+    const want = drawn;
     const { visible, counts } = sift();
     drawFacets(counts);
     drawCrumbs(visible.length);
@@ -1654,6 +1666,11 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
       return;
     }
     more();
+    // Redraw to the depth the reader had reached, bounded by what this queue
+    // actually holds -- a filter narrowing the board to twenty results must not
+    // try to draw three hundred. `more()` advances `drawn` by at least one
+    // whenever the queue has anything left, so this terminates.
+    while (drawn < want && drawn < queue.length) more();
   }
 
   function more() {
@@ -1703,6 +1720,12 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
   // --- rail ----------------------------------------------------------------
 
   function drawFacets(counts) {
+    // Read the reader's open/closed choice off the rail before it is replaced.
+    // `<details>` toggles natively with no handler of ours behind it, so the DOM
+    // is the only place that choice exists, and `innerHTML =` below destroys it.
+    for (const node of $("facets").querySelectorAll("details.facet[data-key]")) {
+      facetOpen.set(node.dataset.key, node.open);
+    }
     const html = FACETS.map((facet, i) => {
       const tally = counts[i];
       const picked = state.sel[facet.key];
@@ -1725,7 +1748,14 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
         </button>`;
       }).join("");
 
-      return `<details class="facet"${facet.open || picked.length ? " open" : ""}>
+      // A facet the reader opened or closed by hand keeps that state; one they
+      // have never touched falls back to the configured default, or opens
+      // because it holds a live tick. The reader's choice wins over that second
+      // rule too -- a facet closed on purpose must stay closed when a preset
+      // fills it, and the count badge on the summary still says it is active.
+      const isOpen = facetOpen.has(facet.key)
+        ? facetOpen.get(facet.key) : (facet.open || picked.length > 0);
+      return `<details class="facet" data-key="${attr(facet.key)}"${isOpen ? " open" : ""}>
         <summary>${esc(facet.label)}${picked.length ? `<span class="live">${picked.length}</span>` : ""}</summary>
         <div class="facet-body">${body || '<span class="opt" data-empty="1">nothing here</span>'}
           ${facet.limit && values.length > facet.limit
