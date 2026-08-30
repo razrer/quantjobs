@@ -1044,6 +1044,30 @@ SITES: tuple[Site, ...] = (
         ats="workday",
     ),
     Site("hkma", "hkma.gov.hk", "Hong Kong Monetary Authority", hkma),
+    # ---- Singapore --------------------------------------------------------
+    #
+    # Grasshopper is here for the **domain**, and it is the third instance of
+    # the `acadian.com` mistake: `domains` resolved "GRASSHOPPER ASSET
+    # MANAGEMENT PTE. LTD." to `grasshopper.com` on a `name-weak` match, and
+    # that is not the Singapore firm. `roster.csv` already carried the warning
+    # in its own note -- a bare "Grasshopper" had matched an unrelated
+    # GRASSHOPPER ESCAPEMENT, LLC and reported the hub as covered -- so the
+    # name was fixed and the *domain* was left pointing somewhere else.
+    #
+    # The board is `job-boards.greenhouse.io/grasshopperasia`, off the careers
+    # page on `grasshopperasia.com`, and needs no reader. It was proved the way
+    # this module requires: the extractor was run and the postings read --
+    # eight of them, `Trader`, `Portfolio Manager`, `Senior Metals Trader` and
+    # `Risk Manager` in Singapore -- and `discover.corroborate` agrees the
+    # postings name the firm. That is the hub's first prop-trading board
+    # outside the marquee names, which is what it was opened for.
+    Site(
+        "grasshopperasia",
+        "grasshopperasia.com",
+        "Grasshopper Asset Management",
+        None,
+        ats="greenhouse",
+    ),
 )
 
 BY_TOKEN = {site.token: site for site in SITES}
