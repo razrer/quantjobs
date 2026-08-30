@@ -89,6 +89,20 @@ GATES = {
     # claim of the six: a posting removed by any of the others should be
     # attributed to that one.
     "non_markets_board": "a board that publishes no markets work, and a title nothing could read",
+    # **The same evidence one level down, for the sources whose board is not
+    # one firm's own.** MyCareersFuture publishes ~95,000 postings under a
+    # single token, so `(ats, token)` profiling cannot see the employer at all
+    # -- and Singapore's noise is employer-shaped: `RECRUIT EXPRESS`, `THE
+    # SUPREME HR ADVISORY`, `ANRADUS`, agencies posting thousands of ads of
+    # which the tagger reads none as markets work. Profiled on `jobs.employer`
+    # instead, 3,234 of them come out `non_markets`.
+    #
+    # It fires on evidence twice over exactly as the board version does: the
+    # employer has shown us `MIN_BOARD` postings and none read as markets, and
+    # *this* posting is one the tagger could not place. `RECRUIT EXPRESS` has
+    # nine postings rated positively and all nine survive, because they are
+    # rated rather than `unknown`.
+    "non_markets_employer": "an employer that publishes no markets work, and a title nothing could read",
     # **The seventh, and the only one whose evidence is the reader's own
     # click.** A Reject on the board posts to `functions/correction_writer`,
     # `python -m quantscraper corrections` pulls it into `labels.csv`, and
@@ -97,26 +111,44 @@ GATES = {
     # another machine. It fires on the strongest evidence this project has --
     # the reader read the posting and said no.
     "hand_rejected": "you rejected this on the board",
-    # **The eighth, and the only one whose evidence is a model's.** Enabled at
-    # the reader's instruction after 24 labellers read all 1,885 cards in
-    # Singapore, Hong Kong and Stockholm and called 1,318 of them noise.
-    #
-    # It is a *separate* gate from `hand_rejected` and not a wider reading of
-    # it, because the two are not the same evidence and the build has to say
-    # how much each removed. And it is **guarded**: a model rejection cannot
-    # overturn a tagger that read the posting as `relevant` or
-    # `less_relevant`. Ungated it would delete `Cubist Senior Data Scientist`
-    # and `Cubist Data Scientist` at Point72, Arrowstreet's `Quantitative
-    # Developer Intern` and Quantbot's `Quantitative Researcher Internship` --
-    # 84 postings the classifier rates positively, which is the failure this
-    # project calls expensive. The guard costs 74 of 1,318 removals.
-    "model_rejected": "a model labeller called this noise",
 }
 
 # Below this a board has too few postings for its profile to mean anything, and
 # `lexicon.board_profile` returns None. Kept as a name here because the gate
 # has to fail towards keeping when it cannot judge -- an unprofiled board is
 # not a non-markets one.
+def employer_profiles(connection, tagger: int) -> dict[str, str]:
+    """`employer -> profile`, for the sources that publish under one token.
+
+    `board_profiles` reads `(ats, token)` and that is right for a firm's own
+    board. It is useless for a national portal: every MyCareersFuture posting
+    shares one token, so the profile is of the portal rather than of anyone
+    hiring. The employer string is the unit there, and `lexicon.board_profile`
+    does not care which it is handed -- it takes three counts.
+    """
+    counts: dict[str, list[int]] = {}
+    for employer, value in connection.execute(
+        "SELECT j.employer, t.value FROM jobs j"
+        " JOIN job_tags t ON t.ats = j.ats AND t.token = j.token"
+        "   AND t.job_id = j.job_id AND t.dimension = 'relevance' AND t.tagger = ?"
+        " WHERE j.removed_at IS NULL AND TRIM(COALESCE(j.employer, '')) <> ''",
+        (tagger,),
+    ):
+        bucket = counts.setdefault(employer.strip(), [0, 0, 0])
+        if value in ("relevant", "less_relevant", "adjacent"):
+            bucket[0] += 1
+        elif value == "unknown":
+            bucket[1] += 1
+        else:
+            bucket[2] += 1
+    profiles = {}
+    for employer, (keep, undecided, rejected) in counts.items():
+        read = lexicon.board_profile(keep, undecided, rejected)
+        if read:
+            profiles[employer] = read[0]
+    return profiles
+
+
 def hand_rejections(connection) -> tuple[set[tuple[str, str, str]], set[str]]:
     """What the reader rejected, by key *and* by fingerprint.
 
@@ -157,36 +189,6 @@ def _fingerprints(connection, keys) -> set[str]:
             row["location"], row["title"], row["description"],
         ))
     return prints
-
-
-def model_rejections(connection) -> tuple[set[tuple[str, str, str]], set[str]]:
-    """What the model sheets rejected, by key and by fingerprint.
-
-    `agent_labels.csv` holds 469 relevance labels from twelve labellers;
-    `board_triage.csv` holds 1,866 noise/keep verdicts from twenty-four more,
-    covering every card then on the board in the three hubs. Both are model
-    output. They gate here at the reader's explicit instruction, and only
-    through `model_rejected`, which cannot overturn a positive tagger reading.
-
-    Missing files are not an error: these sheets are evidence someone chose to
-    produce, and the board has to build without them.
-    """
-    keys: set[tuple[str, str, str]] = set()
-    agent = Path(labels_mod.PATH).with_name("agent_labels.csv")
-    if agent.exists():
-        for label in labels_mod.load(agent):
-            if label.relevance == "rejected":
-                keys.add((label.ats, label.token, label.job_id))
-    triage = Path(labels_mod.PATH).with_name("board_triage.csv")
-    if triage.exists():
-        with triage.open(encoding="utf-8-sig", newline="") as handle:
-            for row in csv.DictReader(handle):
-                if (row.get("verdict") or "").strip() != "noise":
-                    continue
-                parts = (row.get("id") or "").split(":", 2)
-                if len(parts) == 3:
-                    keys.add(tuple(parts))
-    return keys, _fingerprints(connection, keys)
 
 
 def board_profiles(tags: dict) -> dict[tuple[str, str], str]:
@@ -470,9 +472,7 @@ def main() -> None:
     # fingerprint of a rejected posting costs a row lookup each and there are
     # a few hundred of them at most.
     rejected_keys, rejected_prints = hand_rejections(connection)
-    # The model sheets, gating at the reader's instruction. Guarded at the use
-    # site: they cannot overturn a positive tagger reading.
-    model_keys, model_prints = model_rejections(connection)
+    by_employer = employer_profiles(connection, tagging.TAGGER)
     firms: dict[str, dict] = {}
     jobs = []
     gated: dict[str, int] = {reason: 0 for reason in GATES}
@@ -564,6 +564,12 @@ def main() -> None:
             hit = "non_markets_board"
             label = row["employer"] or row["domain"] or f"{row['ats']}/{row['token']}"
             by_board[label] = by_board.get(label, 0) + 1
+        elif hit is None and relevance == "unknown" and (
+            by_employer.get((row["employer"] or "").strip()) == "non_markets"
+        ):
+            hit = "non_markets_employer"
+            label = (row["employer"] or "").strip()
+            by_board[label] = by_board.get(label, 0) + 1
         key = firm_key(row["domain"], row["employer"])
 
         # **The reader's own click, and the copy that came back wearing a new
@@ -577,14 +583,6 @@ def main() -> None:
             posting_key in rejected_keys or fingerprint in rejected_prints
         ):
             hit = "hand_rejected"
-        # **A model may remove what the tagger could not place, and no more.**
-        # `relevant` and `less_relevant` are the two readings this project
-        # treats as expensive to lose, so a labeller does not get to overturn
-        # them -- `adjacent` and `unknown` it does.
-        elif hit is None and relevance not in ("relevant", "less_relevant") and (
-            posting_key in model_keys or fingerprint in model_prints
-        ):
-            hit = "model_rejected"
 
         if hit:
             gated[hit] += 1

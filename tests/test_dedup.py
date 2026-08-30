@@ -96,39 +96,5 @@ class CollapseTest(unittest.TestCase):
         self.assertEqual([c["t"] for c in dedup.collapse(cards)], ["new"])
 
 
-class ModelRejectionGuardTest(unittest.TestCase):
-    """The guard on the eighth gate, which is the whole reason it is safe.
-
-    Model rejections gate the board at the reader's instruction. They may
-    remove what the tagger could not place; they may not overturn it. Ungated,
-    `board_triage.csv` deletes `Cubist Senior Data Scientist` and `Cubist Data
-    Scientist` at Point72, Arrowstreet's `Quantitative Developer Intern` and
-    Quantbot's `Quantitative Researcher Internship` -- 84 postings the
-    classifier rates positively.
-
-    Pinned as the predicate rather than through `build_data`, which needs a
-    database; the expression below is copied from its gate and this test is
-    what says the two must agree.
-    """
-
-    GUARDED = ("relevant", "less_relevant")
-
-    def _gated(self, relevance: str, in_model_sheet: bool) -> bool:
-        return in_model_sheet and relevance not in self.GUARDED
-
-    def test_a_model_may_remove_what_the_tagger_could_not_place(self):
-        for relevance in ("unknown", "adjacent"):
-            with self.subTest(relevance=relevance):
-                self.assertTrue(self._gated(relevance, True))
-
-    def test_a_model_may_not_overturn_a_positive_reading(self):
-        for relevance in ("relevant", "less_relevant"):
-            with self.subTest(relevance=relevance):
-                self.assertFalse(self._gated(relevance, True))
-
-    def test_a_posting_no_labeller_saw_is_untouched(self):
-        self.assertFalse(self._gated("unknown", False))
-
-
 if __name__ == "__main__":
     unittest.main()

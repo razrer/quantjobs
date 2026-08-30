@@ -36,7 +36,7 @@ from . import db, lexicon
 # Bump on every lexicon change: the diff between two versions over the same
 # corpus is a free regression test, and it is the only way to tell "the
 # classifier improved" from "the market moved".
-TAGGER = 54
+TAGGER = 55
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS job_tags (
@@ -998,7 +998,7 @@ _EXCLUSION = {
     "wealth_advisory": (
         "wealth management", "wealth advisor", "wealth adviser", "wealth planner",
         "wealth solutions", "private bank", "private banking", "private wealth",
-        "private client",
+        "private client", "mortgage consultant", "mortgage broker",
     ),
     # The vendor's name in a title is the job: nobody writes `SAP` or `Avaloq`
     # across a quant posting. `murex` and `calypso` are absent on the evidence
@@ -1030,6 +1030,48 @@ _EXCLUSION = {
         "treasury specialist", "operation analyst", "fund administration",
         "corporate secretarial", "transaction banking", "business systems analyst",
         "data steward",
+    ),
+    # **A second pass over the same 2,335 labels, mined for what generalises
+    # rather than for which rows to delete.** The first pass shipped the three
+    # categories above; these two are what a lower frequency floor found once
+    # the obvious phrases were gone. Same discipline: taken from a noise title,
+    # absent from every keep title, then dry-run over 382,228 live postings and
+    # dropped on any collision with a `relevant` or `less_relevant` reading.
+    #
+    # **The dry-run dropped five and reading them dropped five more**, which is
+    # the half that counts. On the numbers: `audit` reaches `Audit Specialist,
+    # Credit Risk`, `aml` reaches four `Quantitative Modeler Manager - AML`,
+    # and `quality assurance`, `test analyst` and `japanese speaking` each
+    # reach one. On the reading, all clean numerically and all wrong: `market
+    # analyst` is Euronext's `Market Analyst Derivatives Market`, `account
+    # associate` is PIMCO's `ETF Senior Account Associate`, `client portfolio
+    # management` is Barings, and `fund management` and `corporate treasury`
+    # are `discretionary_investing` and bank ALM -- markets seats the reader
+    # asked to rank rather than reject.
+    #
+    # `settlement`, `reconciliation`, `trade support`, `corporate actions`,
+    # `fund accounting` and `transfer agency` are all absent because `_DESK`
+    # already holds them; adding them here would only confuse the evidence.
+    #
+    # **`fund services` is absent for a stronger reason: it is on `MARKETS`.**
+    # Stage 30 put it there so a custody desk reads `adjacent` instead of
+    # falling to `unknown` and sorting below the purchasers -- State Street,
+    # Apex, Euronext and SimCorp advertise there. A needle sitting in a
+    # positive list and a rejecting one at once is a contradiction whichever
+    # wins, and it was worth 16 `adjacent` cards.
+    "it_delivery": (
+        "digital transformation", "transformation consultant", "ai enablement",
+        "lean portfolio", "business process", "process analyst",
+        "robotic process automation", "triple a",
+        "delivery manager", "delivery lead", "scrum", "release manager",
+    ),
+    "corporate_admin": (
+        "internal audit", "it audit", "office assistant", "front office assistant",
+        "administrative assistant", "personal assistant", "executive assistant",
+        "accounts payable", "accounts receivable", "payroll",
+        "client onboarding", "onboarding analyst", "onboarding specialist",
+        "relationship management", "telemarketing", "merchandiser",
+        "kyc", "due diligence",
     ),
     "crypto_web3": ("crypto", "web3", "defi", "blockchain", "nft"),
     "heavy_systems": ("fpga", "verilog", "kernel bypass", "embedded systems"),

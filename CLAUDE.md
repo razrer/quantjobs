@@ -1503,7 +1503,8 @@ learn.
 
 ## The board's gates
 
-**Eight gates now.** The seventh is the reader's own click. `hand_rejected`
+**Eight gates now.** The seventh is the reader's own click; the eighth is
+`non_markets_employer`, the board profile one level down. `hand_rejected`
 reads `labels.csv` — the corrections `python -m quantscraper corrections` pulls
 off the live board — and removes what the reader has already said no to. Until
 it existed a Reject click lived in one browser's `localStorage` and the card
@@ -1516,25 +1517,15 @@ came back on the next build, in a new browser, or on another machine.
   Rejecting the 11 August one has to reject the 27 August one, so
   `build_data.hand_rejections` returns both the exact keys and the
   `dedup.fingerprint` of every rejected posting.
-- **`labels.csv` feeds that gate unconditionally, and the model sheets feed a
-  separate one.** `model_rejected` reads `agent_labels.csv` and
-  `board_triage.csv` — 469 model relevance labels and 1,866 model noise/keep
-  verdicts — and is **on at the reader's instruction**. Two gates rather than
-  one wider gate, because the evidence is not the same and the build has to be
-  able to say how much each removed.
-- **The guard on `model_rejected` is the whole reason it is safe: a model may
-  remove what the tagger could not place, and may not overturn it.** It fires
-  only where relevance is `unknown` or `adjacent`. Ungated it deletes `Cubist
-  Senior Data Scientist` and `Cubist Data Scientist` at Point72, Arrowstreet's
-  `Quantitative Developer Intern` and Quantbot's `Quantitative Researcher
-  Internship` — **84 postings the classifier rates positively**, which is the
-  failure this project calls expensive. The guard costs 74 of 1,318 removals
-  and `tests/test_dedup.ModelRejectionGuardTest` pins it.
-- **Measured: the board went 5,787 → 4,757 and the shortlist did not move.**
-  Singapore 1,499 → 439, Hong Kong 286 → 146, Stockholm 133 → 38, and
-  `apply_now + strong` unchanged at 216. That is what a good tightening looks
-  like from outside — the number to read is the one that should *not* have
-  changed.
+- **Only `labels.csv` feeds that gate, and a model sheet gating by *row* was
+  tried and taken out.** `model_rejected` read `agent_labels.csv` and
+  `board_triage.csv` and removed 1,105 named cards — Singapore 1,499 → 439 —
+  and the reader's answer was *"I'm not interested in deleting specific
+  records."* That is the right instinct and worth writing down: **a list of
+  rejected ids is not a classifier.** It does nothing for the posting that
+  arrives tomorrow, it grows without bound, and it makes the board's behaviour
+  depend on which cards a labeller happened to be shown. The labels are worth
+  keeping as *evidence to mine*; the mined rules are what ships.
 - **The de-duplicator's dangerous direction is hiding a real opening, not
   showing an advertisement twice.** `dedup.fingerprint` is
   `(firm, location, description-hash)` and the **location is what makes it
@@ -1730,6 +1721,41 @@ ate a hub.
   call (9), and a markets word in the *title* of a back-office seat (5). **Check
   which family a row is in before writing a needle for it**; two of the four are
   working as instructed.
+- **A list of rejected ids is not a classifier, and the difference is the whole
+  point of labelling.** Gating on the model sheets by *row* removed 1,105 named
+  cards and took Singapore from 1,499 to 439 — and it was taken back out at the
+  reader's word. It does nothing for the posting that arrives tomorrow, it grows
+  without bound, and it makes the board depend on which cards a labeller was
+  shown. **The labels are evidence to mine; the mined rules are what ships.**
+- **Mining the same labels twice pays much less the second time, and that is
+  the shape to expect.** The first pass took the high-frequency phrases: three
+  categories, 51 needles. A second pass at a lower floor over the same 2,335
+  labels found 30 more needles worth **62 cards**. Title-phrase mining
+  saturates; when it does, the next lever is a different *unit*, not a longer
+  list.
+- **That unit was the employer, and it is where a national board hides its
+  noise.** `board_profile` is keyed on `(ats, token)`, which is right for a
+  firm's own board and blind for a portal: all ~95,000 MyCareersFuture postings
+  share one token, so the profile describes the portal rather than anyone
+  hiring. Profiled on `jobs.employer` instead, **3,234 employers come out
+  `non_markets`** — `RECRUIT EXPRESS`, `THE SUPREME HR ADVISORY`, `ANRADUS`,
+  agencies publishing thousands of advertisements of which the tagger reads
+  none as markets work. `non_markets_employer` is its own counted gate and
+  fires on the same double evidence as the board version: the employer has
+  shown us `MIN_BOARD` postings and none read as markets, **and** this posting
+  is one the tagger could not place. `RECRUIT EXPRESS` has nine rated
+  positively and all nine survive.
+- **Measured across all three passes: Singapore 1,499 → 1,014 cards, and the
+  shortlist never moved from 216.** Stockholm 133 → 97, the whole board
+  6,086 → 5,521. Every rule generalises — it applies to postings no labeller
+  saw, including tomorrow's.
+- **An agency signal read off the employer's *name* was measured and refused.**
+  Names containing `recruit`, `staffing`, `personnel`, `search` and the rest are
+  86% noise — and the 14% is `Quantitative Researcher` at Qube Research &
+  Technologies, a `C++ Quantitative Developer – Pricing` and an `FX Dealer`.
+  (`search` matching inside `research` is its own warning.) The employer
+  *profile* gets the same firms without the collateral, because it reads what
+  the board published rather than what the firm is called.
 - **Reading the *board* is a different exercise from reading a *sample*, and it
   is the one that finds noise.** 24 labellers marked all 1,885 cards in
   Singapore, Hong Kong and Stockholm `noise` or `keep` with a reason from a

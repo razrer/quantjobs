@@ -203,7 +203,7 @@ To do nothing: this stays as it is, and Hong Kong stays employer-fed.
 ## 7. 469 model labels are waiting for you to read them
 
 `quantscraper/agent_labels.csv` holds 469 postings labelled by twelve model
-labellers in one pass. **They now gate the board through `model_rejected`, at your instruction, and they are still not scored by default**
+labellers in one pass. **They gate nothing and they are not scored by default**
 -- `labels.SHEETS` is still `labels.csv` plus `auto_labels.csv`. This is the
 same state `auto_labels.csv` was in before you read it, and reading it is what
 turned that one into evidence.
@@ -320,7 +320,6 @@ undo it.
 
 | Call | To reverse |
 |---|---|
-| **Model rejections gate the board** — *your call*. `agent_labels.csv` and `board_triage.csv` feed `model_rejected`, removing 1,105 cards; Singapore 1,499 → 439. **Guarded**: a model cannot overturn a tagger reading of `relevant` or `less_relevant`, which is what saves Point72's two `Cubist Data Scientist` seats and Arrowstreet's quant-dev intern. `list --exclude model_rejected` shows everything it took. | Delete the `model_rejected` line from `GATES` in `web/build_data.py` and rebuild. No re-tag. To use the sheets *unguarded* instead, drop the `relevance not in (...)` clause beside it — it costs 74 positively-rated postings. |
 | **Wealth advisory is rejected rather than ranked**, which reverses one row of an earlier call. `discretionary_investing` ranks instead of rejecting because *"it is ok if it picks up junk, i can remove them myself"* — still true of `Investment Analyst, Public Equity`. Advice to individuals came out of that set when you asked for a five-minute board: 94 such cards were marked noise, and `wealth management` reaches **no** posting rated `relevant` or `less_relevant` in 382,220 live titles. | Delete `"wealth_advisory"` from `_EXCLUSION` in `tagging.py`, bump `TAGGER`, re-run `tag`. |
 | **Three new exclusion categories mined from the board** — `wealth_advisory`, `banking_platform`, `advisory_client` — remove ~560 cards at 99% precision against 1,866 hand-read verdicts. Each is a list you can edit one line at a time; `list --exclude <reason>` shows what each removed. | Delete the category from `_EXCLUSION` in `tagging.py`, bump `TAGGER`, re-run `tag`. |
 | **A plain `Senior` no longer removes a posting.** It gated 9,914 postings, 947 in Stockholm and Copenhagen, and in the Nordics what it took was not leadership — a Nordic bank stamps *Senior* on a three-year grade. It still ranks last. | Put `"senior_6_10"` back in `_OUT_OF_REACH` in `tagging.py`, bump `TAGGER`, re-run `tag`. |
