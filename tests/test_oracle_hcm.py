@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import time
 import unittest
+import urllib.error
 from unittest import mock
 
 from quantscraper import ats, extract
@@ -64,16 +65,38 @@ class OracleTokenTest(unittest.TestCase):
 
 
 class OraclePagingTest(unittest.TestCase):
-    def test_it_pages_by_offset_and_stops_on_a_short_page(self):
-        full = [_req(str(n)) for n in range(extract._ORACLE_PAGE)]
-        pages = [_payload(extract._ORACLE_PAGE + 2, *full), _payload(202, _req("x"), _req("y"))]
+    def test_a_short_page_is_not_the_end_of_the_board(self):
+        """Oracle serves the occasional short page in the middle of a board.
+
+        Measured on Kotak's tenant: offset 3,000 hands back 199 rows and
+        offset 3,200 hands back a full 200. Stopping on a short page ended the
+        walk wherever one landed -- Kotak truncated at 3,199 of 9,959 and Tata
+        Capital at 1,599 of 5,542, both the round number a cap leaves behind.
+        The Jobbsafari lesson in a second format: only an empty page is the end.
+        """
+        short = [_req(f"s{n}") for n in range(extract._ORACLE_PAGE - 1)]
+        rest = [_req(f"r{n}") for n in range(extract._ORACLE_PAGE)]
+        pages = [
+            _payload(2 * extract._ORACLE_PAGE - 1, *short),
+            _payload(2 * extract._ORACLE_PAGE - 1, *rest),
+            _payload(0),
+        ]
         with mock.patch.object(extract.http, "get_text", side_effect=pages) as fetch:
             jobs = extract.oracle_hcm("pod.example|CX_1001")
 
-        self.assertEqual(len(jobs), extract._ORACLE_PAGE + 2)
-        self.assertEqual(fetch.call_count, 2)
+        self.assertEqual(len(jobs), 2 * extract._ORACLE_PAGE - 1)
+        self.assertEqual(fetch.call_count, 3)
         self.assertIn("offset=0", fetch.call_args_list[0].args[0])
         self.assertIn(f"offset={extract._ORACLE_PAGE}", fetch.call_args_list[1].args[0])
+
+    def test_a_tenant_that_ignores_offset_does_not_page_forever(self):
+        """The guard the short-page stop used to provide by accident."""
+        with mock.patch.object(
+            extract.http, "get_text", return_value=_payload(1, _req("1"))
+        ) as fetch:
+            jobs = extract.oracle_hcm("pod.example|CX_1001")
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(fetch.call_count, 2)
 
     def test_a_board_handing_over_less_than_it_advertises_is_loud(self):
         """The board states its own size, so a truncation cannot be silent.
@@ -81,12 +104,24 @@ class OraclePagingTest(unittest.TestCase):
         This is the check that caught Jobvite's missing slash: a round number
         is what a cap looks like from the outside and nothing else says so.
         """
-        with mock.patch.object(
-            extract.http, "get_text", return_value=_payload(500, _req("1"))
-        ):
+        pages = [_payload(500, _req("1")), _payload(500)]
+        with mock.patch.object(extract.http, "get_text", side_effect=pages):
             with self.assertRaises(ValueError) as caught:
                 extract.oracle_hcm("pod.example|CX_1001")
         self.assertIn("advertises 500", str(caught.exception))
+
+    def test_a_handful_of_postings_closing_mid_walk_is_not_a_truncation(self):
+        """BNY advertises 1,390 and hands over 1,387, and that is not a bug.
+
+        A board large enough to take minutes to read changes while it is being
+        read. Raising on the difference threw away 1,387 real postings -- the
+        guard against silent truncation deleting a board outright, which is
+        the failure it exists to prevent, one direction over.
+        """
+        rows = [_req(str(n)) for n in range(99)]
+        pages = [_payload(100, *rows), _payload(100)]
+        with mock.patch.object(extract.http, "get_text", side_effect=pages):
+            self.assertEqual(len(extract.oracle_hcm("pod.example|CX_1001")), 99)
 
     def test_an_empty_board_is_an_answer_not_a_failure(self):
         with mock.patch.object(extract.http, "get_text", return_value=_payload(0)):
@@ -111,9 +146,11 @@ class OracleFieldsTest(unittest.TestCase):
         counted it, so dropping it silently would look exactly like a board
         that shrank. The advertised-total check turns that into a failure.
         """
-        with mock.patch.object(
-            extract.http, "get_text", return_value=_payload(1, _req("", title="Ghost"))
-        ):
+        ghosts = [_req(str(n), title="Ghost") for n in range(50)]
+        for ghost in ghosts:
+            ghost["Id"] = ""
+        pages = [_payload(50, *ghosts), _payload(50)]
+        with mock.patch.object(extract.http, "get_text", side_effect=pages):
             with self.assertRaises(ValueError):
                 extract.oracle_hcm("pod.example|CX_1001")
 
@@ -410,14 +447,15 @@ class UkgTest(unittest.TestCase):
             self._payload(extract._UKG_PAGE + 1, *full),
             self._payload(extract._UKG_PAGE + 1, self._opp("x")),
         ]
-        with mock.patch.object(extract.http, "post_json",
-                               side_effect=[p.encode() for p in pages]) as post:
+        with self._on_first_host(), mock.patch.object(
+            extract.http, "post_json", side_effect=[p.encode() for p in pages]
+        ) as post:
             jobs = extract.ukg(f"code|{self.GUID}")
         self.assertEqual(len(jobs), extract._UKG_PAGE + 1)
         self.assertEqual(post.call_count, 2)
 
     def test_two_sites_are_both_named(self):
-        with mock.patch.object(
+        with self._on_first_host(), mock.patch.object(
             extract.http,
             "post_json",
             return_value=self._payload(1, self._opp("1", places=("Tampa, FL", "Hong Kong"))).encode(),
@@ -425,11 +463,378 @@ class UkgTest(unittest.TestCase):
             self.assertEqual(extract.ukg(f"code|{self.GUID}")[0].location, "Tampa, FL, Hong Kong")
 
     def test_a_shortfall_against_the_advertised_total_is_loud(self):
-        with mock.patch.object(
+        with self._on_first_host(), mock.patch.object(
             extract.http, "post_json", return_value=self._payload(50, self._opp("1")).encode()
         ):
             with self.assertRaises(ValueError):
                 extract.ukg(f"code|{self.GUID}")
+
+    # --- the two hosts ------------------------------------------------------
+    #
+    # UKG serves its tenants from `recruiting.ultipro.com` and
+    # `recruiting2.ultipro.com`, and a tenant is on exactly one: the other
+    # answers 404. This reader addressed the first unconditionally, and every
+    # one of the eight boards it could not read had `recruiting2` written in
+    # its own stored evidence -- Mesirow Financial and Calamos, both Chicago,
+    # among them. Same shape as Workday's two hosts.
+
+    def _on_first_host(self):
+        return mock.patch.object(extract.http, "get")
+
+    def _404(self, url, **kwargs):
+        raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+
+    def test_a_tenant_on_the_second_host_is_read_rather_than_missed(self):
+        def answer(url, **kwargs):
+            if url.startswith("https://recruiting.ultipro.com/"):
+                self._404(url, **kwargs)
+            return b""
+
+        with mock.patch.object(extract.http, "get", side_effect=answer),                 mock.patch.object(
+                    extract.http,
+                    "post_json",
+                    return_value=self._payload(1, self._opp("1")).encode(),
+                ) as post:
+            jobs = extract.ukg(f"code|{self.GUID}")
+        self.assertEqual(len(jobs), 1)
+        self.assertTrue(
+            post.call_args.args[0].startswith("https://recruiting2.ultipro.com/")
+        )
+
+    def test_a_board_missing_from_both_hosts_is_still_loud(self):
+        with mock.patch.object(extract.http, "get", side_effect=self._404):
+            with self.assertRaises(urllib.error.HTTPError):
+                extract.ukg(f"code|{self.GUID}")
+
+
+class EmplyTest(unittest.TestCase):
+    """The Danish ATS that was recorded as unreadable and is not.
+
+    The board page is 209 KB of chrome with no job id in it, which is why it
+    was closed -- and the list is one POST that the page itself names, beside
+    the exact body it sends. `/api/integration/vacancy/get-page`, read off the
+    site rather than guessed, which is the rule job-room.ch's 401 established.
+    """
+
+    SECTION = "aff9dd90-0140-46de-af0b-1b3b49c47453"
+
+    def _board(self, language="en-GB"):
+        return (
+            f"<script>var languageKey = '{language}';"
+            f" var config = {{ sectionId: '{self.SECTION}' }};</script>"
+        )
+
+    @staticmethod
+    def _payload(count, *vacancies):
+        return json.dumps({"count": count, "vacancies": list(vacancies)}).encode()
+
+    @staticmethod
+    def _vacancy(vid, title="Investment Intern", **extra):
+        row = {
+            "id": vid,
+            "title": title,
+            "titleAsUrl": "investment-intern",
+            "shortId": "px827o",
+            "location": "Regeringsgatan 25, 111 53, Stockholm, Sweden",
+            "department": "Sweden",
+            "published": "2026-08-24T06:35:08Z",
+            "deadline": "2026-09-20T21:59:00Z",
+            "translations": [{"content": "<p>Real estate equity.</p>"}],
+        }
+        row.update(extra)
+        return row
+
+    def test_it_reads_the_section_from_the_page_and_maps_the_fields(self):
+        with mock.patch.object(
+            extract.http, "get_text", return_value=self._board()
+        ), mock.patch.object(
+            extract.http,
+            "post_json",
+            side_effect=[self._payload(1, self._vacancy("a")), self._payload(1)],
+        ) as post:
+            jobs = extract.emply("urbanpartners")
+
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].location, "Regeringsgatan 25, 111 53, Stockholm, Sweden")
+        self.assertEqual(jobs[0].description, "Real estate equity.")
+        self.assertEqual(
+            jobs[0].url,
+            "https://urbanpartners.career.emply.com/ad/investment-intern/px827o",
+        )
+        self.assertEqual(json.loads(post.call_args.args[1])["sectionId"], self.SECTION)
+
+    def test_a_published_closing_date_is_mapped(self):
+        """Checked before it was mapped: 54 of 95 postings carry one and the
+        gaps from publication run 14 to 45 days with nothing repeating. That is
+        an employer typing a date, not job-room.ch's dropdown, where 81% sat
+        exactly 30 days out."""
+        with mock.patch.object(
+            extract.http, "get_text", return_value=self._board()
+        ), mock.patch.object(
+            extract.http,
+            "post_json",
+            side_effect=[self._payload(1, self._vacancy("a")), self._payload(1)],
+        ):
+            self.assertEqual(extract.emply("x")[0].deadline, "2026-09-20T21:59:00Z")
+
+    def test_the_sites_own_language_is_asked_for(self):
+        with mock.patch.object(
+            extract.http, "get_text", return_value=self._board("da-DK")
+        ), mock.patch.object(
+            extract.http, "post_json", side_effect=[self._payload(0)]
+        ) as post:
+            extract.emply("guldborgsund")
+        self.assertEqual(json.loads(post.call_args.args[1])["langCode"], "da-DK")
+
+    def test_a_board_naming_no_section_is_loud(self):
+        with mock.patch.object(extract.http, "get_text", return_value="<html></html>"):
+            with self.assertRaises(ValueError):
+                extract.emply("x")
+
+    def test_a_shortfall_against_the_advertised_total_is_loud(self):
+        with mock.patch.object(
+            extract.http, "get_text", return_value=self._board()
+        ), mock.patch.object(
+            extract.http,
+            "post_json",
+            side_effect=[self._payload(9, self._vacancy("a")), self._payload(9)],
+        ):
+            with self.assertRaises(ValueError):
+                extract.emply("x")
+
+
+class JoinTest(unittest.TestCase):
+    """The API 422s and the company page carries the whole list.
+
+    The same shape as DRW's `__NEXT_DATA__` and Jobylon's widget: when a
+    vendor's API refuses, read the page the customer publishes.
+    """
+
+    @staticmethod
+    def _page(total, page_count, *items):
+        island = {
+            "items": list(items),
+            "pagination": {
+                "page": 1,
+                "pageCount": page_count,
+                "pageSize": len(items),
+                "perPage": 5,
+                "total": total,
+            },
+        }
+        return '<script>{"a":1,"jobs":' + json.dumps(island) + "}</script>"
+
+    @staticmethod
+    def _item(item_id, title="Java Software Engineer"):
+        return {
+            "id": item_id,
+            "idParam": f"{item_id}-java-software-engineer",
+            "title": title,
+            "createdAt": "2026-03-12T13:45:15.897Z",
+            "city": {"cityName": "Vilnius", "countryName": "Lithuania"},
+            "category": {"name": "Software Development"},
+        }
+
+    def test_the_island_is_read_with_its_city_and_country(self):
+        with mock.patch.object(
+            extract.http, "get_text", return_value=self._page(1, 1, self._item(15842402))
+        ):
+            jobs = extract.join("wallee")
+        self.assertEqual(jobs[0].location, "Vilnius, Lithuania")
+        self.assertEqual(jobs[0].department, "Software Development")
+        self.assertEqual(
+            jobs[0].url,
+            "https://join.com/companies/wallee/15842402-java-software-engineer",
+        )
+
+    def test_it_walks_to_the_page_count_the_island_states(self):
+        pages = [
+            self._page(4, 2, self._item(1), self._item(2)),
+            self._page(4, 2, self._item(3), self._item(4)),
+        ]
+        with mock.patch.object(
+            extract.http, "get_text", side_effect=pages
+        ) as fetch:
+            jobs = extract.join("carhartt-wip")
+        self.assertEqual(len(jobs), 4)
+        self.assertEqual(fetch.call_count, 2)
+        self.assertIn("page=2", fetch.call_args_list[1].args[0])
+
+    def test_a_board_counting_one_it_does_not_publish_is_not_a_truncation(self):
+        """Wallee reports `total: 4` with `pageCount: 1` and lists three.
+
+        Measured rather than generous: Carhartt's 47 arrive exactly, and a real
+        truncation is short by pages rather than by one.
+        """
+        with mock.patch.object(
+            extract.http, "get_text", return_value=self._page(4, 1, self._item(1))
+        ):
+            self.assertEqual(len(extract.join("wallee")), 1)
+
+    def test_a_shortfall_of_more_than_a_page_is_loud(self):
+        with mock.patch.object(
+            extract.http, "get_text", return_value=self._page(90, 1, self._item(1))
+        ):
+            with self.assertRaises(ValueError) as caught:
+                extract.join("x")
+        self.assertIn("advertises 90", str(caught.exception))
+
+    def test_a_page_with_no_island_is_loud(self):
+        with mock.patch.object(extract.http, "get_text", return_value="<html></html>"):
+            with self.assertRaises(ValueError):
+                extract.join("x")
+
+
+class EightfoldTest(unittest.TestCase):
+    """The vendor recorded as closed, where the truth is per tenant.
+
+    The note said `/api/apply/v2/jobs` answers 403, which it does on Morgan
+    Stanley's tenant and on NAB's -- and Vale's answers 200 with 193 positions,
+    and **Millennium's with 219**, including `Quantitative Researcher`,
+    `Portfolio Researcher` and `Deep Learning Quantitative Researcher` across
+    New York, Hong Kong and Singapore. A vendor refusing one customer's board
+    is not the vendor being shut, and writing it down as closed stopped anyone
+    asking a second tenant.
+    """
+
+    @staticmethod
+    def _payload(count, *positions):
+        return json.dumps({"count": count, "positions": list(positions)})
+
+    @staticmethod
+    def _position(pid, name="Quantitative Researcher", **extra):
+        row = {
+            "id": pid,
+            "name": name,
+            "canonicalPositionUrl": f"https://mlp.eightfold.ai/careers/job/{pid}",
+            "location": "Hong Kong",
+            "locations": ["Hong Kong, Hong Kong", "Tokyo, Tokyo, Japan"],
+            "department": "Research",
+            "job_description": "Signals research.",
+        }
+        row.update(extra)
+        return row
+
+    def test_every_published_place_is_kept_not_just_the_summary(self):
+        """The board's geography is multi-valued, and `location` is a summary.
+
+        Vale's rows summarise as `Brazil` while `locations` names the town, and
+        Millennium's summarise as `Hong Kong` while a seat is open in Tokyo too.
+        """
+        pages = [self._payload(1, self._position("1")), self._payload(1)]
+        with mock.patch.object(extract.http, "get_text", side_effect=pages):
+            jobs = extract.eightfold("mlp")
+        self.assertEqual(jobs[0].location, "Hong Kong, Hong Kong, Tokyo, Tokyo, Japan")
+
+    def test_a_stride_the_server_ignores_is_caught_by_the_total(self):
+        """Eightfold serves ten however many are asked for -- the MAS trap.
+
+        Paging fifty at a time skipped forty in every fifty, and the advertised
+        total is what said so; nothing in the response did.
+        """
+        self.assertEqual(extract._EIGHTFOLD_PAGE, 10)
+        with mock.patch.object(
+            extract.http,
+            "get_text",
+            side_effect=[self._payload(193, self._position("1")), self._payload(193)],
+        ):
+            with self.assertRaises(ValueError) as caught:
+                extract.eightfold("vale")
+        self.assertIn("advertises 193", str(caught.exception))
+
+    def test_it_pages_by_start_in_steps_of_ten(self):
+        with mock.patch.object(
+            extract.http, "get_text", return_value=self._payload(1, self._position("1"))
+        ) as fetch:
+            extract.eightfold("mlp")
+        self.assertIn("start=0", fetch.call_args_list[0].args[0])
+        self.assertIn("start=10", fetch.call_args_list[1].args[0])
+
+    def test_the_tenant_alone_addresses_the_board(self):
+        """`domain=` is what the vendor's own page sends and is not required --
+        measured with it, with it empty and without it, all three answer 219."""
+        hit = ats.fingerprint("https://mlp.eightfold.ai/careers")
+        self.assertEqual(hit[:2], ("eightfold", "mlp"))
+
+
+class JobylonTest(unittest.TestCase):
+    """The Nordic ATS whose board is an Angular widget -- and whose widget page
+    carries the whole list as a JavaScript array, rendered server-side.
+
+    Read the page the embed loads, not the page that embeds it.
+    """
+
+    WIDGET = "\n".join(
+        (
+            "JBL.embed_v2['jobs'] = [",
+            "    {",
+            "      id: '374915',",
+            "      url: '/jobs/374915-aktia-risk-manager/',",
+            "      title: 'Risk Manager',",
+            "      company: 'Aktia Pankki Oyj',",
+            # Two fields are nested objects, and they sit between the id and
+            # the place. A record bounded by the next `}` stops here.
+            "      klass: {",
+            "        'job-id-374915': true,",
+            "      },",
+            "      locations_text: 'Helsinki',",
+            "      function: 'Pankki ja rahoitus',",
+            "      to_date: '13. syyskuuta 2026',",
+            "    },",
+            "    {",
+            "      id: '376721',",
+            "      title: 'Project Manager',",
+            "      klass: {",
+            "        'job-id-376721': true,",
+            "      },",
+            "      locations_text: 'Vaasa',",
+            "    },",
+            "];",
+        )
+    )
+
+    def test_fields_after_a_nested_object_are_still_read(self):
+        """A record ends where the next begins, not at the next `}`.
+
+        `klass` and `layers` are nested objects, so a non-greedy run to the
+        first closing brace stops inside the record -- and `locations_text` is
+        past that point, which is every place name on the board.
+        """
+        with mock.patch.object(extract.http, "get_text", return_value=self.WIDGET):
+            jobs = extract.jobylon("2551")
+        self.assertEqual([j.location for j in jobs], ["Helsinki", "Vaasa"])
+        self.assertEqual(jobs[0].department, "Pankki ja rahoitus")
+        self.assertEqual(jobs[0].employer, "Aktia Pankki Oyj")
+        self.assertEqual(jobs[0].url, "https://jobylon.com/jobs/374915-aktia-risk-manager/")
+
+    def test_a_localised_closing_date_is_not_mapped(self):
+        """`to_date` is a real field rendered in the tenant's own language.
+
+        Turning `13. syyskuuta 2026` into a date to hand a deadline-ordered
+        board is the mistake this project refuses everywhere else.
+        """
+        with mock.patch.object(extract.http, "get_text", return_value=self.WIDGET):
+            self.assertTrue(all(j.deadline is None for j in extract.jobylon("2551")))
+
+    def test_a_missing_field_does_not_borrow_its_neighbours(self):
+        with mock.patch.object(extract.http, "get_text", return_value=self.WIDGET):
+            jobs = extract.jobylon("2551")
+        self.assertIsNone(jobs[1].url)
+        self.assertIsNone(jobs[1].department)
+
+    def test_a_page_with_no_job_list_is_loud(self):
+        with mock.patch.object(extract.http, "get_text", return_value="<html></html>"):
+            with self.assertRaises(ValueError):
+                extract.jobylon("2551")
+
+    def test_the_numeric_customer_id_survives_the_not_a_board_rule(self):
+        """`jobs.lever.co/500` is why numeric tokens are refused; here the
+        digits are the board, and they appear in the embed URL alone."""
+        hit = ats.fingerprint("https://cdn.jobylon.com/jobs/companies/2551/embed/v2/")
+        self.assertEqual(hit[:2], ("jobylon", "2551"))
+
+    def test_the_vendors_own_host_still_yields_no_token(self):
+        self.assertIsNone(ats.fingerprint("https://emp.jobylon.com/")[1])
 
 
 class EveryFingerprintHasAReaderTest(unittest.TestCase):
@@ -443,14 +848,6 @@ class EveryFingerprintHasAReaderTest(unittest.TestCase):
 
     INVESTIGATED = {
         "taleo": "needs a per-board portal id it does not publish; tokens collide on tbe.taleo.net",
-        "eightfold": "the jobs path is inside a JS bundle; /api/apply/v2/jobs returns page config",
-        "join": "every page/pageSize value tried returns HTTP 422",
-        "successfactors": "career site is a 206 KB shell with no job id, RSS path 404s",
-        "jobylon": "boards embed via cdn.jobylon.com/embedder.js; 4 of 5 rows "
-                   "carry no token and the fifth is `emp`, the vendor's own host",
-        "emply": "board is {token}.career.emply.com and the token resolves, but "
-                 "the page is client-side: 247 KB with no job id, and every RSS "
-                 "path serves the same SPA shell",
     }
 
     def test_every_vendor_asset_rule_has_a_reader(self):

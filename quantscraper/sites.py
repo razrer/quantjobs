@@ -1068,6 +1068,67 @@ SITES: tuple[Site, ...] = (
         None,
         ats="greenhouse",
     ),
+    # ---- New York ---------------------------------------------------------
+    #
+    # **A Workday tenant can run several sites and only some are open, so a 403
+    # on one is not a dead tenant.** Guggenheim's careers page names
+    # `External_Careers_Site`, which is what the fingerprint recorded and what
+    # answers **403** on every poll -- while `Guggenheim_Careers` on the same
+    # tenant answers 200 with 36 New York postings. Every other site name
+    # tried answers 404, so the three codes separate cleanly: 404 is a site
+    # that does not exist, 403 one that exists and is closed, 200 the board.
+    # Read the other sites before believing a tenant is shut.
+    #
+    # No reader: Workday already reads this. Proved by running the extractor --
+    # `Experienced Associate - Investment Banking`, `Performance Analyst`.
+    Site(
+        "guggenheim|wd1|Guggenheim_Careers",
+        "guggenheimpartners.com",
+        "Guggenheim Partners",
+        None,
+        ats="workday",
+    ),
+    # ---- iCIMS classic portals whose board moved -------------------------
+    #
+    # Three firms whose careers walk still lands on the *classic* iCIMS portal
+    # -- their homepage names it, and the walk stops at the homepage -- while
+    # the live board is the career site one hop further on. No reader needed:
+    # `icims_cs` already reads all three, and only the fingerprint is out of
+    # reach.
+    #
+    # **Aon is the one worth reading twice.** Its portal answers with a single
+    # posting and its career site with 1,058, so the board was not silent and
+    # was not working either -- and a board holding one row is invisible to
+    # every check here, including the "tier A and no postings" sweep that
+    # found the other two. A suspiciously *small* board deserves the suspicion
+    # a suspiciously round one gets.
+    Site("jobs.aon.com", "aon.com", "Aon", None, ats="icims_cs"),
+    # **SIG is here for the fields rather than the count.** Both surfaces list
+    # the same ~250 postings; the classic portal publishes **no location and
+    # no description on any of them** -- its own reader says so, the list page
+    # carries neither -- while the career site publishes both on all 250. The
+    # board *gates on geography*, so a marquee firm's whole board was arriving
+    # as `hub: unknown`, which survives the gate and ranks at the bottom of it.
+    #
+    # This is the switch `retired_board` was written to make safe: without it
+    # the 269 rows already stored under `icims/sig` would sit on the board
+    # beside the new ones forever, because a board nobody polls never reports
+    # a withdrawal.
+    Site("careers.sig.com", "sig.com", "Susquehanna", None, ats="icims_cs"),
+    Site(
+        "careers.insightglobal.com",
+        "insightglobal.com",
+        "Insight Global",
+        None,
+        ats="icims_cs",
+    ),
+    Site(
+        "careers.johnsonfinancialgroup.com",
+        "johnsonfinancialgroup.com",
+        "Johnson Financial Group",
+        None,
+        ats="icims_cs",
+    ),
 )
 
 BY_TOKEN = {site.token: site for site in SITES}
@@ -1084,10 +1145,14 @@ def read(token: str) -> list[Job]:
 def register(connection: sqlite3.Connection) -> int:
     """Give every site an `ats_resolution` row so Layer 3 polls it.
 
-    Written as tier A with `ats='site'`, which keeps these out of the way of
-    every other sweep: `ats.targets` only visits untiered domains and
-    `ats.reprobe_targets` only visits tier B and tokenless tier A, so neither
-    can overwrite a row here. Re-registering is idempotent.
+    Written as tier A, which keeps these out of the way of every other sweep:
+    `ats.targets` only visits untiered domains, and `ats.reprobe_targets`
+    visits tier B, tokenless tier A, and tier A holding no postings -- from
+    which it excludes any row whose evidence names this file. That last
+    exclusion is load-bearing rather than tidy: a board here advertising
+    nothing today, which Captor and Norron do by design, is otherwise
+    indistinguishable from a board nobody can read. Re-registering is
+    idempotent.
     """
     from . import ats as ats_module
 

@@ -15,7 +15,7 @@ import time
 import unittest
 from unittest import mock
 
-from quantscraper import ats
+from quantscraper import ats, db
 
 
 class CareersScanTest(unittest.TestCase):
@@ -106,6 +106,136 @@ class CustomDomainTest(unittest.TestCase):
         markup = '<img src="https://assets-aws.teamtailor-cdn.com/logo.png">'
 
         self.assertIsNone(ats.fingerprint(markup))
+
+
+class CaptureOffByOneTest(unittest.TestCase):
+    """A capture that lands one segment early is the quiet kind of wrong.
+
+    The token is well-formed, the row reads tier A everywhere, and the board it
+    names either does not exist or already belongs to somebody else.
+    """
+
+    def test_a_workday_locale_written_with_an_underscore_is_not_the_site(self):
+        """`mmc|wd1|en_US` 404s on every poll; `mmc|wd1|MMC` holds 2,437."""
+        self.assertEqual(
+            ats.fingerprint("https://mmc.wd1.myworkdayjobs.com/en_US/MMC")[1],
+            "mmc|wd1|MMC",
+        )
+
+    def test_the_hyphenated_locale_still_works(self):
+        self.assertEqual(
+            ats.fingerprint("https://juliusbaer.wd3.myworkdayjobs.com/en-US/External")[1],
+            "juliusbaer|wd3|External",
+        )
+
+    def test_a_workable_job_page_is_not_a_board(self):
+        """`apply.workable.com/j/{shortcode}` is one posting.
+
+        Read as the board `j` and recorded against two unrelated domains at
+        once, which is the same "several firms agree on it" signal `tbe` and
+        `__assets__` were found by.
+        """
+        self.assertIsNone(ats.fingerprint("https://apply.workable.com/j/AB12CD34EF"))
+
+    def test_a_workable_board_still_resolves(self):
+        self.assertEqual(
+            ats.fingerprint("https://apply.workable.com/optiver/")[1], "optiver"
+        )
+
+    def test_the_shared_taleo_business_edition_host_is_not_a_board(self):
+        """Four unrelated domains claimed `tbe`, which is the vendor's."""
+        self.assertIsNone(ats.fingerprint("https://tbe.taleo.net/CR07/ats/careers")[1])
+
+
+class ReprobePopulationTest(unittest.TestCase):
+    """A board resolved with a token and holding no postings is silent too.
+
+    `reprobe_targets` covered tier B and tokenless tier A -- the two states
+    CLAUDE.md calls "a board nobody can poll" -- and missed the larger one:
+    167 rows sat tier A *with* a token, polling nothing, and no sweep revisited
+    them because having a token is what both other clauses tested for. Three
+    carried a `/` from a JSON island the escape table had since learned to
+    undo, and four carried `tbe`, which it had since learned to refuse.
+    """
+
+    def _connection(self):
+        connection = db.connect(":memory:")
+        connection.executescript(ats.SCHEMA)
+        return connection
+
+    def _row(self, connection, domain, ats_name, token, tier="A", evidence="x"):
+        connection.execute(
+            "INSERT INTO ats_resolution"
+            " (domain, careers_url, ats, token, tier, evidence, checked_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, '2026-08-31')",
+            (domain, f"https://{domain}/", ats_name, token, tier, evidence),
+        )
+        connection.commit()
+
+    def test_a_tier_a_board_with_no_postings_is_re_walked(self):
+        connection = self._connection()
+        self._row(connection, "varde.com", "taleo", "tbe")
+        self.assertEqual(
+            [r["domain"] for r in ats.reprobe_targets(connection, 10)], ["varde.com"]
+        )
+
+    def test_a_tier_a_board_that_produced_postings_is_left_alone(self):
+        connection = self._connection()
+        self._row(connection, "janestreet.com", "greenhouse", "janestreet")
+        connection.execute(
+            "INSERT INTO jobs (ats, token, job_id, title, first_seen, last_seen)"
+            " VALUES ('greenhouse', 'janestreet', '1', 'Trader', 'x', 'x')"
+        )
+        connection.commit()
+        self.assertEqual(ats.reprobe_targets(connection, 10), [])
+
+    def test_a_hand_written_site_is_never_swept_up(self):
+        """Captor and Norron advertise nothing, which is the answer their
+        readers exist to give -- and the marker is the evidence string, because
+        two thirds of `sites.py` names an extractor that already exists."""
+        connection = self._connection()
+        self._row(
+            connection,
+            "captor.se",
+            "site",
+            "captor",
+            evidence="hand-written reader in sites.py (Captor)",
+        )
+        self._row(
+            connection,
+            "nasdaq.com",
+            "workday",
+            "nasdaq|wd1|Nasdaq_External",
+            evidence="hand-verified board in sites.py (Nasdaq)",
+        )
+        self.assertEqual(ats.reprobe_targets(connection, 10), [])
+
+
+class VendorPrecedenceTest(unittest.TestCase):
+    """Which wins when a page names a board *and* serves one from its own host.
+
+    It turns on the vendor. Same vendor and the named token wins -- Optiver's
+    two hostnames are one board. Different vendor and the verified host wins,
+    because the two are then different products and only one is live: iCIMS'
+    career sites still print `careers-{token}.icims.com` for their login link,
+    so the classic-portal pattern matched and won a board that is a 150-byte
+    redirect stub.
+    """
+
+    MARKUP = (
+        '<script src="https://app.jibecdn.com/prod/search/4.11.215/main.js"></script>'
+        '<a href="https://careers-principal.icims.com/jobs/login">Sign in</a>'
+    )
+
+    def test_a_different_vendor_serving_the_feed_beats_the_named_token(self):
+        with mock.patch.object(ats, "_serves_feed", return_value=True):
+            hit = ats.fingerprint(self.MARKUP, "https://careers.principal.com/")
+        self.assertEqual(hit[:2], ("icims_cs", "careers.principal.com"))
+
+    def test_the_named_token_stands_when_the_host_serves_nothing(self):
+        with mock.patch.object(ats, "_serves_feed", return_value=False):
+            hit = ats.fingerprint(self.MARKUP, "https://careers.principal.com/")
+        self.assertEqual(hit[:2], ("icims", "principal"))
 
 
 class InfrastructureTokenTest(unittest.TestCase):

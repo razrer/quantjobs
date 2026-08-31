@@ -47,7 +47,14 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from quantscraper import dedup, labels as labels_mod, lexicon, tagging  # noqa: E402
+from quantscraper import (  # noqa: E402
+    ats as ats_mod,
+    dedup,
+    extract,
+    labels as labels_mod,
+    lexicon,
+    tagging,
+)
 
 DB = Path(__file__).resolve().parent.parent / "employers.sqlite3"
 OUT = Path(__file__).resolve().parent / "data.js"
@@ -72,11 +79,40 @@ _SUFFIX = re.compile(
 # it is safe.
 _NOTHING_KNOWN = {"unknown", "unstated", "other", "none", ""}
 
+# **The sources where every poll reads the whole board**, which is what makes
+# "absent from the latest read" mean "withdrawn". Derived from the reader table
+# rather than restated, the same way `_HUB_ORDER` is derived from `_HUBS`.
+#
+# The national boards are deliberately outside it, and the reason is the whole
+# safety argument: `jobtech` is a *delta* feed, and `jobindex --since` tops up
+# from where the data already reaches. A poll of either refreshes only what
+# changed, so "not in the latest poll" there is the overwhelming majority of a
+# live board. Applying this rule to them would empty Sweden and Denmark on the
+# next build. They manage withdrawal themselves -- `jobstream` writes
+# `removed_at` on the ad the feed retires, and Singapore's `last_seen` question
+# is answered by a completed sweep rather than by a query.
+LAYER_THREE = frozenset(extract.EXTRACTORS)
+
 # Defined in `tagging` so the labelling sheet gates on exactly the same list --
 # a fixture that offers rows the board refuses to show is measuring a
 # classifier nobody reads. Ordered, because a posting can carry more than one
 # reason and the count attributes it to the first that would have caught it.
 GATES = {
+    # **The two that are not classifications at all, and they come first.**
+    # Every other gate on this page answers "is this posting wanted"; these two
+    # answer "is it still on offer", which is prior to it. Ordering them first
+    # is what makes the others' counts readable: a posting the employer took
+    # down is not a posting the tagger rejected, and attributing 30,522 of them
+    # to `rejected` would overstate the one gate this file already says to
+    # watch most carefully.
+    #
+    # Neither belongs in `tagging.GATES`, and that is not an oversight.
+    # Everything there is a fact about the *posting*, which is why
+    # `labels._candidates` can build a labelling frame from it. These are facts
+    # about our *reading* -- they would tell a labeller nothing, and they
+    # change without the posting changing.
+    "withdrawn": "the board was read again and no longer lists it",
+    "retired_board": "we no longer read the board this came from",
     **tagging.GATES,
     # Not an `exclusion_reason` like the other three -- it is the `relevance`
     # verdict itself, matched separately below. It lives in this table so the
@@ -149,7 +185,7 @@ def employer_profiles(connection, tagger: int) -> dict[str, str]:
     return profiles
 
 
-def hand_rejections(connection) -> tuple[set[tuple[str, str, str]], set[str]]:
+def hand_rejections(connection, one_domain=None) -> tuple[set[tuple[str, str, str]], set[str]]:
     """What the reader rejected, by key *and* by fingerprint.
 
     Returns `(keys, fingerprints)`. The keys are exact -- the three columns a
@@ -170,10 +206,10 @@ def hand_rejections(connection) -> tuple[set[tuple[str, str, str]], set[str]]:
     for label in labels_mod.load(labels_mod.PATH):
         if label.relevance == "rejected":
             keys.add((label.ats, label.token, label.job_id))
-    return keys, _fingerprints(connection, keys)
+    return keys, _fingerprints(connection, keys, one_domain or {})
 
 
-def _fingerprints(connection, keys) -> set[str]:
+def _fingerprints(connection, keys, one_domain) -> set[str]:
     """The fingerprint of every posting in `keys`, so a rejection survives a
     repost -- see `dedup`."""
     prints: set[str] = set()
@@ -185,7 +221,7 @@ def _fingerprints(connection, keys) -> set[str]:
         if row is None:
             continue
         prints.add(dedup.fingerprint(
-            firm_key(row["domain"], row["employer"]),
+            firm_key(one_domain.get((ats, token), row["domain"]), row["employer"]),
             row["location"], row["title"], row["description"],
         ))
     return prints
@@ -428,6 +464,122 @@ def teaser(description: str | None) -> str | None:
     return (cut[: stop + 1] if stop > TEASER // 2 else cut.rsplit(" ", 1)[0] + "…") or None
 
 
+# How highly the board rates a card, for choosing between two copies of one
+# opening. `unknown` and `out_of_scope` sit together at the bottom, which is
+# what the board's own rail does with them.
+_FIT_RANK = {"apply_now": 4, "strong": 3, "plausible": 2, "stretch": 1}
+
+
+def still_listed(row, last_read: dict, live_boards: set) -> str | None:
+    """The gate name if this posting is no longer on offer, else None.
+
+    Two questions, both about our reading rather than about the posting, and
+    both answered from facts rather than from a clock. **Nothing here reads
+    "how old is this row"** -- an age threshold would fire on the absence of
+    evidence, emptying the board whenever a run was simply not made, which is
+    the one thing every gate on this page is forbidden to do.
+
+    `last_read[board]` is the newest `last_seen` on that board, and it is exact
+    rather than approximate because `db.upsert_jobs` stamps one timestamp per
+    call and `extract.run` calls it once per board: every row a board writes in
+    a poll shares a `last_seen`, so the newest one *is* that board's last
+    complete read. A poll that fails or returns nothing writes nothing and
+    moves nothing, so the cards stay -- the failure-safe direction.
+
+    Restricted to `LAYER_THREE`, and that restriction is the whole safety
+    argument rather than a tidiness: `jobtech` is a delta feed and
+    `jobindex --since` tops up from where the data reaches, so on those sources
+    "absent from the latest poll" describes most of a perfectly live board.
+    """
+    board = (row["ats"], row["token"])
+    if row["ats"] not in LAYER_THREE:
+        return None
+    if board not in live_boards:
+        return "retired_board"
+    if row["last_seen"] < last_read.get(board, ""):
+        return "withdrawn"
+    return None
+
+
+def board_domains(connection) -> dict[tuple[str, str], str]:
+    """The one domain each firm board belongs to.
+
+    `jobs` upserts on `(ats, token, job_id)` and never moves `domain`, so
+    whichever domain reached a board first keeps the rows it brought and a
+    second domain resolving to the same board files the rest under itself.
+    **Barclays is the case that shows what it costs**: 1,557 postings under
+    `cards.barclaycardus.com` -- a US card brand -- and 3 under `home.barclays`,
+    both from `barclays|wd3|External_Career_Site_Barclays`, one board. So the
+    board is two firms on the page, the big half is named `Barclaycardus`, and
+    no cross-source fold can ever see that `BARCLAYS BANK PLC` is the same
+    employer, because the name it would have to match is not there.
+
+    **The token names the tenant, so let the token pick the domain.** Workday's
+    is `tenant|wdN|site` and Greenhouse's is the board itself; the domain whose
+    registrable label is one of those pieces is the firm whose board this is.
+    Measured over the 24 firm boards this happens to, the rule is right or
+    harmless on all 24 and beats "whichever brought the most rows" on nine --
+    Barclays, Chicago Trading (`ctceurope.com` held 23 rows to
+    `chicagotrading.com`'s 2), Piper Sandler, Bain Capital, Quilter, Toyota,
+    ORIX, Mariner and Corebridge. Where no domain matches the tenant the
+    majority keeps it, which is the behaviour today.
+
+    `ats._NOT_A_TOKEN` supplies the pieces that are the vendor's furniture
+    rather than anyone's name -- `careers`, `jobs`, `external` -- because
+    `careers.sig.com` would otherwise be picked by any token containing
+    `careers`. It is imported rather than restated: two copies of that list are
+    two sides of a comparison free to drift.
+
+    The national boards are excluded. One token there is a whole country and
+    the domain is the individual employer's, which is the point of it.
+    """
+    counts: dict[tuple[str, str], dict[str, int]] = {}
+    for row in connection.execute(
+        "SELECT ats, token, domain, COUNT(*) AS n FROM jobs"
+        " WHERE removed_at IS NULL AND domain IS NOT NULL AND token IS NOT NULL"
+        " GROUP BY ats, token, domain"
+    ):
+        if row["ats"] in dedup.PORTALS:
+            continue
+        counts.setdefault((row["ats"], row["token"]), {})[row["domain"]] = row["n"]
+
+    chosen: dict[tuple[str, str], str] = {}
+    for board, domains in counts.items():
+        if len(domains) < 2:
+            continue
+        pieces = {
+            piece for piece in re.split(r"[|_-]+", board[1].casefold())
+            if piece and piece not in ats_mod._NOT_A_TOKEN
+        }
+        named = [d for d in domains if pieces & set(d.casefold().split("."))]
+        if len(named) == 1:
+            chosen[board] = named[0]
+        else:
+            chosen[board] = _parent(domains) or max(domains, key=lambda d: (domains[d], d))
+    return chosen
+
+
+def _parent(domains: dict[str, int]) -> str | None:
+    """The one domain every other is a longer form of, if there is one.
+
+    The fallback where the token names no domain, and it exists because the
+    majority is not always the parent: Marsh's board is `mmc|wd1|MMC`, which
+    matches neither `marsh.com` (15 cards) nor `marshmma.com` (62), so the
+    majority rule alone renamed fifteen `Marsh` cards `Mma Asset Management`.
+    A label the others start with is the brand they are extensions of.
+
+    Dry-run over all 24 boards claimed by more than one domain: this fires on
+    exactly one of them, Marsh, and never disagrees with the token rule -- the
+    only other prefix pair is `icapital` inside `icapitalnetwork`, where the
+    token already names the answer and this is not reached.
+    """
+    labels = {d: d.casefold().split(".")[-2] if d.count(".") else d.casefold() for d in domains}
+    for candidate, short in labels.items():
+        if all(other == short or other.startswith(short) for other in labels.values()):
+            return candidate
+    return None
+
+
 def firm_key(domain: str | None, employer: str | None) -> str:
     """What the board groups a posting under.
 
@@ -471,8 +623,30 @@ def main() -> None:
     # The reader's own rejections, by key and by fingerprint. Read once: the
     # fingerprint of a rejected posting costs a row lookup each and there are
     # a few hundred of them at most.
-    rejected_keys, rejected_prints = hand_rejections(connection)
     by_employer = employer_profiles(connection, tagging.TAGGER)
+    # One firm per board, before anything reads `domain` -- `firm_key`, the
+    # firm tile, the display name and the cross-source fold all hang off it.
+    one_domain = board_domains(connection)
+    # **Read after `one_domain`, and given it.** A fingerprint is keyed on the
+    # firm, so the rejection side has to compute it from the same domain the
+    # card does or the two stop meeting and a rejection quietly stops sticking
+    # to a repost -- for exactly the 1,668 postings the remapping moves.
+    rejected_keys, rejected_prints = hand_rejections(connection, one_domain)
+    # **When each board was last read whole, and whether it is still read.**
+    # See `LAYER_THREE` for why both are restricted to it.
+    last_read = {
+        (row["ats"], row["token"]): row["read_at"]
+        for row in connection.execute(
+            "SELECT ats, token, MAX(last_seen) AS read_at FROM jobs GROUP BY ats, token"
+        )
+    }
+    live_boards = {
+        (row["ats"], row["token"])
+        for row in connection.execute(
+            "SELECT ats, token FROM ats_resolution"
+            " WHERE tier = 'A' AND token IS NOT NULL AND token <> ''"
+        )
+    }
     firms: dict[str, dict] = {}
     jobs = []
     gated: dict[str, int] = {reason: 0 for reason in GATES}
@@ -488,7 +662,7 @@ def main() -> None:
         # Withdrawn postings keep their row and stop being offered. The board
         # was showing them: `removed_at` was in the schema and not in this
         # query, so every ad JobStream had already retired still listed.
-        " department, posted_at, deadline, description, first_seen"
+        " department, posted_at, deadline, description, first_seen, last_seen"
         " FROM jobs WHERE removed_at IS NULL"
     ):
         mine = tags.get((row["ats"], row["token"], row["job_id"]))
@@ -513,6 +687,35 @@ def main() -> None:
         # grow quietly -- a rising number here is an extractor breaking.
         if not (row["title"] or "").strip():
             untitled += 1
+            continue
+
+        # **Two facts about our reading, checked before any judgement about the
+        # posting.** A card only means something while the board it came from
+        # still offers it, and until now nothing on this page asked: `jobs`
+        # rows are never deleted and `removed_at` is written by `jobstream`
+        # alone, so a posting whose board stopped listing it stayed on the page
+        # for as long as the database did. Measured when this went in: **30,522
+        # of 138,961 live Layer 3 postings** were absent from the most recent
+        # read of their own board -- JLL, Citi, TD and US Bank each turning
+        # over 40-50% of a three-thousand-posting board across three weeks.
+        #
+        # `last_read` is exact rather than a heuristic, and one line in `db.py`
+        # is why: `upsert_jobs` stamps one timestamp per call and `extract.run`
+        # calls it once per board, so every row a board writes in a poll shares
+        # a `last_seen` and the newest one *is* that board's last complete
+        # read. A poll that fails or comes back empty writes nothing and moves
+        # nothing, which is the failure-safe direction: the cards stay.
+        #
+        # **`retired_board` is the other half and it is what makes a board
+        # switch safe.** A posting can also stop being read because *we* moved:
+        # when SIG's board went from the classic iCIMS portal to its career
+        # site, the 269 rows under the old token would otherwise have sat
+        # beside the new ones forever, since a board nobody polls never reports
+        # a withdrawal. The evidence is that `(ats, token)` is no longer a
+        # pollable target.
+        unlisted = still_listed(row, last_read, live_boards)
+        if unlisted:
+            gated[unlisted] += 1
             continue
 
         # **Stage one, and the only filters on this page that remove rather
@@ -562,7 +765,8 @@ def main() -> None:
             profiles.get((row["ats"], row["token"])) == "non_markets"
         ):
             hit = "non_markets_board"
-            label = row["employer"] or row["domain"] or f"{row['ats']}/{row['token']}"
+            label = (row["employer"] or one_domain.get((row["ats"], row["token"]))
+                     or row["domain"] or f"{row['ats']}/{row['token']}")
             by_board[label] = by_board.get(label, 0) + 1
         elif hit is None and relevance == "unknown" and (
             by_employer.get((row["employer"] or "").strip()) == "non_markets"
@@ -570,7 +774,8 @@ def main() -> None:
             hit = "non_markets_employer"
             label = (row["employer"] or "").strip()
             by_board[label] = by_board.get(label, 0) + 1
-        key = firm_key(row["domain"], row["employer"])
+        domain = one_domain.get((row["ats"], row["token"]), row["domain"])
+        key = firm_key(domain, row["employer"])
 
         # **The reader's own click, and the copy that came back wearing a new
         # id.** Checked after the tagger's gates so a posting removed for a
@@ -590,8 +795,8 @@ def main() -> None:
 
         if key not in firms:
             firms[key] = {
-                "name": row["employer"] or display_name(names.get(row["domain"], []), key),
-                "domain": row["domain"],
+                "name": row["employer"] or display_name(names.get(domain, []), key),
+                "domain": domain,
                 "ats": row["ats"],
                 "n": 0,
             }
@@ -646,6 +851,18 @@ def main() -> None:
 
         # Stripped again by `dedup.collapse`; it never reaches `data.js`.
         job["fp"] = fingerprint
+        # **And what the cross-source fold needs**, which is a different
+        # question and so a different key -- see `dedup`'s docstring. Every
+        # name we hold for this employer goes in, because the two sides know
+        # it by different ones: a portal prints the legal name it was given
+        # and a firm's own board is known by whatever the registries called
+        # its domain.
+        job["xs"] = {
+            "t": tagging.fold(job["title"]).strip(),
+            "hubs": frozenset(job.get("hub") or ("unstated",)),
+            "names": (row["employer"], firms[key]["name"], *names.get(domain, ())),
+            "portal": row["ats"] in dedup.PORTALS,
+        }
         jobs.append(job)
 
     # A stable base order. The board re-sorts on every render -- deadline
@@ -661,6 +878,20 @@ def main() -> None:
     before = len(jobs)
     jobs = dedup.collapse(jobs)
     collapsed = before - len(jobs)
+
+    # **One card per opening, which is not the same question as one card per
+    # advertisement.** The pass above folds a repost within one source; this
+    # one folds the copy a national board carries of a job the firm also
+    # advertises itself. Run second, so it compares one surviving card per
+    # source rather than a firm's board against a recruiter's eleven reposts.
+    across = len(jobs)
+    jobs = dedup.collapse_across_sources(
+        jobs, rank=lambda card: (
+            _FIT_RANK.get(card.get("fit"), 0),
+            0 if card["ats"] in dedup.PORTALS else 1,
+            card["posted"],
+        ))
+    folded_across = across - len(jobs)
     payload = {
         "built": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "tagger": tagging.TAGGER,
@@ -681,6 +912,9 @@ def main() -> None:
     if collapsed:
         print(f"{collapsed:>7,d} folded into a card already shown"
               f"  (same firm, same place, same text)")
+    if folded_across:
+        print(f"{folded_across:>7,d} folded across sources"
+              f"  (a national board's copy of a job the firm advertises itself)")
     # Said out loud on every run. A gate that removes postings silently is how
     # a widened lexicon quietly eats a hub, and this is the only number that
     # would show it.

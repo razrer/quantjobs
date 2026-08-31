@@ -20,7 +20,7 @@ session.
 
 ## Where it stands
 
-**Stage 36 is the last one written down and every stage is closed**, so the next
+**Stage 38 is the last one written down and every stage is closed**, so the next
 unit of work is a decision rather than a queue: what to widen, what to measure,
 or what to leave alone. The standing sequence is one command, `python -m
 quantscraper daily`, and `python web/publish.py` puts the result on the CDN.
@@ -29,6 +29,12 @@ free on this machine.
 
 Candidates, none of them queued:
 
+- **`withdrawn` is now the widest gate on the board at 30,522 postings**, and
+  the number to re-read whenever a reader changes. It trusts that a board's
+  newest `last_seen` is its last *complete* read, which holds only while
+  `upsert_jobs` stamps one timestamp per board per poll. If anything ever
+  starts writing `last_seen` per row, the gate silently inverts and the
+  freshest posting on a board retires all its neighbours.
 - **`solutions architect` is the one measured needle left on the table**, and it
   points the *keeping* direction rather than the rejecting one — see Stage 35.
   328 live titles; `ENGINEERING` is two-sided, so the missing plural costs a
@@ -124,6 +130,7 @@ is untouched and one line in `web/build_data.py` reverses it.
 | 35 | The reclassify clicks, read as evidence | 40 unwanted cards → 23, no `relevant` card lost |
 | 36 | Two fabricated links, and the rest of the IB desk | board 8,513 → 6,666, shortlist unchanged at 224 |
 | 37 | Hong Kong: the national board is closed, so employers instead | 1,414 → 1,526 postings, 207 → 224 rated positively |
+| 38 | The boards that resolved and polled silence | 167 silent boards read; 5 vendors opened; Millennium found |
 
 ---
 
@@ -975,3 +982,91 @@ python -m quantscraper discover --source sfc_hk --limit 300 --workers 8
 ```
 
 Then `jobs`, `tag`, and a rebuild.
+
+
+## Stage 38 — the boards that resolved and polled silence
+
+**The exit criterion:** every tier-A board holding no postings has a reason on
+the record — a fix, a correct empty, or a named blocker — and nothing is left
+reporting "empty" when it means "broken".
+
+**The population nobody was looking at.** `reprobe_targets` covered tier B and
+tier A with a NULL token, the two states `CLAUDE.md` calls "a board nobody can
+poll". It missed the larger one: **167 rows tier A *with* a token and no
+postings**, invisible to every sweep because having a token is what both other
+clauses test for. Probing all 167 by running their own extractors is what
+produced everything below; the diagnosis was never in the database.
+
+**Four reader bugs, each silent by construction.**
+
+- **UKG serves its tenants from two hosts** and the reader addressed one.
+  Eight boards 404'd forever — and **every one had `recruiting2` written in its
+  own stored evidence.** Mesirow and Calamos, both Chicago.
+- **Oracle stops on an empty page, not a short one.** Its API serves the
+  occasional 199-row page mid-board, so the short-page stop truncated Kotak at
+  **3,199 of 9,959** and Tata Capital at **1,599 of 5,542**.
+- **Oracle's shortfall check had no tolerance for churn**, so BNY advertising
+  1,390 and handing over 1,387 raised — **discarding 1,387 real postings.** The
+  guard against silent truncation producing the loud version of the same loss.
+- **A migrated iCIMS board answers 200 with a 150-byte redirect script**, which
+  the reader read as an empty board. Twelve of 36 were in that state.
+
+**Six vendors were recorded as closed and five were not.** Each closure had
+been generalised from one firm's board on one endpoint, which is what made them
+expensive — the note gets read instead of the endpoint. Eightfold answers **per
+tenant** (403 at Morgan Stanley and NAB, 200 at Vale and Millennium);
+SuccessFactors' dead end was the `?company=` surface rather than RMK on the
+firm's own host; Emply, Jobylon and Join each publish the list in the page
+their own board loads. Only **Taleo** survived, and its rows are dead hosts
+rather than a closed vendor. Paylocity and Jefferies, recorded separately, are
+genuinely closed.
+
+**Millennium is the find.** `mlp.eightfold.ai` holds **219 postings** — 70 New
+York, 36 London, 31 Hong Kong, 15 Singapore — carrying `Quantitative
+Researcher`, `Portfolio Researcher`, `Deep Learning Quantitative Researcher`
+and `Quantitative Developer` seats across four focus hubs. The domain is
+registry-sourced (Form ADV names `mlp.com` for MILLENNIUM MANAGEMENT LLC), so
+this is not the `acadian.com` shape; the postings corroborate it independently.
+
+**Measured.** Oracle went from 6,242 postings to 26,031 and UKG from 934 to
+1,244. Six new readers — `emply`, `icims_cs`, `successfactors`, `jobylon`,
+`eightfold`, `join` — landed boards that had never produced a row, and
+`successfactors` alone is 5,829 postings from 34 of them. **Taleo is now the
+only fingerprinted ATS without a reader**, down from six. Test count 823 → 872.
+
+**Nothing on the board asked whether a posting was still listed.**
+`web/build_data.py` selects on `removed_at IS NULL`, and only `jobstream` ever
+writes that column — so a posting whose board stopped listing it stayed on the
+page for as long as the database did. Two gates now, and they run *before*
+every classification gate, because "is this still on offer" is prior to "is it
+wanted" and attributing a withdrawn ad to `rejected` would overstate the one
+gate this project already says to watch most carefully.
+
+**The rule reads no clock, and that is the design.** "Older than N days" fires
+on the *absence* of evidence: it empties the board whenever a run was simply
+not made, which is the one thing every gate here is forbidden to do. `withdrawn`
+compares a posting against **its own board's last complete read** and against
+nothing else. That comparison is exact rather than approximate because
+`db.upsert_jobs` stamps one timestamp per call and `extract.run` calls it once
+per board — so a board's newest `last_seen` *is* its last complete read, a
+failed or empty poll moves nothing, and a partial `jobs --limit` run is safe
+because each board's answer is independent.
+
+**Layer 3 only, and that restriction is the safety argument.** `jobtech` is a
+delta feed and `jobindex --since` tops up from where the data reaches, so on
+those sources "absent from the latest poll" describes most of a live board —
+the same rule there would empty Sweden and Denmark. `LAYER_THREE` is derived
+from `extract.EXTRACTORS` rather than restated.
+
+**Measured:** `withdrawn` removes **30,522 of 138,961** live Layer 3 postings —
+JLL, Citi, TD and US Bank each turning over 40–50% of a three-thousand-posting
+board across three weeks. `retired_board` removes **4**, and is not a small
+rule for that: it is the precondition for ever moving a board, because a board
+nobody polls never reports a withdrawal.
+
+**Which is what let SIG move.** Both iCIMS surfaces list the same ~250
+postings; the classic portal publishes **no location and no description on any
+of them** while the career site publishes both on all 250 — and the board gates
+on geography, so a marquee firm's whole board was arriving as `hub: unknown`.
+Aon, Insight Global and Johnson Financial moved for volume instead: their
+portals hold one posting, zero and zero against 1,058, 96 and 28.

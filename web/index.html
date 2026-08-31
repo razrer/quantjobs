@@ -284,6 +284,10 @@ select:hover { border-color: var(--rule-firm); }
 }
 .linky:hover { color: var(--ink); }
 .linky[hidden] { display: none; }
+/* The one thing in the rail that is not a filter: whether the corrections made
+   on this page have actually reached the writer. Silent when they have, which
+   is almost always -- it is only worth a line when the answer is no. */
+.linky[data-bad="1"] { color: var(--due-0); }
 
 .facet { border-bottom: 1px solid var(--rule); }
 .facet > summary {
@@ -435,7 +439,13 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
 .card:hover { border-color: var(--rule-firm); box-shadow: var(--shadow-lg); z-index: 40; }
 .card:focus-within { z-index: 40; }
 .card[data-saved="1"] { border-color: var(--accent); }
-.card[data-rejected="1"] { opacity: 0.42; }
+/* Dim the card's own contents rather than the card, so the hover panel keeps
+   its opacity. A rejection now leaves the card standing until the next filter
+   change rather than making it vanish under the cursor, so the panel is read
+   while the card is dimmed -- and an unreadable set of controls is the wrong
+   way to say "removed". Opacity on the card itself cannot be undone by a
+   child: it creates a stacking context the subtree cannot climb back out of. */
+.card[data-rejected="1"] > :not(.deep) { opacity: 0.42; }
 /* A folded repost. `build_data.py` keeps the newest of a cluster and puts the
    count here rather than dropping the others without a word -- the board never
    removes silently, so the crumb goes on the card that survived. */
@@ -633,6 +643,9 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
   border-radius: 4px;
   cursor: pointer;
 }
+/* An override is a fact about the reader, not about the tagger, so it is
+   worth seeing at a glance which of the two a card is showing. */
+.reclass select.mini[data-mine="1"] { color: var(--accent); border-color: var(--accent); }
 .reclass select.mini:has(option[value="rejected"]:checked) { color: var(--due-0); border-color: var(--due-0); }
 
 /* --- stacks -------------------------------------------------------------- */
@@ -791,7 +804,7 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     <div class="rail-head">
       <h2>Filters</h2>
       <span style="display:flex; gap:0.625rem;">
-        <button class="linky" id="export" hidden>export corrections</button>
+        <button class="linky" id="sync" hidden title="Corrections made here that have not reached the writer yet. Click to try again."></button>
         <button class="linky" id="clear" hidden>clear all</button>
       </span>
     </div>
@@ -908,10 +921,12 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
       <code>python -m quantscraper corrections</code> (or a normal
       <code>daily</code> run) pulls it into <code>quantscraper/labels.csv</code>
       on the machine that owns that file -- no download, no manual merge, just
-      a delay until the next pull instead of an immediate write. Opened via
-      <code>file://</code> or a bare <code>http.server</code> instead, a
-      correction still works on the page but only <em>export corrections</em>
-      in the filter rail gets it into that file.</p>
+      a delay until the next pull instead of an immediate write. Opened over
+      <code>file://</code> or a bare <code>http.server</code> there is no route
+      to answer that POST at all, and a phone can simply be offline &mdash; so a
+      correction that does not get through is kept and retried on the next one
+      and on the next page load, and the rail says how many are still waiting.
+      Nothing has to be downloaded or merged by hand.</p>
       <p><b>A rejection sticks across rebuilds now, and across a reposting.</b>
       Once a Reject reaches <code>labels.csv</code>, the next build drops that
       posting before the page is written -- so it does not come back in a new
@@ -920,11 +935,27 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
       One Singapore recruiter reposts the identical advertisement every five
       days under a fresh id, and rejecting it once is meant to be the end of
       it.</p>
-      <p><b>&times;N on a card means the same advertisement was posted N
-      times</b> -- same firm, same place, same text -- and only the newest is
-      shown. The location is part of that test on purpose: a firm that sends
+      <p><b>&times;N on a card means the same opening was found N times</b>,
+      and it folds two different things. One is an advertisement <em>reposted</em>
+      -- same firm, same place, same text -- where the newest is kept; one
+      Singapore recruiter republishes the identical ad every five days under a
+      fresh id. The location is part of that test on purpose: a firm that sends
       one description to every office is hiring in every office, so Hong Kong
       and London stay two cards rather than becoming one.</p>
+      <p>The other is <b>one job carried by two sources</b> -- a firm's own
+      careers board and a national board that republishes it, which is what a
+      national board is for. Barclays' <em>Quantitative Analytics Associate Off
+      Cycle Internship</em> is on its own Workday board and on MyCareersFuture,
+      and nothing about the two rows matches: different employer identity,
+      different address, and 7,875 characters of description on one against
+      none on the other. So that fold is decided by the firm, the place and the
+      title together, and the firm test is strict &mdash; <em>Squarepoint
+      Services Singapore</em> and <em>Squarepoint Ops</em> are one company;
+      <em>Blockchain Capital</em> and <em>Chevron Singapore</em> are not, and
+      neither are the seven different firms advertising a job called
+      <em>Trader</em> in Singapore. The card kept is whichever this board rates
+      higher, because the two copies are read separately and do not always
+      agree, and the closing date comes across with it.</p>
     </div>
   </main>
 </div>
@@ -1060,55 +1091,91 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     if (Object.keys(rec).length) corrections[job.id] = rec; else delete corrections[job.id];
     persistCorrections();
     job.v = FACETS.map((f) => f.get(job));
-    commit();
 
-    // `web/serve.py` upserts this straight into `quantscraper/labels.csv` when
-    // run locally. The deployed board has no server of its own -- see
-    // CLAUDE.md's "Publishing it" -- so it posts to a small Lambda instead
-    // (`functions/correction_writer`), which `python -m quantscraper
-    // corrections` reads back on the next pull. A bare `http.server` or
-    // `file://` has no route to answer either one, so a failed request is
-    // expected there and the export button is the fallback for that case.
-    const [ats, token, ...rest] = job.id.split(":");
-    const endpoint = (location.hostname === "localhost" || location.hostname === "127.0.0.1")
-      ? "/correction" : "https://quantjobs-api.spawned.app/correction";
-    fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        ats, token, job_id: rest.join(":"), dim, value,
-        title: job.title, firm: job.firmDomain || job.firm,
-        location: job.loc || "", department: job.team || "",
-        url: job.url || "", description: job.about || "",
-      }),
-    }).catch(() => {});
+    // **The grid is deliberately not rebuilt here, and that is the whole fix.**
+    // A correction is made from inside a card's hover panel, so rebuilding the
+    // grid destroys the control being used: the `<select>` the reader just
+    // changed leaves the document while its own `change` event is still being
+    // dispatched, focus falls to `<body>`, `.deep` stops matching `:hover` and
+    // shuts, and the second dropdown cannot be reached without finding and
+    // hovering the card again. Measured before this changed: the select node
+    // was gone, `document.activeElement` was `BODY`, and the panel's computed
+    // `display` was `none` -- one click after the reader opened it. It also
+    // re-laid-out every card on the page over a change to one posting, which
+    // is what "the ones I just showed disappeared" was.
+    //
+    // So the card is patched where it stands and only the rail is recounted.
+    // A posting rejected here stays on the page, dimmed and marked, until the
+    // next filter change rebuilds the grid -- which is also what makes the
+    // click undoable without going hunting for it under `Rejected`.
+    patchCard(job);
+    render(false);
+    queueCorrection(job, dim, value);
   }
 
-  // A CSV shaped exactly like `quantscraper/labels.csv`'s own header, so the
-  // download can be pasted straight into the hand-labelled sheet that trains
-  // the lexicon -- the board has no backend to write the database itself.
-  const csvCell = (v) => {
-    const s = String(v ?? "");
-    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
-  };
-  function exportCorrections() {
-    const header = ["n", "relevance", "seniority", "note", "title", "firm",
-      "location", "department", "url", "description", "ats", "token", "job_id"];
-    const lines = [header.join(",")];
-    Object.keys(corrections).forEach((id, i) => {
-      const j = jobs.find((x) => x.id === id);
-      if (!j) return;
-      const [ats, token, ...rest] = id.split(":");
-      const rec = corrections[id];
-      lines.push([i + 1, rec.rel || "", rec.sen || "", "corrected from the board", j.title,
-        j.firmDomain || j.firm, j.loc || "", j.team || "", j.url || "", j.about || "",
-        ats, token, rest.join(":")].map(csvCell).join(","));
+  // --- getting a correction off this page ----------------------------------
+
+  // `web/serve.py` upserts one straight into `quantscraper/labels.csv` when the
+  // board is run locally. The deployed board has no server of its own -- see
+  // CLAUDE.md's "Publishing it" -- so it posts to a small Lambda instead
+  // (`functions/correction_writer`), which `python -m quantscraper corrections`
+  // reads back on the next pull.
+  //
+  // Neither route exists over `file://` or a bare `http.server`, and a phone
+  // can be offline, so a failed POST is **kept and retried** rather than
+  // dropped on the floor. That queue is what the `export corrections` download
+  // used to be for, minus the button, the CSV and the merge by hand at the
+  // other end: the correction is already stored and already showing, and the
+  // only open question is whether it has been delivered. The rail answers that
+  // question when the answer is no, and says nothing at all when it is yes.
+  const ENDPOINT = (location.hostname === "localhost" || location.hostname === "127.0.0.1")
+    ? "/correction" : "https://quantjobs-api.spawned.app/correction";
+
+  let pending = [];
+  try { pending = JSON.parse(localStorage.getItem("board.pending") || "[]"); } catch { pending = []; }
+  const persistPending = () => localStorage.setItem("board.pending", JSON.stringify(pending));
+  let sending = false;
+
+  function queueCorrection(job, dim, value) {
+    const [ats, token, ...rest] = job.id.split(":");
+    pending.push({
+      ats, token, job_id: rest.join(":"), dim, value,
+      title: job.title, firm: job.firmDomain || job.firm,
+      location: job.loc || "", department: job.team || "",
+      url: job.url || "", description: job.about || "",
     });
-    const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url; a.download = "corrections.csv"; a.click();
-    URL.revokeObjectURL(url);
+    persistPending();
+    drain();
+  }
+
+  // One at a time, in the order they were made, and a failure **stops** the run
+  // rather than retrying in a loop: an offline board would otherwise spend the
+  // rest of the session posting into a void. The next correction, the retry
+  // link, or the next page load picks it up again.
+  function drain() {
+    if (sending || !pending.length) { showSync(); return; }
+    sending = true;
+    showSync();
+    const item = pending[0];
+    fetch(ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(item),
+    }).then((res) => {
+      if (!res.ok) throw new Error(String(res.status));
+      if (pending[0] === item) { pending.shift(); persistPending(); }
+      sending = false;
+      drain();
+    }).catch(() => { sending = false; showSync(); });
+  }
+
+  function showSync() {
+    const node = $("sync");
+    node.hidden = pending.length === 0;
+    node.dataset.bad = sending || !pending.length ? "0" : "1";
+    node.textContent = sending
+      ? `saving ${pending.length}…`
+      : `${pending.length} unsent · retry`;
   }
 
   // --- facets --------------------------------------------------------------
@@ -1241,6 +1308,13 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     job.v = FACETS.map((f) => f.get(job));
   }
 
+  // Which values each facet holds *anywhere* in the corpus, as against under
+  // the filter showing. The rail lists these whatever is ticked, so its height
+  // stops changing under the reader's hand -- see `drawFacets`, where dropping
+  // a value that had fallen to zero was making the whole rail jump on a click.
+  const UNIVERSE = FACETS.map(() => new Set());
+  for (const job of jobs) job.v.forEach((values, i) => { for (const v of values) UNIVERSE[i].add(v); });
+
   // --- state ---------------------------------------------------------------
 
   const FRESH = () => ({
@@ -1253,12 +1327,18 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     sel: Object.fromEntries(FACETS.map((f) => [f.key, []])),
     only: null,            // "saved" | "rejected" | null
     mute: [],              // keys of `exclude` presets currently hiding matches
+    // Which facets are expanded. It lives in the saved state rather than only
+    // in the DOM so that it survives a reload: the reader opens `Asset class`
+    // once, not once per visit. A key absent here is a facet nobody has
+    // touched, which falls back to the configured default.
+    open: {},
   });
 
   let state = FRESH();
   try {
     const stored = JSON.parse(localStorage.getItem("board.state") || "null");
-    if (stored && stored.sel) state = { ...FRESH(), ...stored, sel: { ...FRESH().sel, ...stored.sel } };
+    if (stored && stored.sel) state = { ...FRESH(), ...stored, sel: { ...FRESH().sel, ...stored.sel },
+                                        open: { ...(stored.open || {}) } };
   } catch { /* a corrupt blob is not worth a broken board */ }
 
   const save = () => localStorage.setItem("board.state", JSON.stringify(state));
@@ -1541,15 +1621,27 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     return `<span class="due" data-lvl="${lvl}" title="Closes ${esc(stamp(job.due))}">${esc(dueText(job.left))}</span>`;
   }
 
+  // The blank option is "no correction of mine", which is not the same thing
+  // as `unknown`: choosing it deletes the override and restores whatever the
+  // tagger said. So it names that value rather than implying the posting has
+  // none. Without this the control lied in both directions -- it read
+  // `relevance: unknown` on a posting the tagger had graded `adjacent`, and
+  // clearing an override looked like asserting that nothing was known.
   function reclassSelect(job, dim, name, scale) {
-    const current = job[dim] || "";
-    const opts = [`<option value=""${current ? "" : " selected"}>${name}: unknown</option>`]
+    const mine = (corrections[job.id] || {})[dim] || "";
+    const origin = job._orig[dim];
+    const zero = origin === undefined ? `${name}: unknown` : `${name}: ${label(origin)} · tagger`;
+    const opts = [`<option value=""${mine ? "" : " selected"}>${esc(zero)}</option>`]
       .concat(scale.map((v) =>
-        `<option value="${v}"${current === v ? " selected" : ""}>${esc(label(v))}</option>`));
-    return `<select class="mini" data-id="${attr(job.id)}" data-dim="${dim}">${opts.join("")}</select>`;
+        `<option value="${v}"${mine === v ? " selected" : ""}>${esc(label(v))}</option>`));
+    return `<select class="mini" data-id="${attr(job.id)}" data-dim="${dim}"
+        data-mine="${mine ? 1 : 0}">${opts.join("")}</select>`;
   }
 
-  function deep(job) {
+  // Split from `deep` so that a correction can rewrite the read-only half of
+  // the panel without touching the half holding the controls -- the buttons and
+  // the two dropdowns survive, which is the point.
+  function deepRows(job) {
     const rows = [];
     if (job.loc) rows.push(["where", esc(job.loc)]);
     if (job.team) rows.push(["team", esc(job.team)]);
@@ -1561,10 +1653,13 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     if (job.lang && job.lang.length) rows.push(["stack", job.lang.map((v) => esc(label(v))).join(", ")]);
     if (job.excl && job.excl.length) rows.push(["excluded as", job.excl.map((v) => esc(label(v))).join(", ")]);
     rows.push(["source", `${esc(job.ats)}${job.firmDomain ? " · " + esc(job.firmDomain) : ""}`]);
+    return rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+  }
 
+  function deep(job) {
     return `<div class="deep">
       ${job.about ? `<p>${esc(job.about)}</p>` : ""}
-      <dl>${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>
+      <dl>${deepRows(job)}</dl>
       <div class="acts">
         ${job.url ? `<button class="act go" data-act="open">open ↗</button>` : ""}
         <button class="act${saved.has(job.id) ? " on" : ""}" data-act="save">${saved.has(job.id) ? "saved" : "save"}</button>
@@ -1574,7 +1669,7 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
           ${job.rel === "rejected" ? "rejected ✓" : "reject"}
         </button>
       </div>
-      <div class="acts reclass" title="Correct the tagger -- an override sorts, filters and exports as this value">
+      <div class="acts reclass" title="Correct the tagger -- an override sorts, filters and displays as this value, and is sent to the labelling sheet">
         ${reclassSelect(job, "rel", "relevance", RELEVANCE_SCALE)}
         ${reclassSelect(job, "sen", "seniority", SENIORITY_SCALE)}
       </div>
@@ -1597,7 +1692,7 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
         : esc(job.title)}</h3>
       <div class="who"><span class="firm" data-firm="${attr(job.firm)}" title="Show only this firm">${esc(job.firmName)}</span>${
         job.dup > 1
-          ? `<span class="dup" title="This advertisement was posted ${job.dup} times with the same text, in the same place, by the same firm. The newest is shown.">×${job.dup}</span>`
+          ? `<span class="dup" title="This opening was found ${job.dup} times — the same firm, the same place. Either one advertisement reposted, or a national board carrying a job the firm also advertises itself. One card is shown.">×${job.dup}</span>`
           : ""}</div>
       <div class="where">
         ${(job.hub || []).map((h) => `<span class="hub">${esc(label(h))}</span>`).join("")}
@@ -1661,14 +1756,12 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
   const PAGE = 60;
   const MEMBERS = 80;
   let queue = [], drawn = 0, opened = new Set();
-  // The reader's own open/closed choice per facet, read off the DOM before each
-  // rebuild. A key absent here is a facet nobody has touched, which is what
-  // falls back to the configured default. Same idea as `opened` one pane over:
-  // the rail is rebuilt wholesale on every commit, so anything the reader did
-  // to it lives only in the DOM until something writes it down.
-  const facetOpen = new Map();
 
-  function render() {
+  // `rebuild: false` recounts the rail and the crumbs and leaves the grid
+  // exactly where it is. A reclassification uses it: the one card it changed is
+  // patched in place, and tearing the grid down around a control the reader is
+  // still holding is precisely the thing being avoided.
+  function render(rebuild = true) {
     // How deep the reader had drawn before this render. `commit()` re-renders on
     // every filter click and every reclassify, and the grid is rebuilt from
     // nothing each time -- so without this a reader who had clicked "show more"
@@ -1676,8 +1769,9 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     // tick, which reads as the board forgetting what it was showing.
     const want = drawn;
     const { visible, counts } = sift();
-    drawFacets(counts);
+    const hold = drawFacets(counts);
     drawCrumbs(visible.length);
+    if (!rebuild) { hold(); return; }
 
     queue = units(order(visible));
     drawn = 0;
@@ -1687,6 +1781,7 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
       $("tail").hidden = true;
       $("grid").innerHTML = `<div class="empty" style="grid-column:1/-1"><strong>Nothing matches.</strong>
         ${state.q ? "Try a shorter query, " : ""}loosen a filter or <button class="linky" data-act="clear">clear all</button>.</div>`;
+      hold();
       return;
     }
     more();
@@ -1695,6 +1790,7 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     // try to draw three hundred. `more()` advances `drawn` by at least one
     // whenever the queue has anything left, so this terminates.
     while (drawn < want && drawn < queue.length) more();
+    hold();
   }
 
   function more() {
@@ -1741,20 +1837,97 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     opened.delete(node.dataset.key);
   }
 
+  // Everything on a card that a save or a correction can change, written where
+  // the card stands. Re-rendering the card instead is the bug this replaces: it
+  // destroys the control the reader is holding at the moment they use it.
+  //
+  // Matched by walking the drawn cards rather than through a selector, because
+  // a posting id is `ats:token:job_id` and the last part is whatever the board
+  // published -- not something to interpolate into a selector. A job can hold
+  // more than one card when the grouping is by place, so every match is
+  // patched, not the first.
+  function patchCard(job) {
+    for (const card of $("grid").querySelectorAll(".card[data-id]")) {
+      if (card.dataset.id !== job.id) continue;
+      const rejected = job.rel === "rejected";
+      if (rejected) card.dataset.rejected = "1"; else delete card.dataset.rejected;
+      if (saved.has(job.id)) card.dataset.saved = "1"; else delete card.dataset.saved;
+
+      const reject = card.querySelector("[data-act='reject']");
+      if (reject) {
+        reject.classList.toggle("on", rejected);
+        reject.textContent = rejected ? "rejected ✓" : "reject";
+      }
+      const keep = card.querySelector("[data-act='save']");
+      if (keep) {
+        keep.classList.toggle("on", saved.has(job.id));
+        keep.textContent = saved.has(job.id) ? "saved" : "save";
+      }
+      const list = card.querySelector(".deep dl");
+      if (list) list.innerHTML = deepRows(job);
+      const tags = card.querySelector(".tags");
+      if (tags) tags.innerHTML = chips(job);
+      for (const select of card.querySelectorAll("select.mini[data-dim]")) {
+        const mine = (corrections[job.id] || {})[select.dataset.dim] || "";
+        select.value = mine;
+        select.dataset.mine = mine ? "1" : "0";
+      }
+    }
+  }
+
   // --- rail ----------------------------------------------------------------
 
+  // **The rail is built once and updated in place from then on.** Replacing
+  // `#facets` wholesale threw away three things the reader had just done: the
+  // open/closed state each `<details>` keeps natively (restored from a map,
+  // which worked, and was one more thing to keep in step), the focus ring on
+  // the option they had clicked, and the rail's own scroll offset. Only the
+  // option lists actually change, so only the option lists are rewritten.
+  let railNodes = null;
+
+  function buildRail() {
+    $("facets").innerHTML = FACETS.map((f) => `<details class="facet" data-key="${attr(f.key)}"${
+      (state.open[f.key] ?? f.open) ? " open" : ""}>
+      <summary>${esc(f.label)}<span class="live" hidden></span></summary>
+      <div class="facet-body"></div>
+    </details>`).join("");
+    railNodes = {};
+    for (const node of $("facets").children) railNodes[node.dataset.key] = node;
+  }
+
   function drawFacets(counts) {
-    // Read the reader's open/closed choice off the rail before it is replaced.
-    // `<details>` toggles natively with no handler of ours behind it, so the DOM
-    // is the only place that choice exists, and `innerHTML =` below destroys it.
-    for (const node of $("facets").querySelectorAll("details.facet[data-key]")) {
-      facetOpen.set(node.dataset.key, node.open);
-    }
-    const html = FACETS.map((facet, i) => {
+    if (!railNodes) buildRail();
+
+    // The facet the reader is working in must not move. The rail scrolls, and
+    // a narrower filter makes it shorter, so a click near the bottom slid the
+    // whole thing up under the cursor -- measured at 3,000px of scroll becoming
+    // 1,885px on one tick, which from the reader's seat is the rail folding up
+    // rather than scrolling. Held by hand: whatever offset this facet had
+    // before the counts changed, it has again afterwards.
+    const held = document.activeElement && document.activeElement.closest
+      ? document.activeElement.closest("details.facet") : null;
+    const heldTop = held ? held.getBoundingClientRect().top : 0;
+    const focused = document.activeElement && document.activeElement.dataset
+      ? [document.activeElement.dataset.facet, document.activeElement.dataset.value] : null;
+
+    $("presets").innerHTML = PRESETS.map((p) => {
+      const on = p.only ? state.only === p.only : p.exclude ? state.mute.includes(p.key) : p.key === activePreset();
+      return `<button class="preset" data-preset="${p.key}" aria-pressed="${on}" data-exclude="${p.exclude ? 1 : 0}">
+        <span>${esc(p.label)}</span><span class="n">${presetCount(p).toLocaleString()}</span></button>`;
+    }).join("");
+
+    FACETS.forEach((facet, i) => {
+      const node = railNodes[facet.key];
       const tally = counts[i];
       const picked = state.sel[facet.key];
-      const order = facet.order || [];
-      const values = [...new Set([...order.filter((v) => tally.has(v) || picked.includes(v)),
+      // **An ordered value stays on the rail at zero.** Dropping it made the
+      // rail's height a function of what was ticked -- one click and it lost a
+      // hundred rows, the scroll clamped, and everything jumped. A zero is
+      // information too: it says the value exists and nothing showing has it,
+      // which is exactly what `data-empty` was already styled to say.
+      // `UNIVERSE` is what stops this listing values no posting anywhere holds.
+      const order = (facet.order || []).filter((v) => UNIVERSE[i].has(v) || picked.includes(v));
+      const values = [...new Set([...order,
                                   ...[...tally.keys()].filter((v) => !order.includes(v))
                                     .sort((a, b) => tally.get(b) - tally.get(a) || String(a).localeCompare(b))])];
       const shown = facet.limit ? values.slice(0, facet.limit) : values;
@@ -1772,31 +1945,33 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
         </button>`;
       }).join("");
 
-      // A facet the reader opened or closed by hand keeps that state; one they
-      // have never touched falls back to the configured default, or opens
-      // because it holds a live tick. The reader's choice wins over that second
-      // rule too -- a facet closed on purpose must stay closed when a preset
-      // fills it, and the count badge on the summary still says it is active.
-      const isOpen = facetOpen.has(facet.key)
-        ? facetOpen.get(facet.key) : (facet.open || picked.length > 0);
-      return `<details class="facet" data-key="${attr(facet.key)}"${isOpen ? " open" : ""}>
-        <summary>${esc(facet.label)}${picked.length ? `<span class="live">${picked.length}</span>` : ""}</summary>
-        <div class="facet-body">${body || '<span class="opt" data-empty="1">nothing here</span>'}
-          ${facet.limit && values.length > facet.limit
-            ? `<span class="opt" data-empty="1"><span class="name">+${(values.length - facet.limit).toLocaleString()} more — use search</span></span>` : ""}
-        </div>
-      </details>`;
-    }).join("");
-    $("facets").innerHTML = html;
+      node.querySelector(".facet-body").innerHTML =
+        (body || '<span class="opt" data-empty="1">nothing here</span>')
+        + (facet.limit && values.length > facet.limit
+          ? `<span class="opt" data-empty="1"><span class="name">+${(values.length - facet.limit).toLocaleString()} more — use search</span></span>` : "");
 
-    $("presets").innerHTML = PRESETS.map((p) => {
-      const on = p.only ? state.only === p.only : p.exclude ? state.mute.includes(p.key) : p.key === activePreset();
-      return `<button class="preset" data-preset="${p.key}" aria-pressed="${on}" data-exclude="${p.exclude ? 1 : 0}">
-        <span>${esc(p.label)}</span><span class="n">${presetCount(p).toLocaleString()}</span></button>`;
-    }).join("");
+      const live = node.querySelector("summary .live");
+      live.hidden = picked.length === 0;
+      live.textContent = picked.length || "";
+    });
 
+    // The option the reader clicked sat in a body that has just been rewritten,
+    // so give it its focus back -- otherwise a keyboard reader is dropped onto
+    // `<body>` after every tick and cannot press Space twice. Matched by value
+    // rather than through a selector: a facet value can be `hong kong` or
+    // `c++`, and neither is a safe selector fragment.
+    if (focused && focused[0]) {
+      for (const node of $("facets").querySelectorAll(".opt[data-facet]")) {
+        if (node.dataset.facet === focused[0] && node.dataset.value === focused[1]) {
+          node.focus({ preventScroll: true });
+          break;
+        }
+      }
+    }
     $("clear").hidden = !dirty();
-    $("export").hidden = Object.keys(corrections).length === 0;
+    return () => {
+      if (held && held.isConnected) $("rail").scrollTop += held.getBoundingClientRect().top - heldTop;
+    };
   }
 
   const presetCache = new Map();
@@ -1861,6 +2036,17 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     if (opt) toggle(opt.dataset.facet, opt.dataset.value);
   });
 
+  // `toggle` does not bubble, hence the capture phase. Every route into a
+  // `<details>` ends up here -- the mouse, Enter, Space, and the preset handler
+  // opening one below -- so what is saved cannot drift from what is on screen,
+  // which is the failure mode of writing this down at the click instead.
+  $("facets").addEventListener("toggle", (e) => {
+    const key = e.target.dataset && e.target.dataset.key;
+    if (!key || state.open[key] === e.target.open) return;
+    state.open[key] = e.target.open;
+    save();
+  }, true);
+
   $("presets").addEventListener("click", (e) => {
     const button = e.target.closest("[data-preset]");
     if (!button) return;
@@ -1874,7 +2060,12 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
       const want = probeOf(preset);
       const off = activePreset() === preset.key;
       for (const k of Object.keys(want)) {
-        if (want[k].length) state.sel[k] = off ? [] : want[k];
+        if (!want[k].length) continue;
+        state.sel[k] = off ? [] : want[k];
+        // Show the reader what the preset just ticked, and only on the way on:
+        // a facet they closed on purpose stays closed when it is turned back
+        // off, and closing it again sticks.
+        if (!off && railNodes[k]) railNodes[k].open = true;
       }
     }
     commit();
@@ -1889,10 +2080,11 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
   });
 
   $("clear").addEventListener("click", reset);
-  $("export").addEventListener("click", exportCorrections);
+  $("sync").addEventListener("click", drain);
   function reset() {
-    const { sort, pin, group } = state;
-    state = { ...FRESH(), sort, pin, group };
+    // `open` is not a filter. Clearing the board must not fold the rail up.
+    const { sort, pin, group, open } = state;
+    state = { ...FRESH(), sort, pin, group, open };
     $("q").value = "";
     commit();
   }
@@ -1906,7 +2098,13 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
       const card = act.closest(".card");
       const job = jobs.find((j) => j.id === card.dataset.id);
       if (act.dataset.act === "open" && job.url) window.open(job.url, "_blank", "noopener");
-      if (act.dataset.act === "save") { saved.has(job.id) ? saved.delete(job.id) : saved.add(job.id); persist(); commit(); }
+      // Patched where it stands rather than re-rendered, same as a
+      // correction: this button lives in the hover panel too, and rebuilding
+      // the grid under it shuts the panel on the click that used it.
+      if (act.dataset.act === "save") {
+        saved.has(job.id) ? saved.delete(job.id) : saved.add(job.id);
+        persist(); patchCard(job); render(false);
+      }
       if (act.dataset.act === "reject") { reclassify(job, "rel", job.rel === "rejected" ? "" : "rejected"); }
       if (act.dataset.act === "firm") { state.sel.firm = [job.firm]; commit(); }
       return;
@@ -1993,6 +2191,7 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     + `${withDates.toLocaleString()} dated · built ${board.built.slice(0, 10)}`;
 
   render();
+  drain();
 })();
 </script>
 </body>

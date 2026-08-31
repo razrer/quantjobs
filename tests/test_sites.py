@@ -15,7 +15,7 @@ import json
 import unittest
 from unittest import mock
 
-from quantscraper import ats, extract, sites
+from quantscraper import ats, db, extract, sites
 
 
 def _nordea_page(count, *rows):
@@ -83,13 +83,13 @@ class RegistrationTest(unittest.TestCase):
         """Tier A with a token is outside both sweeps, which is the point.
 
         `ats.targets` visits untiered domains and `ats.reprobe_targets` visits
-        tier B and tokenless tier A. A hand-written reader must not be quietly
-        replaced by a fingerprint of the firm's marketing site.
+        tier B, tokenless tier A, and tier A holding no postings. A hand-written
+        reader must not be quietly replaced by a fingerprint of the firm's
+        marketing site -- and it is in the third population by construction,
+        because Captor and Norron advertise nothing, which is the answer their
+        readers exist to give.
         """
-        import sqlite3
-
-        connection = sqlite3.connect(":memory:")
-        connection.row_factory = sqlite3.Row
+        connection = db.connect(":memory:")
         sites.register(connection)
         self.assertEqual(ats.reprobe_targets(connection, 100), [])
 

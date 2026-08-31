@@ -116,12 +116,21 @@ ATS_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     # these capture by *name*. Joining by position silently built
     # `wd3|brevanhoward|BH_ExternalCareers` for the second one, which is a
     # well-formed token addressing nothing.
+    #
+    # **The optional locale takes an underscore as well as a hyphen**, and
+    # skipping only the hyphen form put the *locale* in the site's place:
+    # `mmc.wd1.myworkdayjobs.com/en_US/MMC` resolved Mercer to
+    # `mmc|wd1|en_US`, which 404s on every poll -- while `mmc|wd1|MMC`, the
+    # same tenant read correctly from Marsh's own domain, holds 2,437
+    # postings. A capture that lands one segment early is the quiet kind of
+    # wrong: the token is well-formed, the row reads tier A, and the board it
+    # names is a duplicate of one already being read.
     (
         "workday",
         re.compile(
             r"(?<![a-z0-9-])(?P<tenant>[a-z0-9-]{1,63})"
             r"\.(?P<wd>wd\d+)\.myworkdayjobs\.com"
-            r"(?:/wday/cxs/[^/\"']+)?(?:/[a-z]{2}-[A-Z]{2})?/(?P<site>[A-Za-z0-9_-]+)",
+            r"(?:/wday/cxs/[^/\"']+)?(?:/[a-z]{2}[-_][A-Z]{2})?/(?P<site>[A-Za-z0-9_-]+)",
             re.I,
         ),
     ),
@@ -136,16 +145,39 @@ ATS_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         "workday",
         re.compile(
             r"(?P<wd>wd\d+)\.(?P<host>myworkdaysite\.com)/(?:wday/cxs|recruiting)"
-            r"/(?P<tenant>[A-Za-z0-9_-]+)(?:/[a-z]{2}-[A-Z]{2})?"
+            r"/(?P<tenant>[A-Za-z0-9_-]+)(?:/[a-z]{2}[-_][A-Z]{2})?"
             r"/(?P<site>[A-Za-z0-9_-]+)",
             re.I,
         ),
     ),
     ("ashby", re.compile(r"jobs\.ashbyhq\.com/([a-z0-9_.-]+)", re.I)),
     ("smartrecruiters", re.compile(r"(?:careers|jobs)\.smartrecruiters\.com/([a-z0-9_-]+)", re.I)),
-    ("workable", re.compile(r"(?:apply|jobs)\.workable\.com/([a-z0-9_-]+)", re.I)),
+    # `apply.workable.com/j/{shortcode}` is **one posting's page**, not a
+    # board, so the bare path rule read the letter `j` as the board name --
+    # recorded against two unrelated domains at once, which is the "several
+    # firms agree on it" signal, and 404 on every poll. The board form has the
+    # company where `j` sits. Refused structurally rather than by adding `j` to
+    # `_NOT_A_TOKEN`, because it is only infrastructure in this one position.
+    (
+        "workable",
+        re.compile(r"(?:apply|jobs)\.workable\.com/(?!j/)([a-z0-9_-]+)", re.I),
+    ),
     ("teamtailor", re.compile(_HOST_LABEL + r"\.teamtailor\.com", re.I)),
     ("varbi", re.compile(_HOST_LABEL + r"\.varbi\.com", re.I)),
+    # Jobylon's board is the customer's **numeric** id, and it appears in one
+    # place only: the embed URL a careers page loads the widget from. The
+    # `{label}.jobylon.com` form is the vendor's own host -- five rows resolved
+    # to `emp` or to nothing at all through it -- so the embed is matched
+    # first, and only it yields a pollable token.
+    #
+    # A separate, earlier entry rather than one alternation, because
+    # `finditer` takes the leftmost match and the vendor's host starts four
+    # characters before the path does: in
+    # `cdn.jobylon.com/jobs/companies/2551/embed` the host branch wins at
+    # position 8, is refused as infrastructure, and the scan then resumes
+    # *past* the id. `ATS_PATTERNS` is checked in order, so ordering is how
+    # this is expressed.
+    ("jobylon", re.compile(r"jobylon\.com/jobs/companies/(\d{1,9})/embed", re.I)),
     ("jobylon", re.compile(_HOST_LABEL + r"\.jobylon\.com|jobylon\.com/jobs/([a-z0-9-]+)", re.I)),
     # Emply serves each customer from `{board}.career.emply.com`, so the label
     # immediately before the vendor's own `career` host is the board -- not the
@@ -274,6 +306,18 @@ _NOT_A_TOKEN = {
     # and the two `oneclick-ui` rows are the only matches, and **all five hold
     # zero postings**, so nothing that ever produced a posting is refused.
     "na", "oneclick", "ui",
+    # Jobylon's application host. Its real board is the numeric customer id in
+    # the embed URL, so `emp` is what a page yields when it names the vendor
+    # and not the board -- one row held it and it never produced a posting.
+    "emp",
+    # `tbe.taleo.net` is Taleo Business Edition, the host every small tenant on
+    # that product shares. Four unrelated domains claim it -- Varde, Hanover,
+    # Luna and Social Impact -- which is the same "several domains agree on it"
+    # signal the two above were found by. This was written up as a lesson and
+    # never actually added, so the four rows sat tier A polling the vendor.
+    # Dry-run over the corpus first: no posting has ever been recorded under
+    # `tbe`, and no token that does produce postings contains it as a piece.
+    "tbe",
     *(f"v{n}" for n in range(1, 10)),
 }
 
@@ -283,6 +327,10 @@ _NOT_A_TOKEN = {
 # why `vs-errors.eightfold.ai` survived it: `errors` is the vendor's error
 # host and `vs` is nothing, so not every piece qualified. These are checked
 # with `any` instead.
+# The two vendors whose board identifier is genuinely a number -- see the
+# `token.isdigit()` guard in `fingerprint`.
+_NUMERIC_TOKEN_OK = {"workday", "jobylon"}
+
 _NEVER_A_PIECE = {
     "assets", "cdn", "static", "staticfe", "errors", "sentry",
     "preview", "staging", "sandbox",
@@ -345,6 +393,24 @@ class Resolution:
 _VENDOR_ASSETS: tuple[tuple[str, str, tuple[str, ...], str], ...] = (
     ("teamtailor", "teamtailor-cdn.com", ("/jobs.rss",), "<channel"),
     ("avature", "avacdn.net", extract.AVATURE_LIST_PATHS, "article--result"),
+    # iCIMS' career-site product, formerly Jibe, served from the firm's own
+    # hostname exactly like the two above. It is where the classic iCIMS
+    # portals are going: twelve of 36 boards here had already moved, and each
+    # left a redirect stub that answered HTTP 200 with no postings, so the
+    # reader reported an empty board rather than a migration. Recognising the
+    # CDN is what stops the next one being silent for a year.
+    ("icims_cs", "jibecdn.com", ("/api/jobs?limit=1",), '"totalCount"'),
+    # SuccessFactors' RMK career site, on the firm's own hostname like the
+    # three above. It was recorded as closed on evidence about a *different*
+    # surface -- the `?company=` form, which really is a shell with no job id
+    # -- and 61 rows sat tier A with a NULL token because of it. RMK renders
+    # its list server-side: Nomura is 514 postings here, Fitch 266.
+    (
+        "successfactors",
+        "rmkcdn.successfactors.com",
+        ("/search/?q=&startrow=0",),
+        "jobTitle-link",
+    ),
 )
 
 
@@ -498,23 +564,65 @@ def fingerprint(markup: str, url: str | None = None) -> tuple[str, str | None, s
             # A purely numeric token is not a board name. `jobs.lever.co/500`
             # on an error page produced board "500", which then 404s on every
             # poll -- a firm that looks resolved and yields nothing forever.
-            if name != "workday" and token.isdigit():
+            #
+            # Two vendors are exempt because for them the digits *are* the
+            # board: Workday's `wdN`, and Jobylon, whose customers are numbered
+            # and whose embed URL carries nothing else.
+            if name not in _NUMERIC_TOKEN_OK and token.isdigit():
                 continue
-            return name, token, match.group(0)[:120]
-    # Second pass: a vendor's assets on a page served from the firm's own
-    # host. Checked before the infrastructure fallback, because it yields a
-    # usable token where that one yields none.
-    if url:
-        host = urllib.parse.urlsplit(url).netloc.casefold()
-        for name, asset_host, paths, marker in _VENDOR_ASSETS:
-            if asset_host in markup and host and _serves_feed(host, paths, marker):
-                return name, host, f"{asset_host}, feed verified at {host}"
+            named = (name, token, match.group(0)[:120])
+            return _custom_host(markup, url, named) or named
+    # Second pass: a vendor's assets on a page served from the firm's own host.
+    # Checked before the infrastructure fallback, because it yields a usable
+    # token where that one yields none.
+    custom = _custom_host(markup, url, None)
+    if custom:
+        return custom
 
     # Third pass, without a third scan: the ATS is present but every match was
     # infrastructure. `fallback` already holds the first pattern (in the same
     # order this loop would have checked) that matched anywhere in the page.
     if fallback:
         return fallback[0], None, fallback[1]
+    return None
+
+
+def _custom_host(
+    markup: str, url: str | None, named: tuple[str, str, str] | None
+) -> tuple[str, str, str] | None:
+    """A board the page's own host actually serves, if there is one.
+
+    This is the only rule in `fingerprint` whose evidence is a *request*:
+    `_serves_feed` asks the host for the feed the reader will ask for, where
+    every host pattern is a string in markup and nothing more.
+
+    **`named` is what the host patterns already found, and whether it wins
+    turns on one thing: the vendor.**
+
+      * *Same vendor* -- the named token wins. `careers.optiver.com` and
+        `optiver.teamtailor.com` are one board on two hostnames, and a page
+        that names the board outright must yield the board.
+      * *Different vendor* -- this wins, because the two are then different
+        products and only one of them is live. iCIMS' career sites still print
+        `careers-{token}.icims.com` for their login link, so the classic-portal
+        pattern matched and won -- and that portal is the 150-byte redirect
+        stub the firm migrated *away* from. Principal, AXA and SiriusXM each
+        resolved to a board with no postings while the live one, 1,684
+        postings between them, sat on the same page. SIG is the same shape and
+        the gain is not only volume: its 250 postings arrive from the career
+        site with a location and a description, and from the classic portal
+        with neither.
+    """
+    if not url:
+        return None
+    host = urllib.parse.urlsplit(url).netloc.casefold()
+    if not host:
+        return None
+    for name, asset_host, paths, marker in _VENDOR_ASSETS:
+        if named and named[0] == name:
+            continue
+        if asset_host in markup and _serves_feed(host, paths, marker):
+            return name, host, f"{asset_host}, feed verified at {host}"
     return None
 
 
@@ -655,6 +763,30 @@ def reprobe_targets(connection: sqlite3.Connection, limit: int) -> list[sqlite3.
       * **tier A with no token** -- a board nobody can poll. `targets` skips it
         because it *is* tiered, and a tier-B sweep never touches it either. 98
         rows sat in that state once, `lynxhedge.se` among them.
+      * **tier A with a token that has never produced a posting** -- the same
+        silence one door over, and it was the larger population: 167 rows, of
+        which the token was simply *stale* on many. Three carried a `/`
+        from a JSON island the escape table did not yet undo; four carried
+        `tbe`, the shared Taleo Business Edition host, which was written up as
+        a lesson and only actually refused once this sweep found it. Every one of
+        them read as resolved everywhere and nothing ever re-asked, because
+        having a token is what both other clauses test for. A board that is
+        genuinely empty -- Lynx, Nordic Capital -- costs one re-walk that
+        confirms it, and `_improves` refuses to demote it.
+
+        **`sites.py` rows are excluded from that last clause and must stay
+        excluded.** A hand-written reader is there precisely because the walk
+        could not find the board, so re-walking it can only replace a verified
+        answer with a fingerprint of the firm's marketing site. Captor and
+        Norron are the case: both advertise nothing today, which is a real
+        answer their readers were written to give, and both would otherwise
+        be swept up for producing no postings.
+
+        The marker is the evidence string rather than `ats = 'site'`, because
+        two thirds of that file's entries name an extractor that already exists
+        -- Nasdaq is ordinary Workday and Two Sigma is Avature -- so testing
+        the ATS name would protect only the third with its own reader and leave
+        the hand-verified tokens exposed to exactly the overwrite this guards.
 
     Tier C is deliberately absent. It was measured rather than assumed: 150
     tier-C domains were re-walked with the standard careers paths guessed on
@@ -668,10 +800,14 @@ def reprobe_targets(connection: sqlite3.Connection, limit: int) -> list[sqlite3.
     """
     return connection.execute(
         """
-        SELECT domain, careers_url FROM ats_resolution
-        WHERE tier = 'B'
-           OR (tier = 'A' AND token IS NULL)
-        ORDER BY tier, domain
+        SELECT domain, careers_url FROM ats_resolution a
+        WHERE a.tier = 'B'
+           OR (a.tier = 'A' AND a.token IS NULL)
+           OR (a.tier = 'A'
+               AND COALESCE(a.evidence, '') NOT LIKE '%sites.py%'
+               AND NOT EXISTS (
+                 SELECT 1 FROM jobs j WHERE j.ats = a.ats AND j.token = a.token))
+        ORDER BY a.tier, a.domain
         LIMIT ?
         """,
         (limit,),

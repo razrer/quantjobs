@@ -80,6 +80,280 @@ class IcimsPagingTest(unittest.TestCase):
             self.assertEqual(len(extract.icims("acme")), 1)
 
 
+class IcimsMigrationTest(unittest.TestCase):
+    """A migrated portal answers HTTP 200 with a script and no postings.
+
+    Principle 2 exactly: a scraper that breaks and returns zero rows with HTTP
+    200 is more dangerous than one that crashes, because nothing announces it.
+    Twelve of 36 boards were in that state -- Principal, AXA and SiriusXM among
+    them -- and every one was reported as "an empty board".
+    """
+
+    STUB = (
+        "<script type=\"text/javascript\">window.top.location.href = "
+        "'https:\/\/careers.principal.com\/us\/jobs';</script>"
+    )
+
+    def test_a_stub_pointing_off_icims_is_loud_and_names_the_target(self):
+        with mock.patch.object(extract.http, "get_text", return_value=self.STUB):
+            with self.assertRaises(ValueError) as caught:
+                extract.icims("principal")
+        self.assertIn("https://careers.principal.com/us/jobs", str(caught.exception))
+
+    def test_a_stub_pointing_at_another_portal_is_followed(self):
+        """The prefix is not always `careers-`.
+
+        `allcareers-frankrimerman` and `uscareers-siriusxmradio` are both real,
+        so a target still on `icims.com` is the same board under a different
+        prefix rather than a migration.
+        """
+        stub = (
+            "<script>window.top.location.href = "
+            "'https:\/\/allcareers-acme.icims.com\/jobs\/search';</script>"
+        )
+        pages = [stub, _page(("7", "quant-analyst"), host="allcareers-acme.icims.com"), _page()]
+        with mock.patch.object(extract.http, "get_text", side_effect=pages) as fetch:
+            jobs = extract.icims("acme")
+
+        self.assertEqual([j.job_id for j in jobs], ["7"])
+        self.assertTrue(fetch.call_args_list[1].args[0].startswith(
+            "https://allcareers-acme.icims.com/"
+        ))
+        self.assertEqual(
+            jobs[0].url,
+            "https://allcareers-acme.icims.com/jobs/7/quant-analyst/job",
+        )
+
+    def test_a_stub_on_a_page_that_also_lists_jobs_is_not_a_migration(self):
+        """The redirect script and postings together means the portal works."""
+        body = self.STUB + _page(("1", "trader"))
+        with mock.patch.object(extract.http, "get_text", side_effect=[body, _page()]):
+            self.assertEqual([j.job_id for j in extract.icims("acme")], ["1"])
+
+
+class BambooHrRetirementTest(unittest.TestCase):
+    """A retired subdomain 302s to the vendor's marketing site.
+
+    The JSON endpoint then answers HTTP 200 with a page of HTML, and the reader
+    failed with `JSONDecodeError: Expecting value: line 1 column 1` -- four
+    boards saying "this customer is gone" in the least readable way available.
+    Same signal as iCIMS' redirect stub, caught the same way.
+    """
+
+    def test_a_redirect_off_the_board_host_is_loud_and_names_the_target(self):
+        with mock.patch.object(
+            extract.http,
+            "get_with_url",
+            return_value=(b"<html>marketing</html>", "https://www.bamboohr.com/"),
+        ):
+            with self.assertRaises(ValueError) as caught:
+                extract.bamboohr("alphaconnect")
+        self.assertIn("https://www.bamboohr.com/", str(caught.exception))
+
+    def test_a_live_board_still_reads(self):
+        payload = json.dumps(
+            {"result": [{"id": 7, "jobOpeningName": "Quant", "atsLocation": "Toronto"}]}
+        ).encode()
+        with mock.patch.object(
+            extract.http,
+            "get_with_url",
+            return_value=(payload, "https://sprott.bamboohr.com/careers/list"),
+        ):
+            jobs = extract.bamboohr("sprott")
+        self.assertEqual(jobs[0].url, "https://sprott.bamboohr.com/careers/7")
+        self.assertEqual(jobs[0].location, "Toronto")
+
+    def test_an_empty_board_is_an_answer_not_a_failure(self):
+        with mock.patch.object(
+            extract.http,
+            "get_with_url",
+            return_value=(b'{"result": []}', "https://carval.bamboohr.com/careers/list"),
+        ):
+            self.assertEqual(extract.bamboohr("carval"), [])
+
+
+class SuccessFactorsTest(unittest.TestCase):
+    """The vendor recorded as closed, on evidence about a different surface.
+
+    What had been tested is the `?company=pfapensionP` form, which really does
+    answer a shell with no job id. The firms here run RMK on their own
+    hostname and it renders its list server-side -- Nomura 514 postings, Fitch
+    266, Janus Henderson 81 -- and 61 rows sat tier A with a NULL token behind
+    that note.
+    """
+
+    TABLE = (
+        '<tr class="data-row">'
+        '<td><span class="jobTitle"><a href="/job/Sydney-Quant-NSW/1414440600/"'
+        ' class="jobTitle-link">Quantitative Analyst</a></span>'
+        '<span class="jobLocation">Sydney, NSW, AU</span>'
+        '<span class="jobDepartment">Research</span></td></tr>'
+    )
+    TILE = (
+        '<li class="job-tile job-id-1431979833" data-url="/x">'
+        '<div class="tiletitle"><a class="jobTitle-link"'
+        ' href="/Clarksons/job/Hong-Kong-Broker/1431979833/">Shipbroker</a></div>'
+        '<div id="job-1431979833-desktop-section-city-value">Hong Kong </div></li>'
+    )
+
+    def _page(self, body, total=None, tile=False):
+        head = ""
+        if total is not None:
+            head = (
+                f'<span>Showing 1 to 25 of {total} Jobs</span>'
+                if tile
+                else f"<span>Results 1 &#8211; 25 of <b>{total}</b></span>"
+            )
+        return head + body
+
+    def test_the_table_layout_is_read_with_its_place_and_department(self):
+        pages = [self._page(self.TABLE, 1), self._page("", 1)]
+        with mock.patch.object(extract.http, "get_text", side_effect=pages):
+            jobs = extract.successfactors("jobs.janushenderson.com")
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].job_id, "1414440600")
+        self.assertEqual(jobs[0].title, "Quantitative Analyst")
+        self.assertEqual(jobs[0].location, "Sydney, NSW, AU")
+        self.assertEqual(jobs[0].department, "Research")
+
+    def test_the_tile_layout_is_read_too(self):
+        """RMK ships two list layouts and a firm may run either.
+
+        Reading only the table found 81 postings at Janus Henderson and none
+        at Carnegie -- a board answering 200 and coming back empty, which is
+        what a layout gap looks like from outside.
+        """
+        pages = [self._page(self.TILE, 1, tile=True), self._page("", 1, tile=True)]
+        with mock.patch.object(extract.http, "get_text", side_effect=pages):
+            jobs = extract.successfactors("careers.clarksons.com")
+        self.assertEqual(jobs[0].title, "Shipbroker")
+        self.assertEqual(jobs[0].location, "Hong Kong")
+
+    def test_a_path_prefix_in_front_of_job_is_kept(self):
+        """Clarksons serves its board under `/Clarksons`, and reading only the
+        bare `/job/` form found 0 of the 33 postings the page advertises."""
+        pages = [self._page(self.TILE, 1, tile=True), self._page("", 1, tile=True)]
+        with mock.patch.object(extract.http, "get_text", side_effect=pages):
+            jobs = extract.successfactors("careers.clarksons.com")
+        self.assertEqual(
+            jobs[0].url,
+            "https://careers.clarksons.com/Clarksons/job/Hong-Kong-Broker/1431979833/",
+        )
+
+    def test_a_layout_it_cannot_read_is_loud_rather_than_empty(self):
+        """The board states its own size, so a parser gap cannot pass as
+        "this firm is not hiring" -- which is how the tile layout was found."""
+        with mock.patch.object(
+            extract.http, "get_text", return_value=self._page("<tr><td>?</td></tr>", 33)
+        ):
+            with self.assertRaises(ValueError) as caught:
+                extract.successfactors("careers.clarksons.com")
+        self.assertIn("advertises 33", str(caught.exception))
+
+    def test_the_stride_follows_the_server_not_a_constant(self):
+        """RMK's page size is per tenant -- 25 at Janus Henderson, 15 at Scania.
+
+        Stepping `startrow` by a constant skipped ten postings in every
+        twenty-five of Scania's 758, which is the Eightfold trap in a third
+        format. The advertised total caught it and nothing else would have.
+        """
+        page = self._page(self.TABLE * 3, 6)  # a server that serves three
+        with mock.patch.object(
+            extract.http, "get_text", side_effect=[page, self._page(self.TABLE, 6)]
+        ) as fetch:
+            with self.assertRaises(ValueError):
+                extract.successfactors("jobs.scania.com")
+        self.assertIn("startrow=0", fetch.call_args_list[0].args[0])
+        self.assertIn("startrow=3", fetch.call_args_list[1].args[0])
+
+    def test_a_site_that_ignores_startrow_terminates(self):
+        """Serving page one forever is what no empty-page test catches."""
+        with mock.patch.object(
+            extract.http, "get_text", return_value=self._page(self.TABLE, 1)
+        ) as fetch:
+            jobs = extract.successfactors("jobs.janushenderson.com")
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(fetch.call_count, 2)
+        self.assertIn("startrow=0", fetch.call_args_list[0].args[0])
+
+    def test_an_empty_page_advances_by_the_guess_rather_than_stalling(self):
+        """A page with no rows at all must not leave `startrow` where it was."""
+        with mock.patch.object(
+            extract.http, "get_text", return_value=self._page("", 0)
+        ) as fetch:
+            self.assertEqual(extract.successfactors("x"), [])
+        self.assertEqual(fetch.call_count, 1)
+
+
+class IcimsCareerSiteTest(unittest.TestCase):
+    """iCIMS' newer product, served from the firm's own hostname.
+
+    A different surface rather than a different host: a JSON API where the
+    classic portal is list HTML with no location and no description at all.
+    SIG's 250 postings arrive from this one with both.
+    """
+
+    @staticmethod
+    def _payload(total, *rows):
+        return json.dumps(
+            {
+                "totalCount": total,
+                "count": 72,  # a different number, and deliberately not the total
+                "jobs": [{"data": row} for row in rows],
+            }
+        )
+
+    @staticmethod
+    def _row(req_id, title="Quantitative Researcher", **extra):
+        row = {
+            "req_id": req_id,
+            "slug": req_id,
+            "title": title,
+            "full_location": "Bala Cynwyd, Pennsylvania",
+            "posted_date": "2026-08-25T20:58:00+0000",
+            "description": "Research systematic strategies.",
+            "categories": [{"name": "Research"}],
+        }
+        row.update(extra)
+        return row
+
+    def test_it_pages_and_maps_the_fields_the_portal_cannot(self):
+        pages = [self._payload(2, self._row("1"), self._row("2")), self._payload(2)]
+        with mock.patch.object(extract.http, "get_text", side_effect=pages) as fetch:
+            jobs = extract.icims_cs("careers.sig.com")
+
+        self.assertEqual([j.job_id for j in jobs], ["1", "2"])
+        self.assertEqual(jobs[0].location, "Bala Cynwyd, Pennsylvania")
+        self.assertEqual(jobs[0].department, "Research")
+        self.assertEqual(jobs[0].url, "https://careers.sig.com/careers-home/jobs/1")
+        self.assertIn("page=1", fetch.call_args_list[0].args[0])
+
+    def test_the_advertised_total_is_the_check_not_count(self):
+        """`count` is 72 on a board of 117, so believing it would truncate."""
+        with mock.patch.object(
+            extract.http, "get_text", side_effect=[self._payload(500, self._row("1")), self._payload(500)]
+        ):
+            with self.assertRaises(ValueError) as caught:
+                extract.icims_cs("careers.sig.com")
+        self.assertIn("advertises 500", str(caught.exception))
+
+    def test_a_site_that_ignores_page_terminates(self):
+        same = self._payload(1, self._row("1"))
+        with mock.patch.object(extract.http, "get_text", return_value=same) as fetch:
+            jobs = extract.icims_cs("careers.sig.com")
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(fetch.call_count, 2)
+
+    def test_a_posting_with_no_slug_falls_back_to_the_apply_url(self):
+        """Never a link to the board's front door -- the Workday rule."""
+        row = self._row("9", slug=None, apply_url="https://careers-sig.icims.com/jobs/9/login")
+        with mock.patch.object(
+            extract.http, "get_text", side_effect=[self._payload(1, row), self._payload(1)]
+        ):
+            jobs = extract.icims_cs("careers.sig.com")
+        self.assertEqual(jobs[0].url, "https://careers-sig.icims.com/jobs/9/login")
+
+
 class IcimsTitleTest(unittest.TestCase):
     def test_a_slug_becomes_a_readable_title(self):
         self.assertEqual(

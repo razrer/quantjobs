@@ -227,14 +227,30 @@ def recruitee(token: str) -> list[Job]:
 
 
 def bamboohr(token: str) -> list[Job]:
-    payload = _json(f"https://{token}.bamboohr.com/careers/list")
+    """BambooHR. `token` is the subdomain the customer's board is served from.
+
+    **A retired subdomain 302s to the vendor's marketing site**, so the JSON
+    endpoint answers HTTP 200 with a page of HTML and the reader failed with
+    `JSONDecodeError: Expecting value: line 1 column 1` -- four boards saying
+    "this customer is gone" in the least readable way available. It is the same
+    signal as iCIMS' redirect stub, and it is caught the same way: the answer
+    came from somewhere else.
+    """
+    origin = f"https://{token}.bamboohr.com"
+    body, answered = http.get_with_url(f"{origin}/careers/list", timeout=25, retries=2)
+    if not answered.startswith(origin):
+        raise ValueError(
+            f"bamboohr/{token}: board redirects to {answered} -- "
+            "the subdomain is no longer a customer, so re-walk the domain"
+        )
+    payload = json.loads(body.decode("utf-8", errors="replace"))
     return [
         Job(
             ats="bamboohr",
             token=token,
             job_id=str(job["id"]),
             title=job.get("jobOpeningName") or "",
-            url=f"https://{token}.bamboohr.com/careers/{job['id']}",
+            url=f"{origin}/careers/{job['id']}",
             location=_text(
                 (job.get("location") or {}).get("city")
                 if isinstance(job.get("location"), dict)
@@ -331,6 +347,48 @@ def _icims_title(slug: str) -> str:
     return " ".join(word[:1].upper() + word[1:] for word in words)
 
 
+# **A migrated iCIMS board answers HTTP 200 with a 150-byte script and no
+# postings**, which is principle 2's failure exactly: a scraper that breaks and
+# returns zero rows with HTTP 200 is more dangerous than one that crashes,
+# because nothing announces it. Twelve of 36 boards here were in that state,
+# Principal, AXA and SiriusXM among them, every one reported as "an empty
+# board" by a reader that had no way to tell the difference.
+#
+# The stub names where the board went, and that splits in two. A target still
+# on `icims.com` is the same portal under a different prefix -- iCIMS hosts are
+# `{prefix}-{token}.icims.com` and the prefix is not always `careers`
+# (`allcareers-frankrimerman`, `uscareers-siriusxmradio`) -- so it is followed.
+# Anything else is the firm moving to the vendor's newer career-site product on
+# its own hostname, which this reader cannot read, and that is raised with the
+# target in the message so the next walk has somewhere to start.
+_ICIMS_STUB = re.compile(r"window\.top\.location\.href\s*=\s*'([^']+)'")
+
+
+def _icims_page(origin: str, page: int) -> str:
+    return http.get_text(
+        f"{origin}/jobs/search?ss=1&in_iframe=1&pr={page}", timeout=25, retries=2
+    )
+
+
+def _icims_origin(token: str) -> tuple[str, str]:
+    """The portal host actually serving this board, and its first page."""
+    origin = f"https://careers-{token}.icims.com"
+    for _ in range(2):
+        body = _icims_page(origin, 0)
+        stub = _ICIMS_STUB.search(body)
+        if not stub or _ICIMS_JOB.search(body):
+            return origin, body
+        target = stub.group(1).replace("\\", "")
+        host = urllib.parse.urlsplit(target).netloc
+        if not host.endswith(".icims.com"):
+            raise ValueError(
+                f"icims/{token}: board has moved to {target} -- "
+                "not an iCIMS portal, so re-walk the domain"
+            )
+        origin = f"https://{host}"
+    raise ValueError(f"icims/{token}: portal redirects in a loop")
+
+
 def icims(token: str) -> list[Job]:
     """iCIMS, by reading the careers portal. SIG is on this.
 
@@ -346,20 +404,19 @@ def icims(token: str) -> list[Job]:
     """
     jobs: list[Job] = []
     seen: set[str] = set()
+    origin, first = _icims_origin(token)
     for page in range(_ICIMS_PAGES):
-        url = (
-            f"https://careers-{token}.icims.com/jobs/search"
-            f"?ss=1&in_iframe=1&pr={page}"
-        )
-        try:
-            body = http.get_text(url, timeout=25, retries=2)
-        except urllib.error.HTTPError as exc:
-            # A board that has ended answers 404 on the first page. Anything
-            # after that is a paging edge, not a failure worth losing the
-            # postings already read for.
-            if page == 0:
-                raise
-            break
+        if page == 0:
+            body = first
+        else:
+            try:
+                body = _icims_page(origin, page)
+            except urllib.error.HTTPError:
+                # A board that has ended answers 404 on the first page, which
+                # `_icims_origin` has already let through. Anything after that
+                # is a paging edge, not a failure worth losing the postings
+                # already read for.
+                break
         fresh = 0
         for match in _ICIMS_JOB.finditer(body):
             job_id, slug = match.group(1), match.group(2)
@@ -373,7 +430,7 @@ def icims(token: str) -> list[Job]:
                     token=token,
                     job_id=job_id,
                     title=_icims_title(slug),
-                    url=f"https://careers-{token}.icims.com/jobs/{job_id}/{slug}/job",
+                    url=f"{origin}/jobs/{job_id}/{slug}/job",
                 )
             )
         # Stop when a page adds nothing. A portal that ignores `pr` serves page
@@ -794,6 +851,9 @@ def avature(token: str) -> list[Job]:
 # with HTTP 200 one day, which is the Workday trap two hundred lines up.
 _ORACLE_PAGE = 200
 _ORACLE_PAGES = 1_000
+# How much of a board one walk may lose to postings closing while it runs,
+# before the shortfall stops reading as churn and starts reading as truncation.
+_ORACLE_CHURN = 0.02
 
 
 def oracle_hcm(token: str) -> list[Job]:
@@ -825,6 +885,7 @@ def oracle_hcm(token: str) -> list[Job]:
     origin = f"https://{host}"
     jobs: list[Job] = []
     advertised: int | None = None
+    seen_page: str | None = None
     for page in range(_ORACLE_PAGES):
         finder = (
             f"findReqs;siteNumber={site},limit={_ORACLE_PAGE},"
@@ -842,6 +903,24 @@ def oracle_hcm(token: str) -> list[Job]:
         if advertised is None:
             advertised = block.get("TotalJobsCount")
         postings = block.get("requisitionList") or []
+        # **Stop on an empty page, never on a short one.** Oracle serves the
+        # occasional 199-row page in the middle of a board -- measured on
+        # Kotak's tenant, where offset 3,000 hands back 199 and offset 3,200
+        # hands back a full 200 -- so a short-page stop ends the walk wherever
+        # one lands. That truncated Kotak at 3,199 of 9,959 and Tata Capital at
+        # 1,599 of 5,542, and both counts are the round number a cap leaves
+        # behind. This is the Jobbsafari lesson in a second format: the real
+        # last page is the empty one, and past the end Oracle answers with a
+        # block whose `requisitionList` is empty and whose total reads 0.
+        if not postings:
+            break
+        # With the short-page stop gone, a tenant that ignores `offset` would
+        # serve page one until the page bound -- 1,000 requests and 200,000
+        # duplicate rows. Workday needed the same guard for the same reason.
+        this_page = "|".join(str(job.get("Id") or "") for job in postings)
+        if this_page == seen_page:
+            break
+        seen_page = this_page
         for job in postings:
             job_id = str(job.get("Id") or "")
             if not job_id:
@@ -860,12 +939,18 @@ def oracle_hcm(token: str) -> list[Job]:
                     description=_text(job.get("ShortDescriptionStr")),
                 )
             )
-        if len(postings) < _ORACLE_PAGE:
-            break
     # The board states its own size. A board that says 1,295 and hands over 800
     # is what a page cap looks like from the outside, and nothing else would
     # say so -- this is the check that caught Jobvite's missing slash.
-    if advertised is not None and advertised > len(jobs):
+    #
+    # **It is a shortfall check and not an equality check, because a large
+    # board changes underneath a walk that takes minutes.** BNY advertises
+    # 1,390 and hands over 1,387: three requisitions closed between the first
+    # page and the last, and raising on that threw away 1,387 real postings --
+    # the guard against silent truncation deleting a board outright, which is
+    # the failure it exists to prevent, one direction over. `_ORACLE_CHURN` is
+    # what one walk can lose to that; anything wider is our paging.
+    if advertised is not None and len(jobs) < advertised * (1 - _ORACLE_CHURN):
         raise ValueError(
             f"oracle_hcm/{token}: board advertises {advertised} postings, read {len(jobs)}"
         )
@@ -978,6 +1063,36 @@ def adp(token: str) -> list[Job]:
 _UKG_PAGE = 100
 _UKG_PAGES = 200
 
+# UKG serves its tenants from two hosts and a tenant lives on exactly one of
+# them -- `recruiting2` answers 404 for a `recruiting` board and the reverse.
+# The same two-host trap as Workday's `myworkdayjobs.com`/`myworkdaysite.com`,
+# and it silently emptied eight boards: every failing token's own evidence said
+# `recruiting2` while this reader addressed `recruiting` unconditionally.
+# Which host a tenant is on is not derivable from the code, so it is asked.
+_UKG_HOSTS = ("recruiting.ultipro.com", "recruiting2.ultipro.com")
+
+
+def _ukg_origin(code: str, board: str) -> str:
+    """Which of UKG's two hosts this tenant is on, asked rather than guessed.
+
+    A 404 here is the host being wrong, not the board being gone: the pool is
+    disjoint, so the second host is tried and the first HTTP error that is not
+    a 404 is raised as itself. If neither answers, the last failure stands --
+    a board that has really gone must still be loud.
+    """
+    failure: urllib.error.HTTPError | None = None
+    for host in _UKG_HOSTS:
+        origin = f"https://{host}/{code}/JobBoard/{board}"
+        try:
+            http.get(f"{origin}/", timeout=25, retries=1)
+        except urllib.error.HTTPError as exc:
+            if exc.code != 404:
+                raise
+            failure = exc
+            continue
+        return origin
+    raise failure if failure else ValueError(f"ukg/{code}: no host answered")
+
 
 def ukg(token: str) -> list[Job]:
     """UKG Pro Recruiting, formerly UltiPro. `token` is `code|boardGuid`.
@@ -993,7 +1108,7 @@ def ukg(token: str) -> list[Job]:
     code, _, board = token.partition("|")
     if not code or not board:
         raise ValueError(f"ukg token {token!r} is not code|boardGuid -- re-run `ats`")
-    origin = f"https://recruiting.ultipro.com/{code}/JobBoard/{board}"
+    origin = _ukg_origin(code, board)
     jobs: list[Job] = []
     advertised: int | None = None
     for page in range(_UKG_PAGES):
@@ -1100,6 +1215,529 @@ def teamtailor(token: str) -> list[Job]:
                 posted_at=(item.findtext("pubDate") or "").strip() or None,
                 description=_text(item.findtext("description")),
             )
+        )
+    return jobs
+
+
+# Join. Its public API answers 422 to every `page`/`pageSize` combination
+# tried, which is what closed it -- and the company page carries the whole
+# list as a JSON island, `"jobs":{"items":[...]}`, unescaped and beside its own
+# pagination block. The same shape as DRW's `__NEXT_DATA__` and Jobylon's
+# widget: **when a vendor's API refuses, read the page the customer publishes.**
+_JOIN_ISLAND = '"jobs":'
+_JOIN_PAGES = 400
+
+
+def join(token: str) -> list[Job]:
+    """Join. `token` is the company slug in `join.com/companies/{token}`.
+
+    Paged with `?page=N`, five at a time, and the island states both
+    `pageCount` and `total`. The walk runs to `pageCount`, which is the
+    vendor's own statement of how many pages exist.
+
+    **`total` is checked with one page of slack, and that is measured rather
+    than generous.** Wallee's island reports `total: 4` with `pageCount: 1` and
+    lists three -- a posting the vendor counts and does not publish -- while
+    Carhartt's 47 arrive exactly. A truncation is short by pages, not by one.
+    """
+    jobs: list[Job] = []
+    seen: set[str] = set()
+    advertised: int | None = None
+    per_page = 5
+    pages = 1
+    page = 1
+    while page <= min(pages, _JOIN_PAGES):
+        body = http.get_text(
+            f"https://join.com/companies/{token}?page={page}", timeout=25, retries=2
+        )
+        at = body.find(_JOIN_ISLAND)
+        if at < 0:
+            raise ValueError(f"join board {token!r} carries no job list")
+        island, _ = json.JSONDecoder().raw_decode(body, at + len(_JOIN_ISLAND))
+        pagination = island.get("pagination") or {}
+        if advertised is None:
+            advertised = pagination.get("total")
+            pages = pagination.get("pageCount") or 1
+            per_page = pagination.get("perPage") or per_page
+        items = island.get("items") or []
+        if not items:
+            break
+        for item in items:
+            job_id = str(item.get("id") or "")
+            if not job_id or job_id in seen:
+                continue
+            seen.add(job_id)
+            slug = item.get("idParam")
+            city = item.get("city") or {}
+            place = [city.get("cityName"), city.get("countryName")]
+            jobs.append(
+                Job(
+                    ats="join",
+                    token=token,
+                    job_id=job_id,
+                    title=_text(item.get("title")) or "",
+                    url=f"https://join.com/companies/{token}/{slug}" if slug else None,
+                    location=", ".join(p for p in place if p) or None,
+                    department=_text((item.get("category") or {}).get("name")),
+                    posted_at=item.get("createdAt"),
+                )
+            )
+        page += 1
+    if isinstance(advertised, int) and advertised - len(jobs) > per_page:
+        raise ValueError(
+            f"join/{token}: board advertises {advertised} postings, read {len(jobs)}"
+        )
+    return jobs
+
+
+# Eightfold. **It was recorded as closed and the truth is per tenant**: the
+# note says `/api/apply/v2/jobs` answers 403, which it does on Morgan Stanley's
+# tenant and on NAB's -- and Vale's answers 200 with 193 positions. A vendor
+# refusing one customer's board is not the vendor being shut, and writing it
+# down as "closed" stopped anyone asking a second tenant.
+#
+# `count` is the board's own size and is the check. The `domain=` parameter the
+# vendor's own page sends is **not** required -- measured against Millennium's
+# tenant with it, with it empty and without it, and all three answer 219 -- so
+# the token stays the tenant label the host pattern already captures rather
+# than becoming a compound nothing has to keep in step.
+# **Eightfold ignores `num` and serves ten**, whatever is asked for -- the
+# same trap MAS's register sets one country over. Paging with a stride the
+# server does not honour skipped forty postings in every fifty, and the
+# advertised-total check is what said so rather than anything in the response.
+_EIGHTFOLD_PAGE = 10
+_EIGHTFOLD_PAGES = 1_000
+
+
+def eightfold(token: str) -> list[Job]:
+    """Eightfold. `token` is the tenant, which is the subdomain of its board.
+
+    **Millennium is here**, as `mlp` -- 219 postings, 70 in New York, 31 in
+    Hong Kong and 15 in Singapore, and `Quantitative Researcher`,
+    `Portfolio Researcher` and `Deep Learning Quantitative Researcher` among
+    them. It sat behind the note calling this vendor closed.
+    """
+    jobs: list[Job] = []
+    advertised: int | None = None
+    seen: set[str] = set()
+    for page in range(_EIGHTFOLD_PAGES):
+        payload = _json(
+            f"https://{token}.eightfold.ai/api/apply/v2/jobs"
+            f"?start={page * _EIGHTFOLD_PAGE}"
+            f"&num={_EIGHTFOLD_PAGE}&query=&sort_by=relevance"
+        )
+        positions = payload.get("positions") or []
+        if advertised is None:
+            advertised = payload.get("count")
+        if not positions:
+            break
+        fresh = 0
+        for position in positions:
+            job_id = str(position.get("id") or "")
+            if not job_id or job_id in seen:
+                continue
+            seen.add(job_id)
+            fresh += 1
+            # `locations` is the full list and `location` the summary. The
+            # list is preferred and joined, because the board's geography
+            # dimension is multi-valued and a summary of "Brazil" loses the
+            # city that was also published.
+            places = [p for p in (position.get("locations") or []) if isinstance(p, str)]
+            jobs.append(
+                Job(
+                    ats="eightfold",
+                    token=token,
+                    job_id=job_id,
+                    title=_text(position.get("name")) or "",
+                    url=position.get("canonicalPositionUrl"),
+                    location=", ".join(dict.fromkeys(places))
+                    or _text(position.get("location")),
+                    department=_text(position.get("department")),
+                    description=_text(position.get("job_description")),
+                )
+            )
+        if not fresh:
+            break
+    if isinstance(advertised, int) and advertised > len(jobs):
+        raise ValueError(
+            f"eightfold/{token}: board advertises {advertised} postings, read {len(jobs)}"
+        )
+    return jobs
+
+
+# Jobylon, the Nordic ATS. Its board is an AngularJS widget, which is why it
+# was recorded as unreadable -- and the widget page it embeds carries the whole
+# list as a JavaScript array literal, `JBL.embed_v2['jobs']`, rendered
+# server-side. Read the page the embed loads, not the page that embeds it.
+#
+# **The token is the customer's numeric id**, which is the only thing the embed
+# URL carries: `jobylon.com/jobs/companies/2551/embed/v2/`. That is why
+# `fingerprint`'s "a purely numeric token is not a board" rule has an exemption
+# for this vendor -- the rule exists because `jobs.lever.co/500` on an error
+# page produced the board "500", and here the digits are the board.
+#
+# Parsed field by field rather than as JSON, because it is not JSON: single
+# quotes, trailing commas and unquoted keys. Each field is read within one
+# record's span, so a missing one cannot borrow its neighbour's value.
+# **A record ends where the next one begins, not at the next `}`.** Two of the
+# fields are nested objects -- `klass` and `layers` -- so a non-greedy run to
+# the first closing brace stops inside the record, and everything after it
+# reads as absent. `locations_text` and `function` are both past that point,
+# which is every place name on the board.
+_JOBYLON_RECORD = re.compile(r"\n\s+id: '(\d+)',")
+_JOBYLON_FIELD = "\n\\s+{name}: '((?:[^'\\\\]|\\\\.)*)'"
+
+
+def _jobylon_field(name: str, block: str) -> str | None:
+    found = re.search(_JOBYLON_FIELD.format(name=name), block)
+    return _text(found.group(1).replace("\\'", "'")) if found else None
+
+
+def jobylon(token: str) -> list[Job]:
+    """Jobylon. `token` is the customer's numeric company id.
+
+    **The published dates are deliberately not mapped.** `published_date` and
+    `to_date` are real fields, and the widget renders them in the tenant's own
+    language -- `13. syyskuuta 2026` on a Finnish board. Turning localised
+    month names into a date to hand a deadline-ordered board is the shape of
+    mistake this project refuses everywhere else: a wrong closing date nails
+    the wrong card to the top of the page for weeks. The place is what matters
+    here and it arrives as plain text.
+    """
+    body = http.get_text(
+        f"https://cdn.jobylon.com/jobs/companies/{token}/embed/v2/", timeout=25, retries=2
+    )
+    start = body.find("JBL.embed_v2['jobs']")
+    if start < 0:
+        raise ValueError(f"jobylon board {token!r} served no job list")
+
+    listing = body[start:]
+    found = list(_JOBYLON_RECORD.finditer(listing))
+    jobs: list[Job] = []
+    for index, match in enumerate(found):
+        job_id = match.group(1)
+        end = found[index + 1].start() if index + 1 < len(found) else len(listing)
+        block = listing[match.end() : end]
+        path = _jobylon_field("url", block)
+        jobs.append(
+            Job(
+                ats="jobylon",
+                token=token,
+                job_id=job_id,
+                title=_jobylon_field("title", block) or "",
+                url=f"https://jobylon.com{path}" if path else None,
+                location=_jobylon_field("locations_text", block),
+                department=_jobylon_field("function", block),
+                employer=_jobylon_field("company", block),
+            )
+        )
+    return jobs
+
+
+# SAP SuccessFactors' RMK career site, served from the firm's own hostname --
+# the `careers.lynxhedge.se` shape a third time, and the reason the token is a
+# host rather than a label.
+#
+# **This was recorded as closed and the note was about a different surface.**
+# What was tested is the `?company=pfapensionP` form, which really does answer
+# 206 KB of shell with no job id. The firms here run RMK on their own host and
+# it renders its list server-side: an ordinary table of `<tr class="data-row">`
+# with the title, the place and the requisition id in it. Janus Henderson,
+# Carnegie, Fitch, Clearstream, Eurex, Hang Seng and Nomura's Instinet were
+# all behind that note.
+#
+# Parsed as blocks rather than one regex over the page, because every row is
+# rendered twice -- once for desktop and once for phones -- so a global scan
+# for `jobLocation` finds 51 places for 25 postings and pairs them wrongly.
+#
+# **RMK ships two list layouts and a firm may run either**: a table of
+# `<tr class="data-row">`, which Janus Henderson serves, and a list of
+# `<li class="job-tile job-id-N">`, which Carnegie serves. They agree on the
+# anchor -- `jobTitle-link`, carrying `/job/{slug}/{id}/` -- and on nothing
+# else, so the row split and the place take one alternation each. Reading only
+# the table found 81 postings at one firm and none at the other, which is what
+# a layout gap looks like from outside: a board that answers 200 and is empty.
+_SF_ROW = re.compile(r'<(?:tr\s[^>]*class="[^"]*data-row|li\s[^>]*class="[^"]*job-tile)', re.I)
+# The path may carry a prefix -- Clarksons serves its board under `/Clarksons`
+# -- so one optional segment sits in front of `/job/`. Reading only the bare
+# form found 0 of the 33 postings that page advertises, which the total check
+# turned into a failure rather than an empty board.
+_SF_JOB_PATH = r'((?:/[A-Za-z0-9_.-]+)?/job/[^"]*?/(\d+)/)'
+_SF_LINK = re.compile(
+    rf'class="jobTitle-link[^"]*"[^>]*href="{_SF_JOB_PATH}"[^>]*>(.*?)</a>'
+    rf'|href="{_SF_JOB_PATH}"[^>]*class="jobTitle-link"[^>]*>(.*?)</a>',
+    re.I | re.S,
+)
+_SF_PLACE = re.compile(
+    r'<span class="jobLocation">(.*?)</span>'
+    r'|id="job-\d+-desktop-section-city-value"[^>]*>(.*?)</div>',
+    re.I | re.S,
+)
+_SF_DEPARTMENT = re.compile(r'<span class="jobDepartment">(.*?)</span>', re.I | re.S)
+# The page states its own size, and the two layouts word it differently --
+# `Results 1 - 25 of <b>81</b>` and `Showing 1 to 7 of 7 Jobs`. This is the
+# check every reader here is held to, and the one that caught Jobvite's slash.
+_SF_TOTAL = re.compile(
+    r"Results?\s*\d+\s*(?:to|&#8211;|–|-)\s*\d+\s*of\s*<b>(\d+)</b>"
+    r"|Showing\s+\d+\s+to\s+\d+\s+of\s+(\d+)\s+Jobs",
+    re.I,
+)
+# **The stride is what the server returned, not a number we chose.** RMK's page
+# size is per tenant -- Janus Henderson serves 25 and Scania 15 -- so stepping
+# `startrow` by a constant skipped ten postings in every twenty-five of
+# Scania's 758. That is the Eightfold trap in a third format: paging with a
+# stride the server does not honour, caught by the advertised total and by
+# nothing else. `_SF_PAGE` is only the first guess, and a wrong one costs one
+# duplicate page rather than a truncation.
+_SF_PAGE = 25
+_SF_PAGES = 400
+
+
+def _sf_first(pattern: re.Pattern[str], block: str) -> str | None:
+    """The first non-empty group of the first match, across an alternation."""
+    found = pattern.search(block)
+    if not found:
+        return None
+    return next((_text(g) for g in found.groups() if g), None)
+
+
+def successfactors(token: str) -> list[Job]:
+    """SuccessFactors RMK. `token` is the host the firm serves the board from.
+
+    Paging is `startrow`, 25 at a time, which the site's own pagination links
+    spell out. Stops on a page that adds no new requisition id: a site
+    ignoring `startrow` serves page one forever, and no empty-page test catches
+    that -- the rule Workday, ADP and both iCIMS readers each needed.
+    """
+    jobs: list[Job] = []
+    seen: set[str] = set()
+    advertised: int | None = None
+    startrow = 0
+    for _ in range(_SF_PAGES):
+        body = http.get_text(
+            f"https://{token}/search/?q=&startrow={startrow}", timeout=25, retries=2
+        )
+        if advertised is None:
+            total = _SF_TOTAL.search(body)
+            advertised = (
+                int(next(g for g in total.groups() if g)) if total else None
+            )
+        fresh = 0
+        blocks = _SF_ROW.split(body)[1:]
+        startrow += len(blocks) or _SF_PAGE
+        for block in blocks:
+            link = _SF_LINK.search(block)
+            if not link:
+                continue
+            groups = [g for g in link.groups() if g is not None]
+            if len(groups) < 3:
+                continue
+            path, job_id, title = groups[:3]
+            if job_id in seen:
+                continue
+            seen.add(job_id)
+            fresh += 1
+            jobs.append(
+                Job(
+                    ats="successfactors",
+                    token=token,
+                    job_id=job_id,
+                    title=_text(title) or "",
+                    url=f"https://{token}{path}",
+                    location=_sf_first(_SF_PLACE, block),
+                    department=_sf_first(_SF_DEPARTMENT, block),
+                )
+            )
+        if not fresh:
+            break
+    if isinstance(advertised, int) and advertised > len(jobs):
+        raise ValueError(
+            f"successfactors/{token}: board advertises {advertised} postings,"
+            f" read {len(jobs)}"
+        )
+    return jobs
+
+
+# iCIMS' newer career-site product, formerly Jibe, and a wholly different
+# surface from the classic portal above: the firm fronts it on its own
+# hostname and the postings come from a plain JSON API rather than list HTML.
+# It is where the classic portals have been going -- twelve of 36 iCIMS boards
+# here had already migrated, Principal, AXA and SiriusXM among them, and each
+# left behind the 150-byte redirect stub `_icims_origin` now refuses.
+#
+# **The token is the host**, the `careers.lynxhedge.se` shape, because there is
+# no vendor hostname to take a label from. `/api/jobs` sits at the host root
+# even where the board itself is under a path (`careers.bayview.com/bam/jobs`,
+# `www.related.jobs/careers-home/jobs`), so the path is not part of the token.
+#
+# The endpoint was read off the site's own `featured-jobs.js` rather than
+# guessed, which is the rule job-room.ch's 401 established: `/api/jobs?limit=100`,
+# verbatim, is what the page asks for.
+_ICIMS_CS_PAGE = 100
+_ICIMS_CS_PAGES = 200
+
+
+def icims_cs(token: str) -> list[Job]:
+    """iCIMS career sites. `token` is the host the firm serves the board from.
+
+    `totalCount` is the board's own size and is honest -- 117 for Principal,
+    1,508 for AXA -- so it is the check rather than the stop condition, the
+    same contract Oracle and Jobvite are held to. Note `count` is a different
+    number and is not it: Principal reports `count: 72` against 117 postings.
+
+    Paging is `page=N`, one-based. `limit` above 100 is refused outright, which
+    is loud rather than silent and so needs no assertion of its own.
+    """
+    jobs: list[Job] = []
+    advertised: int | None = None
+    seen: set[str] = set()
+    for page in range(1, _ICIMS_CS_PAGES + 1):
+        payload = _json(
+            f"https://{token}/api/jobs?limit={_ICIMS_CS_PAGE}&page={page}"
+        )
+        listed = payload.get("jobs") or []
+        if advertised is None:
+            advertised = payload.get("totalCount")
+        if not listed:
+            break
+        fresh = 0
+        for entry in listed:
+            job = entry.get("data") or {}
+            job_id = str(job.get("req_id") or job.get("slug") or "")
+            if not job_id or job_id in seen:
+                continue
+            seen.add(job_id)
+            fresh += 1
+            slug = job.get("slug")
+            jobs.append(
+                Job(
+                    ats="icims_cs",
+                    token=token,
+                    job_id=job_id,
+                    title=_text(job.get("title")) or "",
+                    # `apply_url` is the vendor's login page for the
+                    # requisition; the readable ad is the career site's own
+                    # job path. Neither is invented: a posting missing both
+                    # gets no URL rather than a link to the board's front door.
+                    url=f"https://{token}/careers-home/jobs/{slug}"
+                    if slug
+                    else job.get("apply_url"),
+                    location=_text(job.get("full_location"))
+                    or _text(job.get("location_name")),
+                    department=_text(job.get("category_name"))
+                    or _text((job.get("categories") or [{}])[0].get("name")),
+                    posted_at=job.get("posted_date") or job.get("create_date"),
+                    description=_text(job.get("description")),
+                )
+            )
+        # A site ignoring `page` serves page one forever, which no empty-page
+        # test catches -- the rule Workday, ADP and iCIMS each needed.
+        if not fresh:
+            break
+    if isinstance(advertised, int) and advertised > len(jobs):
+        raise ValueError(
+            f"icims_cs/{token}: board advertises {advertised} postings, read {len(jobs)}"
+        )
+    return jobs
+
+
+# Emply's board is server-rendered chrome around a client-side list, which is
+# why it was recorded as unreadable: the page is 209 KB carrying no job id and
+# every guessed feed path serves the same shell. The list is one POST, and the
+# page names it -- `/api/integration/vacancy/get-page`, in an inline script,
+# beside the exact request body it sends. **Read the page's own call rather
+# than guessing paths**, which is the lesson job-room.ch's 401 taught.
+#
+# The one per-tenant value is `sectionId`, a GUID naming the vacancy list
+# section of that career site. It is in the same script, so it is taken from
+# there rather than guessed; a career site has several sections and only this
+# one answers with `vacancies`.
+_EMPLY_SECTION = re.compile(r"sectionId:\s*'([0-9a-f-]{36})'")
+_EMPLY_LANG = re.compile(r"languageKey\s*=\s*'([a-zA-Z-]{2,7})'")
+_EMPLY_PAGE = 100
+_EMPLY_PAGES = 100
+
+
+def emply(token: str) -> list[Job]:
+    """Emply, the Danish ATS. `token` is the customer label before `.career`.
+
+    `deadline` is mapped, and it was checked before it was: across the six
+    boards here 54 of 95 postings carry one and the gaps from publication run
+    14 to 45 days with no value repeating more than six times. That is an
+    employer typing a date, not job-room.ch's dropdown -- where 81% sat exactly
+    30 days out, which is what a default looks like and why that field is
+    refused.
+    """
+    origin = f"https://{token}.career.emply.com"
+    page = http.get_text(f"{origin}/open-positions", timeout=25, retries=2)
+    section = _EMPLY_SECTION.search(page)
+    if not section:
+        raise ValueError(f"emply board {token!r} names no vacancy section")
+    language = _EMPLY_LANG.search(page)
+
+    jobs: list[Job] = []
+    advertised: int | None = None
+    for offset in range(0, _EMPLY_PAGE * _EMPLY_PAGES, _EMPLY_PAGE):
+        body = json.dumps(
+            {
+                "count": _EMPLY_PAGE,
+                "filters": [],
+                "langCode": language.group(1) if language else "en-GB",
+                "offset": offset,
+                "searchText": "",
+                "sectionId": section.group(1),
+                "sortByProjectDataId": "",
+                "sortAscending": False,
+                "light": False,
+                "isJobAgent": False,
+                "siteId": None,
+            }
+        ).encode()
+        payload = json.loads(
+            http.post_json(
+                f"{origin}/api/integration/vacancy/get-page", body, timeout=25, retries=2
+            ).decode("utf-8")
+        )
+        vacancies = payload.get("vacancies") or []
+        if advertised is None:
+            advertised = payload.get("count")
+        if not vacancies:
+            break
+        for vacancy in vacancies:
+            job_id = str(vacancy.get("id") or "")
+            if not job_id:
+                continue
+            # The description is in the translation rather than on the record,
+            # and a board with no English translation still has exactly one.
+            translations = vacancy.get("translations") or []
+            content = translations[0].get("content") if translations else None
+            slug, short = vacancy.get("titleAsUrl"), vacancy.get("shortId")
+            jobs.append(
+                Job(
+                    ats="emply",
+                    token=token,
+                    job_id=job_id,
+                    title=_text(vacancy.get("title")) or "",
+                    # The page builds this as `/ad/{titleAsUrl}/{shortId}`. A
+                    # posting missing either piece gets no URL rather than a
+                    # link to the board's front door -- the Workday `N
+                    # Locations` rule, which is why 42 boards held one card
+                    # each that opened a vendor's landing page.
+                    url=f"{origin}/ad/{slug}/{short}" if slug and short else None,
+                    location=_text(vacancy.get("location")),
+                    department=_text(vacancy.get("department")),
+                    posted_at=vacancy.get("published") or vacancy.get("created"),
+                    deadline=vacancy.get("deadline"),
+                    description=_text(content),
+                )
+            )
+    # The board states its own size on every page, the same check Oracle and
+    # Jobvite get. Emply's boards are small enough that a walk cannot lose a
+    # posting to churn, so this is an equality-shaped check rather than a
+    # tolerance.
+    if isinstance(advertised, int) and advertised > len(jobs):
+        raise ValueError(
+            f"emply/{token}: board advertises {advertised} postings, read {len(jobs)}"
         )
     return jobs
 
@@ -1217,6 +1855,12 @@ EXTRACTORS: dict[str, Callable[[str], list[Job]]] = {
     "adp": adp,
     "ukg": ukg,
     "avature": avature,
+    "emply": emply,
+    "icims_cs": icims_cs,
+    "successfactors": successfactors,
+    "jobylon": jobylon,
+    "eightfold": eightfold,
+    "join": join,
     # Layer 3C: firms with no ATS at all, read from their own website. One
     # entry here, dispatched by token -- see `sites.py` for why the list is
     # deliberately short.
