@@ -313,6 +313,34 @@ re-queued if you want it done.
 
 ---
 
+## 11. Norron has been sold, and its reader now fails loudly every poll
+
+**One roster decision, and the reader is already doing the right thing.**
+
+`sites.norron` fetches `https://norron.com/sv/karriar/`, which now answers
+**404**. The homepage no longer links a careers page under any spelling and it
+carries the word *Simplicity* — the sale that reader's own docstring predicted
+in as many words: *"the roster notes Norron's fund business is being sold to
+Simplicity AB, so this one may become stale rather than merely quiet."*
+
+**It is not a bug.** `sites.py` readers raise rather than returning `[]`
+precisely so that "this firm advertises nothing" and "this page is gone" stay
+distinguishable, and the 404 is that rule working. Norron simply moved from
+the first state to the second.
+
+**What I need from you:** which of the two, because both are one line and only
+you can say which is true of the firm.
+
+- **Drop it** — remove the `Site` row and mark Norron `status` dead in
+  `roster.csv`, the way AP1 and AP6 were handled after they were wound up.
+- **Follow it** — point the reader at Simplicity AB, if the Stockholm team you
+  wanted to reach went with the funds. That is a different employer, so it
+  wants its own roster line rather than a redirect on this one.
+
+Until then the poll prints one `FAIL site/norron` a run, which costs nothing
+and is the correct amount of noise for a firm that has stopped existing in the
+form the roster names.
+
 ## Reversible calls, each one line
 
 These are preferences rather than facts. None blocks anything; each says how to
