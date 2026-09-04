@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import io
 import re
 import xml.etree.ElementTree as ElementTree
@@ -9,6 +10,35 @@ import zipfile
 from html.parser import HTMLParser
 
 _CELL_TAGS = ("td", "th")
+
+_TAGS = re.compile(r"<[^>]+>")
+
+
+def text(value: str | None, *, limit: int | None = None) -> str | None:
+    """Readable text from a fragment of markup, or None if there is none.
+
+    **Tags are stripped before entities are decoded, never after.** An employer
+    who writes a literal `&lt;p&gt;` in their prose would otherwise have it
+    decoded into a tag and then eaten.
+
+    **And the decode itself was missing for a long time, in more than one
+    place.** Every format that hands over HTML rather than JSON hands over its
+    escaping too, so Coeli's `Operativ chef för Business &amp; Risk Operations`
+    reached the tagger carrying the token `amp` -- a word in no lexicon, in the
+    middle of a title, and the title is the first thing `tagging.py` reads.
+    Nordic markup is worse than the ampersand: it spells `ä` as `&#xE4;`, so a
+    title could fold to something no needle matches at all. It was fixed in one
+    reader, then found again in a second and a third, which is why there is one
+    definition here rather than a copy per reader.
+
+    `limit` caps the result. `bodies` passes one: the tagger runs hundreds of
+    patterns over a description, and one 400 KB posting stalls a worker pool
+    through the GIL.
+    """
+    if not value:
+        return None
+    cleaned = " ".join(html.unescape(_TAGS.sub(" ", value)).split())
+    return (cleaned[:limit] if limit else cleaned) or None
 
 
 class _TableRowParser(HTMLParser):

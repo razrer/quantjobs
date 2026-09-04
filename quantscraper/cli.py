@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import subprocess
 import sys
+import threading
+from collections import Counter
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 from . import (
     alerts, ats, audit, bodies, coverage, db, discover, domains, extract,
-    fca, http, jobbsafari, jobindex, jobroom_ch, jobstream, labels,
+    fca, http, iesjobs, jobbsafari, jobindex, jobroom_ch, jobstream, labels,
     mycareersfuture, pages,
     resolve, sites, tagging,
 )
@@ -253,36 +257,93 @@ def _discover(
     return 0
 
 
-def _singapore(database: str, since: str | None) -> int:
+def _sweep(database: str, name: str, walk, *, partial: bool | None = None):
+    """Run one Layer 4 sweep, record it, and hand back what it found.
+
+    **Every national board repeats the same four steps and they are here
+    once.** Open the database, run the walk inside `_poll` so a crash still
+    reaches `runs`, record the poll, and hand the caller the result to print.
+    What differs between the six sources is the *shape of the report*, which is
+    the half worth writing out per source; what does not differ is any of this.
+
+    `partial` overrides the sweep's own flag, for the one source that has no
+    such flag to read: every poll of job-room.ch is a window, so an ad-hoc
+    `--days 6` is an outlier rather than a subset and `alerts` compares against
+    a median precisely so one outlier cannot move the baseline.
+    """
     connection = db.connect(database)
-    started_at, swept = _poll(
-        connection, mycareersfuture.NAME,
-        lambda: mycareersfuture.run(connection, since=since),
+    started_at, swept = _poll(connection, name, lambda: walk(connection))
+    _record_poll(
+        connection, name, started_at, swept.seen,
+        partial=getattr(swept, "partial", False) if partial is None else partial,
+        problem=swept.problem,
     )
-    _record_poll(connection, mycareersfuture.NAME, started_at, swept.seen,
-                 partial=swept.partial, problem=swept.problem)
-    print(
-        f"swept {swept.pages:,d} pages: {swept.seen:,d} postings, "
-        f"{swept.written:,d} written, {swept.repeats:,d} served twice"
-    )
-    if not swept.partial:
-        print(f"  the portal advertised {swept.advertised:,d}")
-    # The sweep audits its own arithmetic: a round number in the output is
-    # what a cap looks like from the outside, and nothing else would say so.
+    return connection, swept
+
+
+def _shortfall(swept) -> int:
+    """Report a truncated or refused sweep, and make it the exit code.
+
+    **Every walk here audits its own arithmetic against the total the board
+    publishes**, because a walk that stopped on a result window, a short page
+    or a refusal returns cleanly and looks exactly like a quiet day -- a round
+    number in the output is what a cap looks like from outside, and nothing
+    else in this pipeline would say so.
+    """
     if swept.problem:
         print(f"  FAIL {swept.problem}", file=sys.stderr)
         return 1
     return 0
 
 
-def _denmark(database: str, since: str | None, only: list[int] | None) -> int:
-    connection = db.connect(database)
-    started_at, swept = _poll(
-        connection, jobindex.NAME,
-        lambda: jobindex.run(connection, since=since, only=only),
+def _held(connection, ats: str, noun: str, **columns: str) -> None:
+    """The "N ads held" line, with whichever extra counts a source can answer."""
+    selected = ", ".join(f"{sql} AS {name}" for name, sql in columns.items())
+    row = connection.execute(
+        f"SELECT COUNT(*) AS n{', ' + selected if selected else ''}"
+        " FROM jobs WHERE ats = ?", (ats,)
+    ).fetchone()
+    extra = "".join(f", {row[name] or 0:,d} {name.replace('_', ' ')}" for name in columns)
+    print(f"  {row['n']:,d} {noun} held{extra}")
+
+
+def _singapore(database: str, since: str | None) -> int:
+    connection, swept = _sweep(
+        database, mycareersfuture.NAME,
+        lambda c: mycareersfuture.run(c, since=since),
     )
-    _record_poll(connection, jobindex.NAME, started_at, swept.seen,
-                 partial=swept.partial, problem=swept.problem)
+    print(
+        f"swept {swept.pages:,d} pages: {swept.seen:,d} postings, "
+        f"{swept.written:,d} written, {swept.repeats:,d} served twice"
+    )
+    if not swept.partial:
+        print(f"  the portal advertised {swept.advertised:,d}")
+    return _shortfall(swept)
+
+
+def _hongkong(database: str, max_pages: int) -> int:
+    connection, swept = _sweep(
+        database, iesjobs.NAME, lambda c: iesjobs.run(c, max_pages=max_pages)
+    )
+    print(
+        f"swept {len(swept.slices)} job type(s) over {swept.pages:,d} pages: "
+        f"{swept.seen:,d} postings, {swept.written:,d} written, "
+        f"{swept.repeats:,d} served twice"
+    )
+    if not swept.partial:
+        # Two numbers, because the walk is a partition: the slices are what
+        # was read and the unfiltered total is what should have been. They
+        # agreeing is the evidence that the partition is still complete.
+        print(f"  the portal advertised {swept.advertised:,d} in total")
+    for got in swept.slices:
+        print(f"    {got.seen:>5,d} / {got.advertised:<5,d}  {got.name}")
+    return _shortfall(swept)
+
+
+def _denmark(database: str, since: str | None, only: list[int] | None) -> int:
+    connection, swept = _sweep(
+        database, jobindex.NAME, lambda c: jobindex.run(c, since=since, only=only)
+    )
     print(
         f"swept {swept.slices:,d} slice(s) over {swept.pages:,d} pages: "
         f"{swept.seen:,d} postings, {swept.written:,d} written, "
@@ -290,15 +351,9 @@ def _denmark(database: str, since: str | None, only: list[int] | None) -> int:
     )
     if not swept.partial:
         print(f"  the board advertised {swept.advertised:,d}")
-    row = connection.execute(
-        "SELECT COUNT(*) AS n, SUM(domain IS NOT NULL) AS resolved,"
-        " SUM(deadline IS NOT NULL) AS dated"
-        " FROM jobs WHERE ats = ?", (jobindex.NAME,)
-    ).fetchone()
-    print(
-        f"  {row['n']:,d} Danish ads held, {row['resolved'] or 0:,d} attributed"
-        f" to an employer domain, {row['dated'] or 0:,d} with a stated deadline"
-    )
+    _held(connection, jobindex.NAME, "Danish ads",
+          attributed_to_an_employer_domain="SUM(domain IS NOT NULL)",
+          with_a_stated_deadline="SUM(deadline IS NOT NULL)")
     # A category the board grew since `SUBCATEGORIES` was written is swept
     # anyway -- the partition is read live -- but the read-time gate in
     # `tagging.py` has never been asked about it, so it is named here.
@@ -308,22 +363,13 @@ def _denmark(database: str, since: str | None, only: list[int] | None) -> int:
             for subid, label in sorted(swept.unknown_subcategories.items())
         )
         print(f"  {len(swept.unknown_subcategories)} new subcategor(ies): {named}")
-    # A slice bigger than the board's own result window, or a sweep that came
-    # back short of what the board said it held. Either is a silent truncation
-    # everywhere else; here it is the one thing the caller has to read.
-    if swept.problem:
-        print(f"  FAIL {swept.problem}", file=sys.stderr)
-        return 1
-    return 0
+    return _shortfall(swept)
 
 
 def _sweden(database: str, pages: int | None) -> int:
-    connection = db.connect(database)
-    started_at, swept = _poll(
-        connection, jobbsafari.NAME, lambda: jobbsafari.run(connection, pages=pages)
+    connection, swept = _sweep(
+        database, jobbsafari.NAME, lambda c: jobbsafari.run(c, pages=pages)
     )
-    _record_poll(connection, jobbsafari.NAME, started_at, swept.seen,
-                 partial=swept.partial, problem=swept.problem)
     print(
         f"swept Jobbsafari over {swept.pages:,d} pages: "
         f"{swept.seen:,d} postings, {swept.written:,d} written, "
@@ -331,70 +377,52 @@ def _sweden(database: str, pages: int | None) -> int:
     )
     if not swept.partial:
         print(f"  the board advertised {swept.advertised:,d}")
-    row = connection.execute(
-        "SELECT COUNT(*) AS n,"
-        " SUM(description IS NOT NULL AND description != '') AS bodied"
-        " FROM jobs WHERE ats = ?", (jobbsafari.NAME,)
-    ).fetchone()
-    print(
-        f"  {row['n']:,d} Swedish ads held, {row['bodied'] or 0:,d} with a"
-        " description (`bodies` fills the ones a verdict turns on)"
-    )
-    # The walk audits its own arithmetic against the total the board publishes.
-    # A round number in the output is what a cap looks like from the outside,
-    # and nothing else here would say so.
-    if swept.problem:
-        print(f"  FAIL {swept.problem}", file=sys.stderr)
-        return 1
-    return 0
+    _held(connection, jobbsafari.NAME, "Swedish ads",
+          with_a_description="SUM(description IS NOT NULL AND description != '')")
+    return _shortfall(swept)
 
 
 def _switzerland(database: str, days: int | None) -> int:
-    connection = db.connect(database)
-    started_at, swept = _poll(
-        connection, jobroom_ch.NAME, lambda: jobroom_ch.run(connection, days)
+    connection, swept = _sweep(
+        database, jobroom_ch.NAME, lambda c: jobroom_ch.run(c, days), partial=False
     )
-    # No `partial` here: every poll of this portal is a window, and an ad-hoc
-    # `--days 6` is an outlier rather than a subset. `alerts` compares against
-    # a median precisely so one outlier cannot move the baseline.
-    _record_poll(connection, jobroom_ch.NAME, started_at, swept.seen,
-                 problem=swept.problem)
     print(
         f"polled job-room.ch back {swept.days} day(s) over {swept.pages:,d} pages: "
         f"{swept.seen:,d} postings, {swept.written:,d} written, "
         f"{swept.repeats:,d} served twice"
     )
     print(f"  the portal advertised {swept.advertised:,d}")
-    row = connection.execute(
-        "SELECT COUNT(*) AS n, SUM(domain IS NOT NULL) AS resolved"
-        " FROM jobs WHERE ats = ?", (jobroom_ch.NAME,)
-    ).fetchone()
-    print(
-        f"  {row['n']:,d} Swiss ads held, {row['resolved'] or 0:,d} attributed"
-        " to an employer domain"
-    )
-    # A slice bigger than a two-ended walk can read, or a walk that came back
-    # short of what the portal said it held. Either way the cursor did not move,
-    # so the unread window is still in front of the next poll rather than behind
-    # it -- but it has to be said out loud, because a truncated walk otherwise
-    # looks exactly like a quiet day.
-    if swept.problem:
-        print(f"  FAIL {swept.problem}", file=sys.stderr)
-        return 1
-    return 0
+    _held(connection, jobroom_ch.NAME, "Swiss ads",
+          attributed_to_an_employer_domain="SUM(domain IS NOT NULL)")
+    return _shortfall(swept)
 
 
 def _bodies(database: str, limit: int, workers: int) -> int:
     connection = db.connect(database)
-    attempted, filled, placed = bodies.run(connection, limit, workers)
+    attempted, filled, placed, named, hong_kong = bodies.run(
+        connection, limit, workers
+    )
     if attempted:
-        # `placed` is reported beside `filled` rather than folded into it: the
-        # pass now cures two faults and one number would hide either of them
+        # Each is reported separately rather than folded into one total: the
+        # pass cures three faults and a single number would hide any of them
         # going quiet.
         print(f"fetched {attempted:,d} pages, filled {filled:,d} bodies,"
-              f" resolved {placed:,d} places")
+              f" resolved {placed:,d} places, named {named:,d} employers")
     else:
         print("nothing left in the queue")
+
+    # **The Hong Kong split, because the cheap route fails quietly.** Its cards
+    # are reached either by harvesting a token off a list page -- twenty to a
+    # request -- or by searching for one, which costs two requests a posting on
+    # a host held to four seconds. If the portal's list markup moves, every
+    # posting silently takes the second route and the only symptom is that the
+    # step is slow again. `searched` climbing is that symptom, named.
+    reached = hong_kong["harvested"] + hong_kong["searched"]
+    if reached:
+        spent = hong_kong["harvested"] + 2 * hong_kong["searched"]
+        print(f"  hong kong: {hong_kong['harvested']:,d} harvested,"
+              f" {hong_kong['searched']:,d} searched"
+              f" -- about {spent:,d} requests against {2 * reached:,d}")
 
     print("\nbodies held")
     for row in bodies.coverage(connection):
@@ -445,11 +473,8 @@ def _jobstream(database: str, since_text: str | None = None) -> int:
         f"polled JobStream from {since:%Y-%m-%d %H:%M} UTC: "
         f"{seen:,d} changes, {written:,d} written, {withdrawn:,d} withdrawn"
     )
-    row = connection.execute(
-        "SELECT COUNT(*) AS n, SUM(removed_at IS NOT NULL) AS gone"
-        " FROM jobs WHERE ats = ?", (jobstream.NAME,)
-    ).fetchone()
-    print(f"  {row['n']:,d} Swedish ads held, {row['gone'] or 0:,d} withdrawn")
+    _held(connection, jobstream.NAME, "Swedish ads",
+          withdrawn="SUM(removed_at IS NOT NULL)")
     return 0
 
 
@@ -645,6 +670,11 @@ def _sample(database: str, limit: int, out: str) -> int:
 
 def _labels(database: str, files: list[str] | None) -> int:
     connection = db.connect(database)
+    # `containment` re-tags each labelled posting live rather than reading
+    # `job_tags`, so it needs the same board profile `tag` was run with -- or
+    # the sheet scores a classifier the board is not using. Same argument as
+    # `tagging.GATES` being one definition with two consumers.
+    tagging.load_quant_boards(connection)
     paths = [Path(f) for f in (files or labels.SHEETS)]
     per_file: list[tuple[Path, list]] = []
     found: list[labels.Label] = []
@@ -716,9 +746,20 @@ def _labels(database: str, files: list[str] | None) -> int:
     # the expensive failure, a false positive costs a few seconds of reading.
     missed = [d for d in disagreements if d.false_rejection]
     if missed:
+        # **Each line says which sheet it came from**, because three sheets of
+        # unequal quality are scored together and this list is the criterion
+        # the whole project is tuned against. A false rejection in
+        # `labels.csv` is a bug; one in `agent_labels.csv` is usually the
+        # model labeller having been told to prefer `adjacent` when torn, and
+        # it duly called `Slack Administrator` adjacent. Without the
+        # provenance the two read identically and the number that matters is
+        # buried in the noise.
+        by_sheet = Counter(d.sheet or "(unnamed)" for d in missed)
+        tally = ", ".join(f"{n} in {name}" for name, n in by_sheet.most_common())
         print(f"\nFALSE REJECTIONS ({len(missed)}) -- postings the lexicon threw away")
+        print(f"  {tally}")
         for d in missed:
-            print(f"  {d.title[:56]:58s} you: {d.labelled}")
+            print(f"  {d.title[:56]:58s} you: {d.labelled:14s} [{d.sheet}]")
             print(f"    {d.evidence[:100]}")
 
     other = [d for d in disagreements if not d.false_rejection]
@@ -911,6 +952,103 @@ def _denmark_since(connection) -> str | None:
     return (newest - timedelta(days=1)).date().isoformat()
 
 
+class _ThreadStream:
+    """A `sys.stdout` that routes each thread's writes to its own buffer.
+
+    **Concurrent steps cannot share a terminal**, and the usual tool for this
+    does not work here: `contextlib.redirect_stdout` swaps a process-global, so
+    six steps running at once would each capture the other five. Interleaving
+    them raw is worse than slow -- the whole value of `daily`'s output is that
+    `alerts` names the source that went quiet, and a report shredded across six
+    writers is one nobody reads.
+
+    So each worker registers a buffer for its own thread and everything else
+    falls through to the real stream. The buffers are printed whole, in the
+    order the steps were listed, once the phase ends.
+    """
+
+    def __init__(self, fallback):
+        self._fallback = fallback
+        self._local = threading.local()
+
+    def claim(self, buffer) -> None:
+        self._local.buffer = buffer
+
+    def write(self, text: str) -> int:
+        return (getattr(self._local, "buffer", None) or self._fallback).write(text)
+
+    def flush(self) -> None:
+        (getattr(self._local, "buffer", None) or self._fallback).flush()
+
+    def isatty(self) -> bool:
+        return False
+
+
+def _gather(steps: list[tuple[str, Callable[[], int]]]) -> list[str]:
+    """Run independent steps at once. Returns the names that failed.
+
+    **These are different hosts, and that is the whole argument.**
+    `http._throttle` books its interval per host under a lock, so running six
+    source sweeps side by side cannot make any one of them see more traffic
+    than it does today -- measured: twelve concurrent callers to a single host
+    still take eleven seconds for twelve slots, while four slots across three
+    hosts go 9.0s -> 3.0s. Politeness is a per-host property and this changes
+    only how many hosts are in flight.
+
+    What it buys is the difference between the sum of the sweeps and the
+    longest of them. Measured on the 27 August run and today's: Denmark 33.6
+    min, Sweden 4.3, Switzerland 0.8, Singapore ~70, Hong Kong ~50 -- about
+    160 minutes end to end, against ~70 for the longest. The database was
+    already built for it: `db.connect` sets `busy_timeout` to 60s and WAL
+    precisely so the long queues "are meant to be run side by side", and six
+    concurrent writers committing 240 times measured 0.08s with no error.
+
+    **Threads rather than subprocesses, deliberately.** Separate processes
+    would each keep their own `http._last_hit`, so two steps that happen to
+    share a host -- `jobs` and `pages` both reach firm domains -- would each
+    grant themselves the full rate and quietly double it. One process, one
+    throttle table, one guarantee.
+    """
+    if not steps:
+        return []
+    reports: dict[str, tuple[int | None, str, str]] = {}
+    stream = _ThreadStream(sys.stdout)
+    errors = _ThreadStream(sys.stderr)
+
+    def run(item: tuple[str, Callable[[], int]]):
+        name, step = item
+        out, err = io.StringIO(), io.StringIO()
+        stream.claim(out)
+        errors.claim(err)
+        try:
+            code = step()
+        except Exception as exc:  # noqa: BLE001 - one source must not stop the rest
+            print(f"  FAIL {name}: {exc}", file=err)
+            code = None
+        return name, code, out.getvalue(), err.getvalue()
+
+    previous = sys.stdout, sys.stderr
+    sys.stdout, sys.stderr = stream, errors
+    try:
+        with ThreadPoolExecutor(max_workers=len(steps)) as pool:
+            for name, code, out, err in pool.map(run, steps):
+                reports[name] = (code, out, err)
+    finally:
+        sys.stdout, sys.stderr = previous
+
+    failed = []
+    for name, _ in steps:
+        code, out, err = reports[name]
+        print(f"\n=== {name} ===", flush=True)
+        if out.strip():
+            print(out.rstrip())
+        if err.strip():
+            print(err.rstrip(), file=sys.stderr)
+        if code != 0:
+            failed.append(name)
+    return failed
+
+
 def _daily(database: str, full: bool, publish: bool) -> int:
     """Run the standing sequence end to end, so a refresh is one command.
 
@@ -942,36 +1080,78 @@ def _daily(database: str, full: bool, publish: bool) -> int:
     #
     # Neither pass is expensive: `tag` visits only postings with no row at the
     # current version.
-    steps: list[tuple[str, Callable[[], int]]] = [
-        # Cheap (one GET) and unrelated to the rest -- runs first so a Reject
-        # clicked on the live board reaches `labels.csv` before this run's
-        # `tag` passes, rather than sitting a day behind for no reason.
+    # **Three phases, and the middle one runs at once.** The sources are
+    # independent and live on different hosts, so running them in sequence
+    # spent the *sum* of their walks where the longest of them would do --
+    # measured, about 160 minutes against about 70. `_gather` explains why
+    # that costs no politeness: `http._throttle` books per host, so this
+    # changes how many hosts are in flight and nothing about the rate any one
+    # of them sees.
+    #
+    # What has to stay serial is anything that reads what an earlier step
+    # wrote. `corrections` goes first so a Reject clicked on the live board
+    # reaches `labels.csv` before this run's `tag`; `tag`, `bodies` and the
+    # re-tag are a chain by construction; `alerts` reports on the runs the
+    # gather phase recorded.
+    prologue: list[tuple[str, Callable[[], int]]] = [
+        # Cheap (one GET) and unrelated to the rest.
         ("corrections", lambda: _corrections(CORRECTIONS_ENDPOINT)),
+    ]
+
+    # Every one of these is a different host, which is the precondition for
+    # running them together and the thing to re-check before adding a fourth.
+    gathered: list[tuple[str, Callable[[], int]]] = [
         ("sweden", lambda: _sweden(database, None)),
         ("denmark", lambda: _denmark(database, since, None)),
         ("switzerland", lambda: _switzerland(database, None)),
         ("jobstream", lambda: _jobstream(database, None)),
+        # `jobs` and `pages` are already twelve-thread pools of their own, and
+        # they belong here for the same reason: their hosts are the ATS
+        # vendors and the firms' own domains, which no portal sweep touches.
+        # Where they *do* overlap each other, one shared throttle table is
+        # what keeps the guarantee -- see `_gather`.
         ("jobs", lambda: _jobs(database, 2_000, 12)),
         ("pages", lambda: _pages(database, 4_000 if full else 500, 12)),
+    ]
+
+    epilogue: list[tuple[str, Callable[[], int]]] = [
         ("tag", lambda: _tag(database, 1_000_000, "fit")),
         ("bodies", lambda: _bodies(database, 20_000 if full else 2_000, 12)),
         ("re-tag", lambda: _tag(database, 1_000_000, "fit")),
         ("alerts", lambda: _alerts(database)),
     ]
+
     if full:
-        # ~850 requests and no incremental form, so it is a weekly rather than
-        # a daily. It is not in the standing list for that reason alone.
-        steps.insert(3, ("singapore", lambda: _singapore(database, None)))
+        # **Both national portals are weekly and for the same reason.** Neither
+        # has an incremental form worth using -- only a completed walk refreshes
+        # `last_seen` on every live row, which is the sole way a withdrawal is
+        # ever noticed on a board this project does not otherwise poll -- and
+        # each is an hour of deliberately slow requests: Singapore ~940 pages
+        # at four seconds, Hong Kong ~750 at the same. They are in `--full`
+        # for that reason alone, not because either is optional.
+        #
+        # They are also what makes the gather phase worth having: serially
+        # they are two hours on their own, concurrently they are the longer of
+        # the two and everything else hides underneath them.
+        gathered.insert(0, ("singapore", lambda: _singapore(database, None)))
+        gathered.insert(1, ("hongkong", lambda: _hongkong(database, iesjobs.MAX_PAGES)))
 
     failed: list[str] = []
-    for name, step in steps:
-        print(f"\n=== {name} ===", flush=True)
-        try:
-            if step() != 0:
+
+    def serially(steps: list[tuple[str, Callable[[], int]]]) -> None:
+        for name, step in steps:
+            print(f"\n=== {name} ===", flush=True)
+            try:
+                if step() != 0:
+                    failed.append(name)
+            except Exception as exc:  # noqa: BLE001 - one source must not stop the rest
+                print(f"  FAIL {name}: {exc}", file=sys.stderr)
                 failed.append(name)
-        except Exception as exc:  # noqa: BLE001 - one source must not stop the rest
-            print(f"  FAIL {name}: {exc}", file=sys.stderr)
-            failed.append(name)
+
+    serially(prologue)
+    print(f"\n=== gathering {len(gathered)} sources at once ===", flush=True)
+    failed.extend(_gather(gathered))
+    serially(epilogue)
 
     print("\n=== board ===", flush=True)
     script = "publish.py" if publish else "build_data.py"
@@ -1073,6 +1253,20 @@ def main(argv: list[str] | None = None) -> int:
         "--since",
         help="only read back to this ISO date -- a top-up between full sweeps,"
         " which are cheap enough (~850 requests) to just do",
+    )
+
+    hongkong_command = commands.add_parser(
+        "hongkong",
+        help="sweep the Interactive Employment Service, Hong Kong's statutory portal",
+    )
+    hongkong_command.add_argument(
+        "--max-pages",
+        type=int,
+        default=iesjobs.MAX_PAGES,
+        help="stop after this many pages. A bound below the default marks the"
+        " sweep partial, so a probe run can never be reported as a complete"
+        " one. It bounds each of the 29 job-type slices, and the whole board"
+        " is ~750 requests and about 50 minutes",
     )
 
     denmark_command = commands.add_parser(
@@ -1242,59 +1436,42 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     args = parser.parse_args(argv)
-    if args.command == "daily":
-        return _daily(args.db, args.full, args.publish)
-    if args.command == "list":
-        return _list(args.db, args)
-    if args.command == "sample":
-        return _sample(args.db, args.limit, args.out)
-    if args.command == "labels":
-        return _labels(args.db, args.file)
-    if args.command == "prune":
-        return _prune(args.db, args.apply)
-
-    if args.command == "coverage":
-        return _coverage(args.db)
-    if args.command == "tag":
-        return _tag(args.db, args.limit, args.dimension)
-    if args.command == "pages":
-        return _pages(args.db, args.limit, args.workers)
-    if args.command == "corrections":
-        return _corrections(args.endpoint)
-    if args.command == "alerts":
-        return _alerts(args.db)
-    if args.command == "jobstream":
-        return _jobstream(args.db, args.since)
-    if args.command == "discover":
-        return _discover(
-            args.db, args.limit, args.roster, args.workers, args.source
-        )
-    if args.command == "bodies":
-        return _bodies(args.db, args.limit, args.workers)
-    if args.command == "singapore":
-        return _singapore(args.db, args.since)
-    if args.command == "denmark":
-        only = [int(part) for part in args.only.split(",")] if args.only else None
-        return _denmark(args.db, args.since, only)
-    if args.command == "sweden":
-        return _sweden(args.db, args.pages)
-    if args.command == "switzerland":
-        return _switzerland(args.db, args.days)
-    if args.command == "jobs":
-        return _jobs(args.db, args.limit, args.workers)
-    if args.command == "ats":
-        return _ats(args.db, args.limit, args.workers, args.reprobe)
-    if args.command == "domains":
-        return _domains(args.db, args.limit, args.workers, args.regrade)
-    if args.command == "fca":
-        return _fca(args.db, args.limit)
-    if args.command == "stats":
-        return _stats(args.db)
-    if args.command == "resolve":
-        return _resolve(args.db)
-    if args.command == "audit":
-        return _audit(args.db, args.verbose, args.pipeline)
-    return _fetch(args.registries or list(REGISTRIES), args.db)
+    # One entry per command, where the chain of `if args.command == ...` that
+    # used to be here was thirty lines whose only variable was which arguments
+    # each handler wanted. Lambdas rather than partials so the argument names
+    # stay visible; nothing is evaluated until the one that is looked up.
+    handlers = {
+        "fetch": lambda: _fetch(args.registries or list(REGISTRIES), args.db),
+        "resolve": lambda: _resolve(args.db),
+        "stats": lambda: _stats(args.db),
+        "audit": lambda: _audit(args.db, args.verbose, args.pipeline),
+        "domains": lambda: _domains(args.db, args.limit, args.workers, args.regrade),
+        "fca": lambda: _fca(args.db, args.limit),
+        "ats": lambda: _ats(args.db, args.limit, args.workers, args.reprobe),
+        "discover": lambda: _discover(
+            args.db, args.limit, args.roster, args.workers, args.source),
+        "jobs": lambda: _jobs(args.db, args.limit, args.workers),
+        "pages": lambda: _pages(args.db, args.limit, args.workers),
+        "bodies": lambda: _bodies(args.db, args.limit, args.workers),
+        "singapore": lambda: _singapore(args.db, args.since),
+        "hongkong": lambda: _hongkong(args.db, args.max_pages),
+        "denmark": lambda: _denmark(
+            args.db, args.since,
+            [int(part) for part in args.only.split(",")] if args.only else None),
+        "sweden": lambda: _sweden(args.db, args.pages),
+        "switzerland": lambda: _switzerland(args.db, args.days),
+        "jobstream": lambda: _jobstream(args.db, args.since),
+        "tag": lambda: _tag(args.db, args.limit, args.dimension),
+        "list": lambda: _list(args.db, args),
+        "sample": lambda: _sample(args.db, args.limit, args.out),
+        "labels": lambda: _labels(args.db, args.file),
+        "prune": lambda: _prune(args.db, args.apply),
+        "coverage": lambda: _coverage(args.db),
+        "corrections": lambda: _corrections(args.endpoint),
+        "alerts": lambda: _alerts(args.db),
+        "daily": lambda: _daily(args.db, args.full, args.publish),
+    }
+    return handlers[args.command]()
 
 
 if __name__ == "__main__":

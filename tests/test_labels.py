@@ -9,8 +9,10 @@ Run with: python -m unittest discover -s tests
 from __future__ import annotations
 
 import csv
+import io
 import sqlite3
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -277,8 +279,21 @@ class FileTest(unittest.TestCase):
             header = next(csv.reader(handle))
 
         self.assertLess(header.index("relevance"), header.index("title"))
-        self.assertLess(header.index("note"), header.index("description"))
+        self.assertLess(header.index("note"), header.index("url"))
         self.assertEqual(header[-3:], ["ats", "token", "job_id"])
+
+    def test_the_sheet_does_not_cache_the_description(self):
+        """**It was 3.6 MB of the sheets' 4.3 MB**, a verbatim copy of a column
+        `jobs` already owns, rewritten in git on every redraw. Every binary
+        format was measured against simply dropping it and lost: SQLite 4.9 MB,
+        gzip 1.4 MB, xz 0.9 MB, against 318 KB for this."""
+        self._store("1", "Quantitative Researcher", description="x" * 5_000)
+
+        labels.draw(self.connection, 1, self.path)
+        text = self.path.read_text(encoding="utf-8-sig")
+
+        self.assertNotIn("description", next(csv.reader(io.StringIO(text))))
+        self.assertNotIn("x" * 200, text)
 
     def test_a_hand_edited_header_still_parses(self):
         """Spreadsheets are edited by people: a column picks up a capital, or
@@ -358,6 +373,60 @@ class ScoreTest(FileTest):
 
         self.assertEqual(len(disagreements), 1)
         self.assertEqual(disagreements[0].dimension, "key")
+
+
+class TheSheetSurvivesItsWriterTest(unittest.TestCase):
+    """`labels.csv` is the one input here a machine cannot regenerate, and both
+    ways of losing it were reachable: a truncating open that leaves the file
+    empty if the write fails half way, and two `serve.py` request threads
+    reading the same rows and the second dropping the first."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.path = Path(self.dir.name) / "labels.csv"
+
+    def _write(self, n):
+        labels.upsert(self.path, ("a", "b", str(n)), "relevance", "rejected",
+                      {"title": f"row {n}"})
+
+    def test_a_failed_write_leaves_the_previous_sheet_intact(self):
+        self._write(1)
+        before = self.path.read_text(encoding="utf-8-sig")
+        real = csv.writer
+
+        class Exploding:
+            def __init__(self, handle): self.handle = handle
+            def writerows(self, rows): raise RuntimeError("disk full")
+
+        csv.writer = Exploding
+        try:
+            with self.assertRaises(RuntimeError):
+                self._write(2)
+        finally:
+            csv.writer = real
+        self.assertEqual(self.path.read_text(encoding="utf-8-sig"), before)
+        self.assertEqual(len(labels.load(self.path)), 1)
+
+    def test_no_temporary_file_is_left_behind(self):
+        self._write(1)
+        self.assertEqual([p.name for p in Path(self.dir.name).iterdir()], ["labels.csv"])
+
+    def test_concurrent_corrections_do_not_lose_each_other(self):
+        """The `serve.py` case: one thread per request, one file."""
+        start = threading.Barrier(8)
+
+        def go(n):
+            start.wait()
+            self._write(n)
+
+        threads = [threading.Thread(target=go, args=(n,)) for n in range(8)]
+        for t in threads: t.start()
+        for t in threads: t.join()
+        self.assertEqual(
+            {label.job_id for label in labels.load(self.path)},
+            {str(n) for n in range(8)},
+        )
 
 
 if __name__ == "__main__":

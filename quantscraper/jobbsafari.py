@@ -78,7 +78,7 @@ import re
 import sqlite3
 from dataclasses import dataclass
 
-from . import db, http
+from . import db, http, sweep
 from .models import Job
 
 NAME = "jobbsafari"
@@ -103,10 +103,8 @@ MAX_PAGES = 400
 # this deep; a sweep coming back under it has found a redesign, not a holiday.
 MIN_EXPECTED = 15_000
 
-# The index moves under a two-minute walk -- ads are published and withdrawn
-# while it runs -- so a small gap between advertised and collected is the board
-# breathing. Anything wider is truncation.
-SHORTFALL_TOLERANCE = 0.02
+# One definition, in `sweep`, with the measurement that set it.
+SHORTFALL_TOLERANCE = sweep.SHORTFALL_TOLERANCE
 
 _ISLAND = re.compile(
     r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', re.S
@@ -161,19 +159,7 @@ class Sweep:
                 f"stopped at the {MAX_PAGES:,d}-page bound with the board still "
                 "serving rows -- the walk was cut short rather than finished"
             )
-        if self.seen < MIN_EXPECTED:
-            return (
-                f"collected {self.seen:,d} postings, expected at least "
-                f"{MIN_EXPECTED:,d} -- treating as a broken source"
-            )
-        shortfall = self.advertised - self.seen
-        if self.advertised and shortfall > self.advertised * SHORTFALL_TOLERANCE:
-            return (
-                f"collected {self.seen:,d} of the {self.advertised:,d} the board "
-                f"advertised -- {shortfall:,d} short, which is truncation rather "
-                f"than a moving index"
-            )
-        return None
+        return sweep.problem(self.seen, self.advertised, MIN_EXPECTED)
 
 
 def build_id() -> str:

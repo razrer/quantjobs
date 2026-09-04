@@ -71,7 +71,6 @@ newest 20 postings.
 
 from __future__ import annotations
 
-import html
 import json
 import re
 import sqlite3
@@ -79,7 +78,7 @@ import urllib.parse
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 
-from . import db, http
+from . import db, http, parsing, sweep
 from .models import Job
 from .resolve import domain_of, is_platform_domain
 
@@ -104,10 +103,8 @@ MAX_PAGES = 200
 # is the per-slice shortfall against the board's own `hitcount`.
 MIN_EXPECTED = 5_000
 
-# The index moves while a sweep runs -- an ad posted between page 3 and page 4
-# slides a row across the boundary -- so a few postings arrive twice or not at
-# all. Anything past this is truncation, not turbulence.
-SHORTFALL_TOLERANCE = 0.02
+# One definition, in `sweep`, with the measurement that set it.
+SHORTFALL_TOLERANCE = sweep.SHORTFALL_TOLERANCE
 
 # How a slice that will not fit the window is cut further, in order. Each value
 # list ends with the site's own "not stated" bucket, which is what makes the
@@ -213,7 +210,6 @@ SUBCATEGORIES: dict[int, str] = {
 }
 
 _STASH = "var Stash = "
-_TAGS = re.compile(r"<[^>]+>")
 
 # What joins the categories a posting is filed under. **Not a comma**, which is
 # what MyCareersFuture uses and what the labels here contain: "Hotel, restaurant
@@ -315,19 +311,7 @@ class Sweep:
             )
         if self.partial:
             return None
-        if self.seen < MIN_EXPECTED:
-            return (
-                f"collected {self.seen:,d} postings, expected at least "
-                f"{MIN_EXPECTED:,d} -- treating as a broken source"
-            )
-        shortfall = self.advertised - self.seen
-        if self.advertised and shortfall > self.advertised * SHORTFALL_TOLERANCE:
-            return (
-                f"collected {self.seen:,d} of the {self.advertised:,d} the board "
-                f"advertised -- {shortfall:,d} short, which is truncation rather "
-                f"than a moving index"
-            )
-        return None
+        return sweep.problem(self.seen, self.advertised, MIN_EXPECTED)
 
 
 def parse(markup: str) -> Page:
@@ -429,16 +413,7 @@ def slices(known: dict[int, str] | None = None) -> Iterator[Slice]:
         yield Slice((("subid", subid),))
 
 
-def _text(value: str | None) -> str | None:
-    """Plain text out of the rendered advertisement teaser.
-
-    Tags are stripped before entities are decoded, never after: an employer who
-    writes a literal `&lt;p&gt;` would otherwise have it turned into a tag and
-    then eaten. Same order as `mycareersfuture._text`, for the same reason.
-    """
-    if not value:
-        return None
-    return " ".join(html.unescape(_TAGS.sub(" ", value)).split()) or None
+_text = parsing.text  # one definition, in `parsing`
 
 
 def _location(row: dict) -> str | None:

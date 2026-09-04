@@ -40,7 +40,7 @@ import urllib.error
 import urllib.parse
 from pathlib import Path
 
-from . import db, http
+from . import http
 from .domains import Lookup, record
 from .resolve import domain_of, normalize_name
 

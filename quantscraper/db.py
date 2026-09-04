@@ -60,6 +60,16 @@ CREATE TABLE IF NOT EXISTS jobs (
 
 CREATE INDEX IF NOT EXISTS jobs_by_domain ON jobs (domain);
 
+-- Where a delta feed resumes. Two sources keep a cursor -- JobStream's is epoch
+-- milliseconds and job-room.ch's is a date -- and it is one column because the
+-- *shape* of a cursor is the source's business and the storage is not. It lived
+-- in both modules, as two `CREATE TABLE` statements free to drift.
+CREATE TABLE IF NOT EXISTS feed_state (
+    feed       TEXT PRIMARY KEY,
+    cursor     TEXT NOT NULL,   -- opaque here; the reader knows what it means
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS runs (
     id          INTEGER PRIMARY KEY,
     source      TEXT NOT NULL,
@@ -223,6 +233,25 @@ def upsert_jobs(
             rows,
         )
     return len(rows)
+
+
+def cursor(connection: sqlite3.Connection, feed: str) -> str | None:
+    """The stored resume point for `feed`, or None if it has never run."""
+    row = connection.execute(
+        "SELECT cursor FROM feed_state WHERE feed = ?", (feed,)
+    ).fetchone()
+    return row["cursor"] if row else None
+
+
+def save_cursor(connection: sqlite3.Connection, feed: str, value: str) -> None:
+    """Move `feed`'s resume point. Written as text; the reader decodes it."""
+    with connection:
+        connection.execute(
+            "INSERT INTO feed_state (feed, cursor, updated_at) VALUES (?, ?, ?)"
+            " ON CONFLICT (feed) DO UPDATE SET cursor = excluded.cursor,"
+            " updated_at = excluded.updated_at",
+            (feed, value, now()),
+        )
 
 
 def record_run(

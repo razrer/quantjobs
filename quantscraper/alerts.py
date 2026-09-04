@@ -22,6 +22,9 @@ or plausibly could:
   shrank     materially below the historical median for that source
   stale      no successful run for a long time, which is how a source that
              was quietly dropped from a schedule looks
+  lexicon    the classifier was edited without `tagging.TAGGER` being bumped,
+             so `tag` visits nothing and every summary keeps serving the
+             previous answers -- see `tagging.fingerprint`
 
 A source with no history is not judged. One run is not a baseline, and inventing
 one would produce noise on exactly the sources that are newest and least
@@ -43,6 +46,8 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
+from . import tagging
+
 # Below this share of the historical median, a run is treated as broken. Set
 # loosely on purpose: registries genuinely move by a few per cent between runs,
 # and an alert that cries wolf gets ignored, which is worse than not having one.
@@ -58,7 +63,7 @@ STALE_AFTER = timedelta(days=30)
 @dataclass(frozen=True, slots=True)
 class Alert:
     source: str
-    kind: str  # fail | empty | shrank | stale
+    kind: str  # fail | empty | shrank | stale | lexicon
     detail: str
 
     def __str__(self) -> str:
@@ -134,6 +139,19 @@ def check(connection: sqlite3.Connection, now: datetime | None = None) -> list[A
                 Alert(source, "stale", f"last successful run {(now - started).days} days ago")
             )
 
+    # **The one check here that is not about a source.** Every alert above asks
+    # whether a *fetch* went quiet; this asks whether the *classifier* did, and
+    # it is the same failure shape one layer along -- `tag` visits only
+    # postings with no row at the current `TAGGER`, so a lexicon edited without
+    # a bump reports `tagged 0 postings` and every summary below it keeps
+    # serving the previous version's answers. Loud here rather than nowhere.
+    if tagging.drifted(connection):
+        alerts.append(Alert(
+            f"tagger {tagging.TAGGER}", "lexicon",
+            "the needle lists have changed since these tags were written --"
+            " bump tagging.TAGGER and re-run `tag`, or the board is serving"
+            " the previous classifier's answers",
+        ))
     return alerts
 
 
@@ -152,12 +170,14 @@ def _expected() -> set[str]:
     Imported inside the function, like `REGISTRIES`, so this module keeps its
     one promise -- it reads, and it depends on nothing that writes.
     """
-    from . import jobbsafari, jobindex, jobroom_ch, jobstream, mycareersfuture
+    from . import (
+        iesjobs, jobbsafari, jobindex, jobroom_ch, jobstream, mycareersfuture,
+    )
     from .registries import REGISTRIES
 
     return set(REGISTRIES) | {
         module.NAME for module in
-        (jobstream, jobroom_ch, jobindex, jobbsafari, mycareersfuture)
+        (jobstream, jobroom_ch, jobindex, jobbsafari, mycareersfuture, iesjobs)
     }
 
 

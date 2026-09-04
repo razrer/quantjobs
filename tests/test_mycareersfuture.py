@@ -110,11 +110,21 @@ class PageSizeTest(unittest.TestCase):
 
 
 class WalkTest(unittest.TestCase):
-    def test_a_short_page_ends_the_walk(self):
-        portal = _install(self, _FakePortal([_full(100), _full(39, start=100)]))
+    def test_a_short_page_does_not_end_the_walk(self):
+        """The Jobbsafari and Oracle lesson, and this walk used to fail it.
+
+        A short page in the middle of a board looks exactly like the real last
+        one, and the arithmetic looks perfect either way: Jobbsafari reported
+        5,421 postings of 48,000 on a 499-row page and Oracle truncated Kotak
+        at 3,199 of 9,959. Only an empty page ends a walk. Measured live here,
+        page 940 is the genuine last page at 58 rows and 941 answers empty.
+        """
+        portal = _install(
+            self, _FakePortal([_full(100), _full(39, start=100), _full(60, start=139), []])
+        )
         rows = [row for page, _ in mcf.walk() for row in page]
-        self.assertEqual(len(rows), 139)
-        self.assertEqual(portal.asked, [0, 1])
+        self.assertEqual(len(rows), 199, "the walk stopped on the short page")
+        self.assertEqual(portal.asked, [0, 1, 2, 3])
 
     def test_a_repeated_page_ends_the_walk(self):
         """A server ignoring `page` serves page one forever and never returns
@@ -128,6 +138,16 @@ class WalkTest(unittest.TestCase):
     def test_an_empty_page_ends_the_walk(self):
         portal = _install(self, _FakePortal([_full(100), []]))
         self.assertEqual(len([r for p, _ in mcf.walk() for r in p]), 100)
+        self.assertEqual(portal.asked, [0, 1])
+
+    def test_a_final_short_page_is_still_followed_by_a_request(self):
+        """The whole cost of the fix, stated so nobody trades it back.
+
+        One extra request per sweep buys the guarantee that a short page
+        anywhere in the walk cannot truncate it.
+        """
+        portal = _install(self, _FakePortal([_full(58), []]))
+        self.assertEqual(len([r for p, _ in mcf.walk() for r in p]), 58)
         self.assertEqual(portal.asked, [0, 1])
 
     def test_the_walk_does_not_stop_on_a_full_page(self):
@@ -169,9 +189,11 @@ class SinceTest(unittest.TestCase):
         )
 
     def test_no_since_reads_the_whole_portal(self):
-        portal = _install(self, _FakePortal([self._dated(*(["2020-01-01"] * 100)), _full(2)]))
+        portal = _install(
+            self, _FakePortal([self._dated(*(["2020-01-01"] * 100)), _full(2), []])
+        )
         list(mcf.walk())
-        self.assertEqual(portal.asked, [0, 1])
+        self.assertEqual(portal.asked, [0, 1, 2])
 
 
 class ShortfallTest(unittest.TestCase):

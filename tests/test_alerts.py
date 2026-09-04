@@ -6,13 +6,16 @@ The interesting cases are the ones a fixed `MIN_EXPECTED` floor sails past.
 
 from __future__ import annotations
 
+import os
 import sqlite3
+import subprocess
+import sys
 import unittest
 import urllib.error
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from quantscraper import alerts, cli, db
+from quantscraper import alerts, cli, db, lexicon, tagging
 
 
 def _memory(test: unittest.TestCase) -> sqlite3.Connection:
@@ -179,17 +182,30 @@ class CrashedPollsAreVisibleTest(unittest.TestCase):
         """A poller wired straight to its module is invisible when it crashes,
         which is exactly the state this test exists to keep out. Checked by
         reading the source, the same way `EveryFingerprintHasAReaderTest` does:
-        the alternative is five near-identical network tests."""
+        the alternative is six near-identical network tests.
+
+        Two ways in are allowed and both end in the same place: `_poll`
+        directly, or `_sweep`, which is the shared open-poll-record wrapper the
+        five portal commands use. The second clause is what keeps that from
+        being a loophole -- `_sweep` is asserted to reach `_poll` itself."""
         source = Path(cli.__file__).read_text(encoding="utf-8")
-        for command, module in (
-            ("_singapore", "mycareersfuture"), ("_denmark", "jobindex"),
-            ("_sweden", "jobbsafari"), ("_switzerland", "jobroom_ch"),
-            ("_jobstream", "jobstream"),
-        ):
-            start = source.index(f"def {command}(")
+
+        def body_of(name):
+            start = source.index(f"def {name}(")
             end = source.find(chr(10) + "def ", start + 1)
-            body = source[start : end if end > 0 else len(source)]
-            self.assertIn("_poll(", body, f"{command} does not record a crash")
+            return source[start : end if end > 0 else len(source)]
+
+        self.assertIn("_poll(", body_of("_sweep"), "_sweep stopped recording crashes")
+        for command, module in (
+            ("_singapore", "mycareersfuture"), ("_hongkong", "iesjobs"),
+            ("_denmark", "jobindex"), ("_sweden", "jobbsafari"),
+            ("_switzerland", "jobroom_ch"), ("_jobstream", "jobstream"),
+        ):
+            body = body_of(command)
+            self.assertTrue(
+                "_poll(" in body or "_sweep(" in body,
+                f"{command} does not record a crash",
+            )
             self.assertNotIn(f"= {module}.run(", body,
                              f"{command} calls {module}.run outside _poll")
 
@@ -216,6 +232,80 @@ class CoverageReachesLayer4Test(unittest.TestCase):
     def test_the_registries_are_still_covered(self):
         from quantscraper.registries import REGISTRIES
         self.assertTrue(set(REGISTRIES) <= alerts._expected())
+
+
+class AnUnbumpedLexiconIsLoudTest(unittest.TestCase):
+    """`tag` visits only postings with no row at the current `TAGGER`, so a
+    lexicon edited without a bump reports `tagged 0 postings` and every
+    summary keeps serving the previous answers. `CLAUDE.md` has warned about
+    it since the beginning and nothing detected it -- and it had happened:
+    53 postings in the live database carried a verdict at version 58 that
+    version 58's own code no longer produced."""
+
+    def test_a_fingerprint_is_stable_across_calls(self):
+        self.assertEqual(tagging.fingerprint(), tagging.fingerprint())
+
+    def test_a_fingerprint_is_stable_across_processes(self):
+        """**The failure that shipped first.** `_STOPWORD_LANGUAGES` is built by
+        walking `frozenset`s, and set order follows string hashing, which
+        Python randomises per process -- so the fingerprint differed on every
+        run and the alert fired on a database that had *just* been re-tagged.
+        An alert that always fires is worse than no alert, so this is pinned
+        against a second interpreter rather than against a second call."""
+        out = subprocess.run(
+            [sys.executable, "-c",
+             "import sys; sys.path.insert(0, %r);" % str(Path(tagging.__file__).parents[2])
+             + " from quantscraper import tagging; print(tagging.fingerprint())"],
+            capture_output=True, text=True, env={**os.environ, "PYTHONHASHSEED": "random"},
+        )
+        self.assertEqual(out.stdout.strip(), tagging.fingerprint(), out.stderr)
+
+    def test_a_changed_needle_list_changes_it(self):
+        before = tagging.fingerprint()
+        saved = lexicon.MARKETS
+        try:
+            lexicon.MARKETS = saved + ("a phrase nobody wrote",)
+            self.assertNotEqual(tagging.fingerprint(), before)
+        finally:
+            lexicon.MARKETS = saved
+        self.assertEqual(tagging.fingerprint(), before)
+
+    def test_a_comment_is_free(self):
+        """It hashes the needles, not the source, so a refactor costs nothing
+        -- otherwise the alert would fire on every edit and be ignored."""
+        before = tagging.fingerprint()
+        tagging.__doc__ = (tagging.__doc__ or '') + chr(10) + 'an added sentence'
+        self.assertEqual(tagging.fingerprint(), before)
+
+    def test_an_unstamped_database_is_not_an_alert(self):
+        """A database predating the stamp has nothing to compare against, and
+        a guard that fires on the absence of evidence is the one thing every
+        gate in this project is forbidden to be."""
+        connection = _memory(self)
+        connection.executescript(tagging.SCHEMA)
+        self.assertIsNone(tagging.drifted(connection))
+        self.assertEqual([a for a in alerts.check(connection) if a.kind == "lexicon"], [])
+
+    def test_a_drifted_stamp_is_an_alert(self):
+        connection = _memory(self)
+        connection.executescript(tagging.SCHEMA)
+        tagging._stamp(connection)
+        self.assertIsNone(tagging.drifted(connection))
+        connection.execute("UPDATE tagger_state SET lexicon = 'not-what-it-is-now'")
+        self.assertEqual(tagging.drifted(connection), "not-what-it-is-now")
+        self.assertEqual([a.kind for a in alerts.check(connection)], ["lexicon"])
+
+    def test_a_run_that_tags_nothing_still_stamps(self):
+        """The normal shape of this failure is a run with nothing to do: after
+        an unbumped edit every posting already has a row at this version, so
+        `postings` comes back empty. Returning early without stamping would
+        leave the one case unrecorded."""
+        connection = _memory(self)
+        self.assertEqual(tagging.run(connection, 10), (0, 0))
+        self.assertEqual(
+            connection.execute("SELECT lexicon FROM tagger_state WHERE tagger = ?",
+                               (tagging.TAGGER,)).fetchone()["lexicon"],
+            tagging.fingerprint())
 
 
 if __name__ == "__main__":

@@ -37,6 +37,34 @@ DIMENSIONS = {"rel", "sen"}
 # and extract.py) -- this just refuses to store anything that stopped being.
 _ID_RE = re.compile(r"^[^\s]{1,200}$")
 
+# **The route is public and unauthenticated, and until now nothing bounded what
+# it would store.** CORS keeps a *browser* on another origin out and does
+# nothing about a plain POST, so the blob this appends to -- read back by
+# `python -m quantscraper corrections` and written straight into `labels.csv`,
+# which feeds the board's `hand_rejected` gate -- could be grown without limit
+# by anyone who found the URL. Three bounds, none of which a real correction
+# comes near: the value is a vocabulary term, the context fields are what the
+# card already shows, and the blob holds one entry per (posting, dimension).
+#
+# Deliberately *not* an allow-list of the vocabulary itself. This function
+# cannot import `quantscraper.labels`, so a copy of `RELEVANCE` and
+# `SENIORITY` here would be a second definition free to drift from the first;
+# `labels.validate` already refuses an unknown value on the way in, and
+# `labels.nearest` corrects a typo. A length bound is the part that belongs
+# here, because it is about the store rather than about the vocabulary.
+_MAX_VALUE = 40
+_MAX_TEXT = 500
+_MAX_ENTRIES = 20_000
+
+# What the board sends beside the key, and the only free text kept -- exactly
+# `labels.CONTEXT`, because those are the columns `cli._corrections` reads.
+# **`description` is deliberately absent**: it was stored here and dropped on
+# the way back in, since `labels.py` took it off `CONTEXT` on purpose (the
+# `url` is a click away and the body is regenerable from `jobs`). It was the
+# largest field in a blob that is read-modify-written on every correction, and
+# nothing has ever read it. To reverse, put it back in both places at once.
+_CONTEXT = ("title", "firm", "location", "department", "url")
+
 s3 = boto3.client("s3")
 
 
@@ -91,16 +119,20 @@ def handler(event: dict, _context: object) -> dict:
             for part in (ats, token, job_id):
                 if not _ID_RE.match(part):
                     raise ValueError("empty or malformed id field")
+            if len(value) > _MAX_VALUE:
+                raise ValueError("value is not a vocabulary term")
         except Exception as exc:  # noqa: BLE001 -- tell the board, never 500 it
             return _response(400, {"error": str(exc)})
 
         data = _load()
-        data[f"{ats}:{token}:{job_id}:{dim}"] = {
+        entry = f"{ats}:{token}:{job_id}:{dim}"
+        # A cap on the *store* rather than on the request: re-correcting a card
+        # overwrites its own entry and can never be what fills this up.
+        if entry not in data and len(data) >= _MAX_ENTRIES:
+            return _response(429, {"error": "correction store is full"})
+        data[entry] = {
             "ats": ats, "token": token, "job_id": job_id, "dim": dim, "value": value,
-            "title": str(body.get("title", "")), "firm": str(body.get("firm", "")),
-            "location": str(body.get("location", "")),
-            "department": str(body.get("department", "")),
-            "url": str(body.get("url", "")), "description": str(body.get("description", "")),
+            **{name: str(body.get(name, ""))[:_MAX_TEXT] for name in _CONTEXT},
         }
         _save(data)
         return _response(204)

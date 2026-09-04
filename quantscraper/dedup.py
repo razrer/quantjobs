@@ -93,7 +93,10 @@ MIN_BODY = 400
 # own. A national board is a republisher, which is the whole reason the same
 # opening arrives twice under two identities -- the portal holds the employer's
 # *name* and no domain, the firm's own board the reverse.
-PORTALS = frozenset({"mycareersfuture", "jobbsafari", "jobroom", "jobindex", "jobtech"})
+PORTALS = frozenset({
+    "mycareersfuture", "jobbsafari", "jobroom", "jobindex", "jobtech",
+    "iesjobs",
+})
 
 # The tail of a company name that says what kind of company it is rather than
 # which one. A portal prints the legal name and a firm's own board prints the

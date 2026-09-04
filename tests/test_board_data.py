@@ -10,13 +10,16 @@ there.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "web"))
 import build_data  # noqa: E402
+import publish  # noqa: E402
 
 
 def _database(rows) -> sqlite3.Connection:
@@ -241,6 +244,106 @@ class BoardDomainsTest(unittest.TestCase):
             ("jobindex", "denmark", "novonordisk.dk", 70),
             ("jobindex", "denmark", "danskebank.com", 40),
         ])), {})
+
+
+
+class UnreadCensusCardTest(unittest.TestCase):
+    """Hong Kong's statutory board, where an unreadable card is noise.
+
+    `non_markets_employer` is how a national portal's noise comes off the
+    board -- profile the employer, because one token carries a whole territory.
+    That works for Singapore and **cannot** work for Hong Kong, whose portal
+    publishes an employer name nowhere on either list view. So the noise there
+    has nothing to profile and needs the source-level answer.
+
+    Measured before it went in: of 13,465 live Hong Kong postings from that
+    portal, **six** are rated above `unknown`, against 277 from 1,789 postings
+    on the firms' own boards in the same hub -- 0.04% against 15.5%.
+    """
+
+    def test_an_unreadable_card_from_the_census_is_noise(self):
+        self.assertTrue(build_data.unread_census("iesjobs", "unknown"))
+
+    def test_a_rated_card_survives_however_bad_the_source_average_is(self):
+        """This is the whole safety argument, and it is the second half.
+
+        All six of Hong Kong's rated postings stay -- including
+        `Quantitative Researcher (QR)` and `Quantitative Developer (QD)`, which
+        exist nowhere else in the corpus.
+        """
+        for verdict in ("relevant", "less_relevant", "adjacent"):
+            self.assertFalse(build_data.unread_census("iesjobs", verdict), verdict)
+
+    def test_it_touches_no_other_source(self):
+        """An unreadable card elsewhere is a gap to close, not noise to drop.
+
+        Singapore's `unknown` bucket was measured the other way -- a vocabulary
+        gap holding real work, only 8% of it missing a usable description -- so
+        the same rule there would delete jobs.
+        """
+        for ats in ("mycareersfuture", "jobbsafari", "jobindex", "workday",
+                    "greenhouse", "jobroom", "jobtech"):
+            self.assertFalse(build_data.unread_census(ats, "unknown"), ats)
+
+    def test_it_is_counted_on_every_build(self):
+        """One total would hide which gate ate a hub -- so it needs a name."""
+        self.assertIn("unread_census_card", build_data.GATES)
+
+    def test_it_is_not_an_exclusion_reason(self):
+        """It is a fact about our reading, not about the posting.
+
+        `tagging.GATES` is what `labels._candidates` builds a labelling frame
+        from, so a reason that is not an `exclusion_reason` must stay out of it
+        -- exactly as `rejected`, `non_markets_board` and `hand_rejected` do.
+        """
+        from quantscraper import tagging
+        self.assertNotIn("unread_census_card", tagging.GATES)
+
+
+class TheBuildRefusesToShipNothingTest(unittest.TestCase):
+    """**Principle 2, on the one step that ships.** `MIN_EXPECTED` guards every
+    registry and every national board because a source that returns zero rows
+    with HTTP 200 is more dangerous than one that crashes -- and the file the
+    reader actually looks at had no such floor.
+
+    It is not hypothetical. `tagging.TAGGER` was bumped, the re-tag had not
+    run, every posting fell out as `untagged`, and `main` wrote a 0-posting
+    `data.js` and returned normally; `publish.py` checks the file exists and
+    that the CLI printed no error, so it would have uploaded it. `daily` runs
+    `tag` in a phase where a failing step is logged and the run continues, and
+    then rebuilds and publishes, which is the route.
+    """
+
+    def _payload(self, cards):
+        return "window.BOARD = " + json.dumps(
+            {"built": "now", "tagger": 1, "firms": {}, "jobs": [{"id": str(n)} for n in range(cards)]}
+        ) + ";\n"
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.path = Path(self.dir.name) / "data.js"
+
+    def test_a_full_board_passes(self):
+        self.path.write_text(self._payload(build_data.MIN_CARDS), encoding="utf-8")
+        publish._check(self.path, build_data.MIN_CARDS)  # does not raise
+
+    def test_an_empty_board_is_refused_before_anything_is_uploaded(self):
+        self.path.write_text(self._payload(0), encoding="utf-8")
+        with self.assertRaises(SystemExit) as caught:
+            publish._check(self.path, build_data.MIN_CARDS)
+        self.assertIn("REFUSED", str(caught.exception))
+
+    def test_a_thin_board_is_refused_too(self):
+        self.path.write_text(self._payload(build_data.MIN_CARDS - 1), encoding="utf-8")
+        with self.assertRaises(SystemExit):
+            publish._check(self.path, build_data.MIN_CARDS)
+
+    def test_the_floor_sits_well_below_any_real_board(self):
+        """A catastrophe check, not a regression check: the recorded range is
+        4,211 to 8,513 cards, so a board that halves is a story and a board
+        that empties is a broken pipeline."""
+        self.assertLess(build_data.MIN_CARDS, 4_211 // 4)
 
 
 if __name__ == "__main__":

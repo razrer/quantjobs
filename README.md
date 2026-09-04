@@ -7,7 +7,9 @@ a discovery net for employers the registries miss, never the primary source.
 
 The board is live at **https://quantjobs.spawned.app**.
 
-No dependencies — standard library only, so there is nothing to install.
+No dependencies today, so there is nothing to install. Third-party packages
+are allowed where they cost nothing and remove a measured cost — see
+[CLAUDE.md](CLAUDE.md) for the three tests one has to pass.
 
 - Working notes and every documented gotcha: [CLAUDE.md](CLAUDE.md)
 - Stage log and what is next: [PLAN.md](PLAN.md)

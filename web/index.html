@@ -318,6 +318,21 @@ select:hover { border-color: var(--rule-firm); }
   font-size: 0.625rem;
   color: var(--accent);
 }
+/* A standing label rather than a click-time surprise: this facet's ticks
+   remove matches, the opposite of every other facet on the rail, so it says
+   so before the reader's first click rather than after. */
+.facet > summary .hides {
+  font-size: 0.625rem;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--due-0);
+  border: 1px solid var(--due-0);
+  border-radius: 3px;
+  padding: 0 0.25rem;
+}
+.facet[data-exclude="1"] .opt[aria-pressed="true"] .box { background: var(--due-0); border-color: var(--due-0); }
+.facet[data-exclude="1"] .opt[aria-pressed="true"] .name { color: var(--due-0); }
 .facet-body { padding: 0 0 0.5rem; display: grid; gap: 1px; }
 
 .opt {
@@ -731,6 +746,7 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
   cursor: pointer;
 }
 .tail:hover { color: var(--ink); border-color: var(--ink-faint); }
+.tail[hidden] { display: none; }
 
 .empty {
   margin: 3rem auto;
@@ -816,7 +832,6 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
       <div class="picker">
         <label for="sort">sort</label>
         <select id="sort">
-          <option value="smart">Closing soon, then newest</option>
           <option value="due">Closing date</option>
           <option value="new">Newest posted</option>
           <option value="old">Oldest posted</option>
@@ -908,6 +923,15 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
       that are a real, correctly-graded fit and just not wanted twice. Both
       start off; clicking one leaves a crumb above the grid saying what is
       hidden, and clicking that crumb brings it back.</p>
+      <p><b>Two facets in the rail tick backwards from the rest, and they say
+      so.</b> Every other checkbox narrows the board to what you tick --
+      <em>Fit: apply now</em> shows apply-now postings. <em>Hard gates</em> and
+      <em>Language required</em> are marked <b>hides</b> because their values
+      are barriers, not preferences: ticking <em>no visa sponsorship</em> there
+      removes postings that will not sponsor one, instead of narrowing the
+      board down to only those. Nothing is deleted or re-tagged by it -- the
+      posting is still <code>visa_sponsorship_none</code> in the database and
+      comes back the moment the tick is cleared.</p>
       <p><b>Saved</b> lives in this browser only, keyed on the posting id, and
       comes back with the <em>Saved</em> preset. <b>Reject</b> is one click for
       "not this line of work" -- it takes the posting off the board immediately
@@ -982,6 +1006,8 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
   // rather than disappearing from the rail.
   const LABEL = {
     apply_now: "apply now", out_of_scope: "out of scope",
+    background: "a different line of work",
+    different_field: "a different line of work",
     junior_0_2: "junior · 0–2y", mid_3_5: "mid · 3–5y", senior_6_10: "senior · 6–10y",
     new_grad: "new grad", head_or_md: "head / MD", student_intern: "student / intern",
     quant_research: "quant research", quant_dev: "quant dev",
@@ -1014,7 +1040,22 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
   };
   const label = (v) => LABEL[v] || String(v).replace(/_/g, " ");
 
-  const FIT_RANK = { apply_now: 4, strong: 3, plausible: 2, stretch: 1, out_of_scope: 0, unknown: 0 };
+  // **`unknown` is not the bottom, and it should not be.** "Nothing decided"
+  // is a weaker reason to skip a card than "read, and it is a different line
+  // of work" -- so the two buckets that carry a *reason* sort below it.
+  // `background` is the reader's own scope talking (sell-side research,
+  // enterprise IT, non-quant development); `out_of_scope` is a posting they
+  // could not hold at all, which is the strongest reason of the three. Both
+  // stay on the board, stay filterable and keep their relevance verdict --
+  // they are ranked last, not removed. See `tagging._buried`.
+  const FIT_RANK = { apply_now: 4, strong: 3, plausible: 2, stretch: 1, unknown: 0,
+                     background: -1, out_of_scope: -2 };
+
+  // The palette has five tiers and there are seven buckets, so everything at
+  // or below "nothing decided" shares the quietest one. Ranking and colour are
+  // different questions: the sort needs to tell `background` from `unknown`
+  // and the reader does not need a third grey to tell them apart.
+  const fitTier = (fit) => Math.max(FIT_RANK[fit] ?? 0, 0);
 
   // The postings this board says are worth a person's time. Named once and
   // read in three places -- the "Worth reading" preset, its count, and the
@@ -1029,6 +1070,54 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
   const SHORTLIST = new Set(["apply_now", "strong"]);
 
   // --- dates ---------------------------------------------------------------
+
+  // **A source whose postings have no URL, and a way to open them anyway.**
+  // Hong Kong's statutory portal addresses a job card by `?order=<token>` and
+  // will not take the order number in a GET -- `?ordno=`, `?ordNo=`, `?order=`
+  // and `?criteria.searchField=` were each tried against a posting deep in the
+  // board and every one returns page one of the whole board while answering
+  // HTTP 200. So `iesjobs` writes `jobs.url` as NULL rather than store a token
+  // that dies (see its module docstring), and until now that left the card
+  // with nothing to click.
+  //
+  // **The portal's own search takes it, and a static page can reach a POST.**
+  // A form submission is not an XHR: it is not subject to CORS, it carries the
+  // reader's cookies, and cross-origin `method="post"` is exactly what a
+  // browser is for. Measured against the live portal from a cold jar, warm
+  // jar, with and without an XHR header: **one row, ours, in all four**. The
+  // earlier probe that came back with the whole board had no cookie jar at
+  // all, which is a state no browser is in.
+  //
+  // The order number *is* the `job_id`, so nothing perishable is stored and
+  // the button cannot go stale.
+  const PORTAL_SEARCH = {
+    iesjobs: {
+      action: "https://www2.jobs.gov.hk/0/en/jobseeker/jobsearch/simple/",
+      field: "criteria.searchField",
+    },
+  };
+  const canOpen = (j) => Boolean(j.url || PORTAL_SEARCH[j.ats]);
+
+  function openJob(j) {
+    if (j.url) { window.open(j.url, "_blank", "noopener"); return; }
+    const spec = PORTAL_SEARCH[j.ats];
+    if (!spec) return;
+    const form = document.createElement("form");
+    form.method = "post";
+    form.action = spec.action;
+    form.target = "_blank";
+    form.rel = "noopener";
+    const field = document.createElement("input");
+    field.type = "hidden";
+    field.name = spec.field;
+    // `id` is `ats:token:job_id` and a Hong Kong order number contains no
+    // colon, but the split is written to survive one that does.
+    field.value = j.id.split(":").slice(2).join(":");
+    form.appendChild(field);
+    document.body.appendChild(form);
+    form.submit();
+    form.remove();
+  }
 
   const DAY = 86400000;
   const today = new Date().setHours(0, 0, 0, 0);
@@ -1105,12 +1194,31 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     // is what "the ones I just showed disappeared" was.
     //
     // So the card is patched where it stands and only the rail is recounted.
-    // A posting rejected here stays on the page, dimmed and marked, until the
-    // next filter change rebuilds the grid -- which is also what makes the
-    // click undoable without going hunting for it under `Rejected`.
     patchCard(job);
     render(false);
+
+    // A reject -- or an undo, seen from the `Rejected` preset -- is the one
+    // correction where the card's own business is finished, so there is no
+    // panel left to protect. Pull it the moment it leaves the current view
+    // instead of waiting on the next filter change to catch up; the rail and
+    // the "N results" crumb already reflect the new count, from `render`
+    // above, since `sift` already excludes it.
+    if (dim === "rel" && (
+      (state.only === null && job.rel === "rejected") ||
+      (state.only === "rejected" && job.rel !== "rejected")
+    )) {
+      removeCard(job);
+    }
     queueCorrection(job, dim, value);
+  }
+
+  // Undo still works: a rejected card is gone from the default view but
+  // stays reachable (dimmed, marked) under the `Rejected` preset, where
+  // clicking "rejected ✓" again fires the mirror branch above.
+  function removeCard(job) {
+    for (const card of $("grid").querySelectorAll(".card[data-id]")) {
+      if (card.dataset.id === job.id) card.remove();
+    }
   }
 
   // --- getting a correction off this page ----------------------------------
@@ -1142,7 +1250,12 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
       ats, token, job_id: rest.join(":"), dim, value,
       title: job.title, firm: job.firmDomain || job.firm,
       location: job.loc || "", department: job.team || "",
-      url: job.url || "", description: job.about || "",
+      url: job.url || "",
+      // `description` used to be sent and was the largest field in the
+      // request. `labels.CONTEXT` does not carry it -- the sheet keeps a
+      // clickable `url` instead of a truncation of the body -- so both
+      // `serve.py` and the Function dropped it on the way in. Stop sending it
+      // in both places at once if that decision is ever reversed.
     });
     persistPending();
     drain();
@@ -1188,7 +1301,7 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
 
   const FACETS = [
     { key: "fit", label: "Fit", open: true, swatch: true,
-      order: ["apply_now", "strong", "plausible", "stretch", "out_of_scope", "unknown"],
+      order: ["apply_now", "strong", "plausible", "stretch", "unknown", "background", "out_of_scope"],
       get: single("fit", "unknown") },
 
     { key: "closing", label: "Closing date", open: true,
@@ -1265,7 +1378,13 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     { key: "desk", label: "Desk", open: false,
       order: ["front_office", "middle_office", "back_office", "unstated"],
       get: single("desk", "unstated") },
-    { key: "speaks", label: "Language required", open: false, get: many("speaks") },
+    // A required language is a barrier, not a preference -- nobody ticks
+    // `swedish` here to see *more* postings, they tick it to get postings
+    // demanding Swedish out of the way. `exclude: true` flips this facet's
+    // direction so a tick hides its matches instead of narrowing to them,
+    // matching what `cli.py --speaks` already means by "drop postings
+    // requiring these".
+    { key: "speaks", label: "Language required", open: false, exclude: true, get: many("speaks") },
     { key: "wrote", label: "Written in", open: false,
       order: ["en", "sv", "da", "no", "fi", "nl", "de", "fr", "es", "it", "pt", "cjk", "unknown"],
       labels: { en: "English", sv: "Swedish", da: "Danish", no: "Norwegian",
@@ -1283,7 +1402,13 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     { key: "ct", label: "Contract", open: false,
       order: ["permanent", "fixed_term", "contractor", "internship", "part_time", "unknown"],
       get: single("ct", "unknown") },
-    { key: "gates", label: "Hard gates", open: false, get: many("gates") },
+    // Same direction as `speaks`, same reason: `phd_required`,
+    // `visa_sponsorship_none`, `student_only`, `security_clearance` and
+    // `onsite_only` are every one of them a reason to screen a posting *out*.
+    // Ticking `visa_sponsorship_none` used to narrow the board to postings
+    // that will not sponsor a visa -- backwards from what a reader wanting
+    // sponsorship is trying to do. It now hides them instead.
+    { key: "gates", label: "Hard gates", open: false, exclude: true, get: many("gates") },
     { key: "excl", label: "Why excluded", open: false, get: many("excl") },
     { key: "ats", label: "Source", open: false, get: single("ats", "unknown") },
     { key: "firm", label: "Firm", open: false, limit: 40, get: (j) => [j.firm],
@@ -1411,7 +1536,7 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     if (terms.length && !hay) hay = jobs.map(haystack);
 
     const active = [];
-    FACETS.forEach((f, i) => { if (state.sel[f.key].length) active.push([i, new Set(state.sel[f.key])]); });
+    FACETS.forEach((f, i) => { if (state.sel[f.key].length) active.push([i, new Set(state.sel[f.key]), !!f.exclude]); });
 
     // A posting whose date has passed cannot be applied to, so it is out of the
     // way by default. That is a *closing-date* rule and not a separate flag:
@@ -1434,8 +1559,12 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
 
       let failed = -1, fails = 0;
       if (!showExpired && job.left !== null && job.left < 0) { failed = CLOSING; fails = 1; }
-      for (const [i, want] of active) {
-        if (job.v[i].some((v) => want.has(v))) continue;
+      for (const [i, want, exclude] of active) {
+        // A normal facet passes a job that holds one of the ticked values; an
+        // `exclude` facet is ticked with the values to screen out, so it
+        // passes the opposite jobs -- the ones holding *none* of them.
+        const hit = job.v[i].some((v) => want.has(v));
+        if (exclude ? !hit : hit) continue;
         if (i === failed) continue;               // this facet is already failing
         if (fails === 0) failed = i;
         if (++fails > 1) break;
@@ -1455,8 +1584,14 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
 
   // --- ordering ------------------------------------------------------------
 
+  // **`smart` is gone and it was not a sort.** It read "Closing soon, then
+  // newest" in the menu and its comparator was byte-identical to `new`, so the
+  // two entries did the same thing -- because the "closing soon" half is not a
+  // spine at all: `order()` below pins an approaching deadline above *every*
+  // spine, so that half was already true of all six options and the menu was
+  // offering it as though it were a choice. A stored `sort: "smart"` falls
+  // through to the default below, which is what it was always doing.
   const SPINES = {
-    smart: (a, b) => b.posted.localeCompare(a.posted) || a.title.localeCompare(b.title),
     new:   (a, b) => b.posted.localeCompare(a.posted) || a.title.localeCompare(b.title),
     old:   (a, b) => a.posted.localeCompare(b.posted) || a.title.localeCompare(b.title),
     due:   (a, b) => (a.left === null) - (b.left === null) || (a.left - b.left) || b.posted.localeCompare(a.posted),
@@ -1500,7 +1635,7 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
   // spine, `sort: due` still orders purely by closing date, and the `closing`
   // facet still counts every dated posting.
   function order(list) {
-    const spine = SPINES[state.sort] || SPINES.smart;
+    const spine = SPINES[state.sort] || SPINES.fit;
     // `pin: 0` means nothing is pinned, not "pin the ones closing today" --
     // which is what `left <= 0` alone quietly did.
     const pinned = (j) => state.pin > 0 && j.left !== null && j.left >= 0
@@ -1661,7 +1796,7 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
       ${job.about ? `<p>${esc(job.about)}</p>` : ""}
       <dl>${deepRows(job)}</dl>
       <div class="acts">
-        ${job.url ? `<button class="act go" data-act="open">open ↗</button>` : ""}
+        ${canOpen(job) ? `<button class="act go" data-act="open">open ↗</button>` : ""}
         <button class="act${saved.has(job.id) ? " on" : ""}" data-act="save">${saved.has(job.id) ? "saved" : "save"}</button>
         <button class="act" data-act="firm">only this firm</button>
         <button class="act warn${job.rel === "rejected" ? " on" : ""}" data-act="reject"
@@ -1683,13 +1818,15 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
         ${job.left !== null && job.left >= 0 ? `data-due="${level(job.left)}"` : ""}
         ${saved.has(job.id) ? 'data-saved="1"' : ""}${job.rel === "rejected" ? ' data-rejected="1"' : ""}>
       <div class="card-top">
-        <span class="pill fit-${FIT_RANK[fit]}">${esc(label(fit))}</span>
+        <span class="pill fit-${fitTier(fit)}">${esc(label(fit))}</span>
         ${dueTag(job)}
         <span class="when" data-loose="${loose}"${why ? ` title="${attr(why)}"` : ""}>${esc(when)}</span>
       </div>
       <h3 class="clamp2">${job.url
         ? `<a href="${attr(job.url)}" target="_blank" rel="noopener">${esc(job.title)}</a>`
-        : esc(job.title)}</h3>
+        : canOpen(job)
+          ? `<a href="#" data-act="open">${esc(job.title)}</a>`
+          : esc(job.title)}</h3>
       <div class="who"><span class="firm" data-firm="${attr(job.firm)}" title="Show only this firm">${esc(job.firmName)}</span>${
         job.dup > 1
           ? `<span class="dup" title="This opening was found ${job.dup} times — the same firm, the same place. Either one advertisement reposted, or a national board carrying a job the firm also advertises itself. One card is shown.">×${job.dup}</span>`
@@ -1745,6 +1882,7 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     const [when] = postedLabel(job);
     const hot = job.left !== null && job.left >= 0 && job.left <= 14;
     return `<a class="member" href="${attr(job.url || "#")}" target="_blank" rel="noopener"
+        ${!job.url && canOpen(job) ? `data-act="open" data-id="${attr(job.id)}"` : ""}
         ${job.left !== null && job.left >= 0 ? `data-due="${level(job.left)}"` : ""}>
       <span class="t">${esc(job.title)}</span>
       <span class="m${hot ? " hot" : ""}">${job.left !== null && job.left >= 0 ? esc(dueText(job.left)) : esc(when)}</span>
@@ -1886,9 +2024,9 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
   let railNodes = null;
 
   function buildRail() {
-    $("facets").innerHTML = FACETS.map((f) => `<details class="facet" data-key="${attr(f.key)}"${
+    $("facets").innerHTML = FACETS.map((f) => `<details class="facet" data-key="${attr(f.key)}" data-exclude="${f.exclude ? 1 : 0}"${
       (state.open[f.key] ?? f.open) ? " open" : ""}>
-      <summary>${esc(f.label)}<span class="live" hidden></span></summary>
+      <summary>${esc(f.label)}${f.exclude ? '<span class="hides">hides</span>' : ""}<span class="live" hidden></span></summary>
       <div class="facet-body"></div>
     </details>`).join("");
     railNodes = {};
@@ -1939,7 +2077,7 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
         return `<button class="opt" data-facet="${attr(facet.key)}" data-value="${attr(v)}"
             aria-pressed="${on}" data-empty="${n ? 0 : 1}">
           <span class="box"></span>
-          ${facet.swatch ? `<span class="swatch" style="background:var(--fit-${FIT_RANK[v] ?? 0})"></span>` : ""}
+          ${facet.swatch ? `<span class="swatch" style="background:var(--fit-${fitTier(v)})"></span>` : ""}
           <span class="name" title="${attr(naming(v))}">${esc(naming(v))}</span>
           <span class="n">${n.toLocaleString()}</span>
         </button>`;
@@ -2007,8 +2145,12 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     const bits = FACETS.flatMap((f) =>
       state.sel[f.key].map((v) => {
         const naming = f.name || ((x) => (f.labels && f.labels[x]) || label(x));
+        // An exclude facet's crumb says "hiding", not the facet name, or
+        // "hard gates: no visa sponsorship" reads as a filter *for* postings
+        // like that -- the same ambiguity the checkbox direction itself had.
+        const text = f.exclude ? `hiding ${esc(naming(v))}` : `${esc(f.label.toLowerCase())}: ${esc(naming(v))}`;
         return `<button class="crumb" data-facet="${attr(f.key)}" data-value="${attr(v)}">
-          ${esc(f.label.toLowerCase())}: ${esc(naming(v))} <i>×</i></button>`;
+          ${text} <i>×</i></button>`;
       }));
     for (const key of state.mute) {
       const p = PRESETS.find((pp) => pp.key === key);
@@ -2095,9 +2237,12 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     const act = e.target.closest("[data-act]");
     if (act) {
       e.preventDefault();
-      const card = act.closest(".card");
-      const job = jobs.find((j) => j.id === card.dataset.id);
-      if (act.dataset.act === "open" && job.url) window.open(job.url, "_blank", "noopener");
+      // `[data-id]` rather than `.card`: a stack's member links sit in the
+      // sibling `.members` panel and carry their own id, because a member is a
+      // posting in its own right and the card above it is the firm.
+      const owner = act.closest("[data-id]");
+      const job = jobs.find((j) => j.id === owner.dataset.id);
+      if (act.dataset.act === "open") openJob(job);
       // Patched where it stands rather than re-rendered, same as a
       // correction: this button lives in the hover panel too, and rebuilding
       // the grid under it shuts the panel on the click that used it.
@@ -2152,7 +2297,11 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
   });
 
   for (const [id, key, cast] of [["sort", "sort", String], ["pin", "pin", Number], ["group", "group", String]]) {
+    // A stored value naming an option that no longer exists leaves the
+    // `<select>` blank while the board sorts by the fallback -- the control
+    // and the page then disagree. Read back what the browser accepted.
     $(id).value = state[key];
+    if (!$(id).value) { $(id).value = FRESH()[key]; state[key] = cast($(id).value); }
     $(id).addEventListener("change", (e) => { state[key] = cast(e.target.value); opened.clear(); commit(); });
   }
 

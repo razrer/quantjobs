@@ -10,7 +10,9 @@ Run with: python -m unittest discover -s tests
 from __future__ import annotations
 
 import sqlite3
+import re
 import unittest
+from pathlib import Path
 
 from quantscraper import db, lexicon, tagging
 
@@ -743,6 +745,42 @@ class OffIndustryTest(unittest.TestCase):
     def test_an_unrecognised_field_passes(self):
         tags = _tags(title="Quantitative Researcher", category="Något helt nytt")
         self.assertNotIn("off_industry", tags.get("exclusion_reason", set()))
+
+    def test_hong_kongs_taxonomy_gates_on_one_label(self):
+        """The portal's job types are a **partition** -- their hitcounts sum to
+        14,287 against an unfiltered total of 14,287 -- so one label is the
+        whole of what the employer said, and this is an equality test where
+        the other three taxonomies need a subset test."""
+        tags = _tags(title="Night Shift Laundry Worker", category="Cleaner")
+        self.assertIn("off_industry", tags["exclusion_reason"])
+        self.assertEqual(tags["relevance"], {"rejected"})
+
+    def test_hong_kongs_catch_alls_are_not_gated(self):
+        """A catch-all is where a posting nobody classified lands, which is the
+        opposite of evidence -- MyCareersFuture keeps its own `Others` for the
+        same reason."""
+        for category in ("Others", "Other Professional/Associate Professional",
+                         "Accounting", "Computer and Information Technology",
+                         "Management / Administration",
+                         "Marketing Representative / Sales"):
+            with self.subTest(category=category):
+                self.assertNotIn(
+                    category, tagging._IES_OFF_INDUSTRY,
+                    "a catch-all or an ambiguous field must stay readable",
+                )
+
+    def test_every_gated_job_type_is_one_the_portal_publishes(self):
+        """A name that is not in `iesjobs.JOB_TYPES` gates nothing and reads as
+        though it does, which is the quietest kind of wrong."""
+        from quantscraper import iesjobs
+
+        published = {name for _, name in iesjobs.JOB_TYPES}
+        self.assertEqual(tagging._IES_OFF_INDUSTRY - published, set())
+
+    def test_a_hong_kong_quant_title_in_a_kept_field_survives(self):
+        tags = _tags(title="Quantitative Analyst", category="Others")
+        self.assertNotIn("off_industry", tags.get("exclusion_reason", set()))
+        self.assertEqual(tags["relevance"], {"relevant"})
 
     def test_occupation_words_gate_the_boards_with_no_taxonomy(self):
         """Only JobStream publishes a field, so the ATS boards need the words."""
@@ -1816,17 +1854,43 @@ class DoctorateIsAnEligibilityFactNotAVerdict(unittest.TestCase):
         self.assertEqual(tags["relevance"], {"relevant"})
         self.assertIn("phd_required", tags["exclusion_reason"])
 
-    def test_a_bare_phd_in_a_title_is_an_audience_not_a_bar(self):
-        """220 titles carry it and 29 are rated positively -- `Campus
-        Quantitative Researcher, PhD` among them. `CLAUDE.md` records that an
-        over-eager student rule threw away Aquatic Capital's posting once."""
+    def test_a_doctorate_named_alone_in_a_title_is_a_bar(self):
+        """**This reverses an earlier reading, and the re-measurement is why.**
+
+        The old note said a bare `phd` in a title "names the audience a posting
+        is open to, not a bar it sets", on the evidence that 220 titles carried
+        it and 29 were rated positively. Those 29 were never read. Re-measured
+        over the live corpus: **437 titles carry a doctorate and 71 are rated
+        positively, and 69 of the 71 name a doctorate and no lesser degree** --
+        `Quantitative Researcher (Ph.D.)` at Old Mission, `Quantitative
+        Researcher Phd Graduate Asia` at Citadel Securities, `PhD Degree
+        Required - Quantitative Analyst/Programmer` at Cerberus. Two of them
+        were at `apply_now` and six at `strong`, which is the top of a board
+        built for a reader who does not have one.
+
+        The head count was never the test. What the corpus says when you read
+        it is that a six-word title spending one of them on a doctorate is
+        stating the seat, not welcoming an audience."""
         for title in ("Campus Quantitative Researcher, PhD",
                       "Junior Quantitative Researcher (Ph.D.)",
-                      "2027 Internship - Quantitative Researcher (Master or PhD)"):
+                      "Quantitative Researcher Phd Graduate Asia"):
             with self.subTest(title=title):
                 tags = _tags(title=title)
-                self.assertNotIn("phd_required",
-                                 tags.get("exclusion_reason", set()))
+                self.assertIn("phd_required", tags["exclusion_reason"])
+                # Still a gate and never a verdict -- *perfect fit* is the half
+                # that decides where this belongs.
+                self.assertEqual(tags["relevance"], {"relevant"})
+
+    def test_a_title_naming_a_lesser_degree_beside_it_is_not(self):
+        """The two of the 71 that must not gate. `or` is on the lesser-degree
+        list as an alternation marker for exactly this: no title in the corpus
+        writes it beside a doctorate it actually requires."""
+        for title in ("2026 BSc/MSc/PhD Quantitative Research/Strat Internship",
+                      "2027 Internship - Quantitative Researcher (Master or PhD)"):
+            with self.subTest(title=title):
+                self.assertNotIn(
+                    "phd_required",
+                    _tags(title=title).get("exclusion_reason", set()))
 
     def test_the_negation_still_holds(self):
         """" no phd required " contains " phd required "."""
@@ -2122,7 +2186,7 @@ class SwedishDefiniteFormTest(unittest.TestCase):
         self.assertFalse(self._gated("Foraren"))
 
     def test_a_short_definite_plural_is_below_the_floor_and_that_is_known(self):
-        """`Städarna` folds to eight characters and `_MIN_COMPOUND` is nine.
+        """`Städarna` folds to eight characters and `lexicon.MIN_COMPOUND` is nine.
 
         Written down rather than fixed. Lowering the floor to reach it would
         make a suffix test fire on ordinary words, and the form does not occur:
@@ -2555,3 +2619,544 @@ class SwedishPluralOfAnAccountingTitleTest(unittest.TestCase):
                       "Senior Software Engineer, Trading Systems"):
             with self.subTest(title=title):
                 self.assertFalse(self._gated(title))
+
+
+class ApprenticeshipIsAContractInEveryLanguageTest(unittest.TestCase):
+    """`Lehrstelle` was already `STUDENT_PROGRAMME`; its four translations
+    were not, and one European truck-dealership network put all of them on the
+    board. Dry-run over every live title: `ausbildung` 332 hits, `alternance`
+    93, `apprenti` 77, `aprendiz` 25, `lehrling` 8, `vocational trainee` 7,
+    and **not one of them touches a posting the tagger rates positively.**
+    """
+
+    def _student(self, title: str) -> bool:
+        return "student_only" in _tags(title=title).get("hard_gates", set()) or (
+            lexicon.judge(title).reason == "student_only")
+
+    def test_the_contract_gates_in_every_language(self):
+        for title in ("Ausbildung als Hotelfachfrau/-mann (m/w/d)",
+                      "Ausbildung Fachkraft für Lagerlogistik 2027 (m/w/d)",
+                      "Lehrling KFZ-Techniker für Nutzfahrzeuge (m/w/d)",
+                      "Alternance : Chargé de Recrutement et Communication",
+                      "Aprendiz de Mecânico",
+                      "Vocational Trainee: Welding (Fall 2026)"):
+            with self.subTest(title=title):
+                self.assertTrue(self._student(title))
+
+    def test_the_words_that_only_look_like_the_contract(self):
+        """`Praktikum` is an internship and stays -- its one positively-rated
+        hit is `Praktikum Private Equity`. Bare English `apprentice` stays too,
+        on the reason rather than the count: it reaches Euronext's `Treasury
+        Apprentice`. And token matching is what keeps `Weiterbildung` and
+        `Ausbildungsleiter` out of a bare `ausbildung` needle."""
+        for title in ("Praktikum Private Equity (m/w/d)",
+                      "Treasury Apprentice",
+                      "Weiterbildung Data Science",
+                      "Ausbildungsleiter Trading"):
+            with self.subTest(title=title):
+                self.assertFalse(self._student(title))
+
+
+class TheEmployerIsEvidenceTest(unittest.TestCase):
+    """`lexicon.board_profile` was measured, wired to a gate, and only ever
+    allowed to say no. These pin the other direction.
+
+    Both branches fire only when there is **no body**, which is the whole
+    safety argument: a description that names markets nowhere is evidence
+    measured over a document, and it must keep winning.
+    """
+
+    QUANT = frozenset({("greenhouse", "firm")})
+
+    def setUp(self):
+        self._saved = tagging._QUANT_BOARDS
+        tagging._QUANT_BOARDS = self.QUANT
+
+    def tearDown(self):
+        tagging._QUANT_BOARDS = self._saved
+
+    def _relevance(self, **kwargs) -> set[str]:
+        return _tags(**kwargs)["relevance"]
+
+    def test_an_unreadable_title_at_a_quant_shop_is_adjacent(self):
+        """Citadel Securities publishes `Machine Learning Researcher` and
+        `Research Engineer` with no description at all, and both read
+        `unknown` -- the bucket that sorts to the bottom of the board."""
+        self.assertEqual(self._relevance(title="Research Engineer"), {"adjacent"})
+
+    def test_engineering_at_a_quant_shop_ranks_rather_than_rejects(self):
+        """The reader's own scope: heavy systems engineering is a *down-rank*,
+        not a hard drop. DRW's `Software Developer (Research)` was removed."""
+        self.assertEqual(self._relevance(title="Software Developer"), {"adjacent"})
+
+    def test_a_body_that_names_no_markets_still_rejects(self):
+        """Jane Street's `MacOS Software Engineer` has a real description with
+        no markets word in it. Absence of evidence in a *document* is
+        evidence; absence in a stub is not."""
+        body = (
+            "We are looking for an engineer to own our fleet of laptops. You "
+            "will package and sign applications, manage device enrolment and "
+            "patching, write tooling in Swift and Python, and work with the "
+            "helpdesk on escalations. Experience with MDM at scale is required "
+            "and familiarity with endpoint security tooling is a plus. "
+        ) * 3
+        self.assertEqual(
+            self._relevance(title="MacOS Software Engineer", description=body),
+            {"rejected"})
+
+    def test_a_software_specialty_is_untouched(self):
+        """`_SOFTWARE_SPECIALTY` runs above and is the proper subset where the
+        specialty *is* the job. Measured on the same 51 boards, the 124
+        postings it rejects are cybersecurity, network, SRE and Salesforce
+        work, and every one should stay rejected."""
+        for title in ("Site Reliability Engineer", "Senior Network Engineer",
+                      "Frontend Engineer"):
+            with self.subTest(title=title):
+                self.assertEqual(self._relevance(title=title), {"rejected"})
+
+    def test_nothing_moves_on_a_board_that_has_not_proved_itself(self):
+        tagging._QUANT_BOARDS = frozenset()
+        self.assertEqual(self._relevance(title="Research Engineer"), {"unknown"})
+        self.assertEqual(self._relevance(title="Software Developer"), {"rejected"})
+
+    def test_the_firm_ranks_below_the_posting(self):
+        """A relevance read off the employer is the weakest evidence in the
+        module, so `_fit` notches it a bucket below one read off the text."""
+        firm = _tags(title="Research Engineer")
+        posting = _tags(title="Market Data Specialist")
+        self.assertEqual(firm["relevance"], posting["relevance"])
+        self.assertEqual(posting["fit"], {"plausible"})
+        self.assertEqual(firm["fit"], {"stretch"})
+
+
+class QuantBoardIsMeasuredFromTitlesAloneTest(unittest.TestCase):
+    """No tags, no bodies, no ordering -- which is what breaks the loop.
+
+    A profile taken from `job_tags` would feed the tagger its own output and a
+    profile taken from `lexicon.judge` would depend on which bodies happened to
+    have been fetched.
+    """
+
+    def _board(self, titles, ats="greenhouse", token="firm"):
+        connection = sqlite3.connect(":memory:")
+        connection.executescript(db.SCHEMA)
+        connection.executemany(
+            "INSERT INTO jobs (ats, token, job_id, title, first_seen, last_seen)"
+            " VALUES (?, ?, ?, ?, '2026-01-01', '2026-01-01')",
+            [(ats, token, str(n), title) for n, title in enumerate(titles)],
+        )
+        connection.commit()
+        return tagging.quant_boards(connection)
+
+    def test_a_quant_shop_is_recognised(self):
+        titles = ["Quantitative Researcher", "Quantitative Trader",
+                  "Quant Developer"] + ["Office Manager"] * 20
+        self.assertIn(("greenhouse", "firm"), self._board(titles))
+
+    def test_a_retail_bank_is_not(self):
+        """Citi carries 59 core-quant titles in 3,724 postings -- more in
+        absolute terms than Citadel, and 1.6% of a board that is otherwise
+        retail banking. The *share* is what keeps the banks out."""
+        titles = ["Quantitative Analyst"] * 5 + ["Branch Teller"] * 500
+        self.assertNotIn(("greenhouse", "firm"), self._board(titles))
+
+    def test_one_quant_title_is_an_accident(self):
+        """The floor is 2 rather than 1: a single quant title cannot tell a
+        boutique apart from an insurer advertising one modelling seat. The ten
+        boards between a floor of 3 and a floor of 2 were read and every one is
+        a quant firm -- Wolverine, Geneva Trading, Tudor, swissQuant."""
+        titles = ["Quantitative Analyst"] + ["Office Manager"] * 9
+        self.assertNotIn(("greenhouse", "firm"), self._board(titles))
+
+    def test_a_small_board_is_admitted_on_two(self):
+        titles = ["Quantitative Researcher", "Quantitative Trader"] + ["Office Manager"] * 8
+        self.assertIn(("greenhouse", "firm"), self._board(titles))
+
+    def test_a_national_feed_is_not_a_board(self):
+        """One token carrying every job in a country is not an employer, and
+        Sweden's feed would clear any floor on volume alone."""
+        titles = ["Quantitative Researcher"] * 50 + ["Undersköterska"] * 50
+        self.assertNotIn(
+            ("jobtech", "jobstream"),
+            self._board(titles, ats="jobtech", token="jobstream"))
+
+
+class ACorporateFunctionOutranksAQuantWordTest(unittest.TestCase):
+    """A desk word loses to an unambiguous quant word and a corporate function
+    does not, because a recruiter does not live next to a trading desk.
+
+    Measured over every live posting: **eleven titles carry both, ten are
+    recruiters and the eleventh is Northern Trust's `Director Quantitative &
+    Index Product Marketing`.** All were reading `relevant`, and four of them
+    reached the top of the board -- SIG, Jane Street, Voleon and Two Sigma,
+    every one hiring the reader's colleagues rather than the reader.
+    """
+
+    def test_a_quant_recruiter_is_a_recruiter(self):
+        for title in ("Quantitative Campus Recruiter",
+                      "Campus Recruiter, Machine Learning and Quantitative Research",
+                      "Senior Recruiter, Quantitative Research",
+                      "Experienced Quantitative Investing Recruiter",
+                      "Director Quantitative & Index Product Marketing"):
+            with self.subTest(title=title):
+                self.assertEqual(_tags(title=title)["relevance"], {"adjacent"})
+
+    def test_a_desk_word_still_loses_to_a_quant_title(self):
+        """The rule this narrows and must not break: a researcher embedded in
+        the ops org is a researcher, and only a *body* describing
+        reconciliations demotes one."""
+        for title in ("Quantitative Researcher, Trading Operations",
+                      "Credit Risk Quant, Operations"):
+            with self.subTest(title=title):
+                self.assertEqual(_tags(title=title)["relevance"], {"relevant"})
+
+    def test_an_ordinary_corporate_title_still_rejects(self):
+        """`and certain` is load-bearing: without it this branch runs ahead of
+        the exclusion list and promotes every corporate title it names."""
+        for title in ("HR-ansvarig", "Marknadskoordinator", "Lönekonsult på 50%",
+                      "Campus Recruiter"):
+            with self.subTest(title=title):
+                self.assertEqual(_tags(title=title)["relevance"], {"rejected"})
+
+
+class ExperiencedIsARankInBothLanguagesTest(unittest.TestCase):
+    """`erfaren` has been `senior_6_10` since the table was written and reaches
+    1,463 titles; bare English `experienced` reaches 478 and was graded by
+    nothing -- 225 of them came back `unknown`. So `Experienced Options Trader`
+    at Akuna and `Experienced Trader` at Gelber sat at `apply_now`.
+
+    `mid_3_5`, because `experienced hire` was already there and a prop shop's
+    *experienced* means has-traded-before rather than ten years.
+    """
+
+    def test_the_bare_word_grades(self):
+        for title in ("Experienced Options Trader", "Experienced Trader",
+                      "Experienced/Lateral - Quantitative Researcher"):
+            with self.subTest(title=title):
+                self.assertEqual(_tags(title=title)["seniority"], {"mid_3_5"})
+
+    def test_it_agrees_with_the_phrase_that_was_already_there(self):
+        self.assertEqual(
+            _tags(title="Quantitative Researcher - Experienced Hire")["seniority"],
+            _tags(title="Experienced Quantitative Researcher")["seniority"],
+        )
+
+    def test_it_moves_the_card_rather_than_removing_it(self):
+        """`senior_6_10` and above are what `_fit` calls a stretch; `mid_3_5`
+        is not, so this costs the top bucket and nothing else."""
+        tags = _tags(title="Experienced Options Trader")
+        self.assertNotIn("apply_now", tags["fit"])
+        self.assertNotIn("out_of_reach", tags.get("exclusion_reason", set()))
+
+
+class QuantBoardReadsBothTitleListsTest(unittest.TestCase):
+    """`_QUANT_CORE_TITLE` names a domain rather than the work, so a single
+    posting needs a qualifier before it counts. Over a whole *board* that
+    ambiguity averages out -- a firm advertising sixteen `Trader` seats is a
+    trading firm whatever each seat turns out to be.
+
+    Measured: **Gelber Group is 16 quant-domain titles in 19 and zero
+    `_QUANT_CORE`**, and OTC Flow, Mako, Eagle Seven, Valkyrie, Simplex,
+    Nomura, CLSA and Marex are all in the same position.
+    """
+
+    def _board(self, titles):
+        connection = sqlite3.connect(":memory:")
+        connection.executescript(db.SCHEMA)
+        connection.executemany(
+            "INSERT INTO jobs (ats, token, job_id, title, first_seen, last_seen)"
+            " VALUES ('greenhouse', 'firm', ?, ?, '2026-01-01', '2026-01-01')",
+            [(str(n), title) for n, title in enumerate(titles)],
+        )
+        connection.commit()
+        return tagging.quant_boards(connection)
+
+    def test_a_board_of_traders_counts(self):
+        titles = ["Experienced Trader", "FX Trader", "Options Trader"] + \
+                 ["Office Manager"] * 16
+        self.assertIn(("greenhouse", "firm"), self._board(titles))
+
+    def test_a_retail_bank_still_does_not(self):
+        """Citi carries 126 quant-domain titles -- more in absolute terms than
+        any prop shop -- in 3,724 postings of retail banking."""
+        titles = ["Credit Risk Analyst"] * 30 + ["Branch Teller"] * 900
+        self.assertNotIn(("greenhouse", "firm"), self._board(titles))
+
+
+class NoNeedleListRepeatsItselfTest(unittest.TestCase):
+    """A duplicated needle is inert against `first()` and not against every
+    reader: `_QUANT_CORE_BODY`'s "two distinct phrases" rule counts hits, so a
+    copy-pasted block would corroborate a posting with itself.
+
+    It is a real failure mode rather than a hypothetical -- a block of six
+    needles was pasted twice into `STUDENT_PROGRAMME` while adding `ausbildung`
+    beside it, and nothing in the suite noticed. This walks every phrase list
+    in both modules so the next one is caught by construction.
+    """
+
+    def _lists(self):
+        for module in (lexicon, tagging):
+            for name in dir(module):
+                value = getattr(module, name)
+                if isinstance(value, tuple) and value and all(
+                    isinstance(item, str) for item in value
+                ):
+                    yield f"{module.__name__}.{name}", value
+                elif isinstance(value, dict):
+                    for key, item in value.items():
+                        if isinstance(item, tuple) and item and all(
+                            isinstance(phrase, str) for phrase in item
+                        ):
+                            yield f"{module.__name__}.{name}[{key!r}]", item
+
+    def test_every_phrase_list_is_distinct(self):
+        checked = 0
+        for name, phrases in self._lists():
+            checked += 1
+            with self.subTest(list=name):
+                repeated = sorted({p for p in phrases if phrases.count(p) > 1})
+                self.assertEqual(repeated, [], f"{name} repeats {repeated}")
+        self.assertGreater(checked, 40, "the walk found almost no lists")
+
+
+class ADepartmentDoesNotLiftATitleLevelRejectionTest(unittest.TestCase):
+    """`desk`, `management`, `software` and `corporate` are all read from the
+    title alone, deliberately -- a department is nothing but the desk's name.
+    Comparing them against a quant word read from title *and department* is
+    the mismatch `CLAUDE.md` names three times over, and this is the fourth.
+
+    Measured over every live posting with a department: thirteen carry a quant
+    word there, none in the title, beside a title-level rejection -- and four
+    were in the board's top two buckets.
+    """
+
+    QUANT = "Quantitative Research & Trading"
+
+    def test_a_department_does_not_rescue_an_operations_title(self):
+        """Vatic's `Trading Operations Specialist` was at `apply_now`."""
+        tags = _tags(title="Trading Operations Specialist", department=self.QUANT)
+        self.assertEqual(tags["relevance"], {"adjacent"})
+        self.assertNotIn("apply_now", tags["fit"])
+
+    def test_a_department_does_not_rescue_a_management_title(self):
+        """D. E. Shaw's `Product Manager - AI Vendor Tools` and Point72's
+        `Cubist Portfolio Manager` were both reading `relevant`."""
+        for title in ("Product Manager - AI Vendor Tools",
+                      "Technical Product Manager - Macro",
+                      "Cubist Portfolio Manager"):
+            with self.subTest(title=title):
+                self.assertEqual(
+                    _tags(title=title, department="Quantitative Strategies")["relevance"],
+                    {"rejected"})
+
+    def test_a_department_does_not_rescue_a_software_specialty(self):
+        self.assertEqual(
+            _tags(title="Systems: Cloud Engineer",
+                  department="Quantitative Strategies")["relevance"],
+            {"rejected"})
+
+    def test_the_title_still_outranks_all_three(self):
+        """The rule this narrows and must not break."""
+        self.assertEqual(
+            _tags(title="Quantitative Researcher, Trading Operations")["relevance"],
+            {"relevant"})
+        self.assertEqual(
+            _tags(title="Head of Quantitative Research")["relevance"], {"relevant"})
+
+    def test_the_department_still_grades_the_seat(self):
+        """`trading_style` and `core` keep the department on purpose: a
+        `Trader` in a quantitative trading department is a quant trader."""
+        self.assertEqual(
+            _tags(title="Trader", department=self.QUANT)["trading_style"], {"quant"})
+
+
+class ChinaDoesNotClaimHongKongTest(unittest.TestCase):
+    """`Hong Kong, SAR, China` is one place matching two hubs, and 89 live
+    postings say it. It gates nothing -- the board shows both -- and it files a
+    focus-hub card under *Deprioritized* as well, so group-by-place shows it
+    twice. The same shape as `sweden` sitting in the `stockholm` tuple.
+    """
+
+    def _hubs(self, location):
+        return _tags(title="Analyst", location=location).get("hub", set())
+
+    def test_the_country_word_collapses(self):
+        for location in ("Hong Kong, SAR, China", "Hong Kong, China",
+                         "HK - Hong Kong, China"):
+            with self.subTest(location=location):
+                self.assertEqual(self._hubs(location), {"hong_kong"})
+
+    def test_a_real_second_city_survives(self):
+        """`shanghai` is a town, not the containing region's name -- which is
+        the whole rule `_residual` applies to the Nordic residuals."""
+        self.assertEqual(self._hubs("Hong Kong; Shanghai"),
+                         {"hong_kong", "deprioritized"})
+
+    def test_the_rest_of_deprioritized_is_still_nobodys_complement(self):
+        """It spans four countries and only one of them holds a focus hub."""
+        self.assertEqual(self._hubs("Amsterdam; Frankfurt"),
+                         {"amsterdam", "deprioritized"})
+        self.assertEqual(self._hubs("Shenzhen, China"), {"deprioritized"})
+
+
+class ParallelTaggingAgreesTest(unittest.TestCase):
+    """The process pool must classify exactly as the serial loop does.
+
+    **This is the failure that would announce itself as nothing at all.** A
+    pool that tagged *differently* writes the same number of rows into the same
+    columns and every count in every summary stays plausible; only the verdicts
+    move. So the assertion is row-for-row equality on the tuples that reach the
+    database, not on their number.
+    """
+
+    ROWS = [
+        _posting("Quantitative Researcher", "systematic trading and alpha research"),
+        _posting("Undersköterskor till akutmottagningen"),
+        _posting("Software Engineer, Trading Systems"),
+        _posting("Head of Quantitative Research"),
+        _posting("Security Guard", category="Security Guard"),
+        _posting("Machine Learning Engineer", "monte carlo pricing of derivatives"),
+    ]
+
+    def _serial(self, rows):
+        out = []
+        for row in rows:
+            tags = tagging.tag_posting(row)
+            tags.append(tagging._fit(tags))
+            out.extend(
+                (t.ats, t.token, t.job_id, t.dimension, t.value, t.confidence,
+                 t.evidence)
+                for t in tags
+            )
+        return out
+
+    def test_chunk_matches_the_serial_loop(self):
+        self.assertEqual(tagging._tag_chunk(self.ROWS), self._serial(self.ROWS))
+
+    def test_a_worker_reads_the_board_profile_it_was_given(self):
+        """`_QUANT_BOARDS` is module state and a spawned worker inherits none.
+
+        Left unset it does not fail -- it switches both employer branches of
+        `tag_posting` off for every posting the pool touches, which is a
+        different classifier reporting success. This pins that the initializer
+        is what carries it across, on the one shape where it decides the
+        verdict: a **body-less** posting whose title the lexicon reads as pure
+        engineering. That is DRW's `Software Developer (Research)` from
+        `CLAUDE.md` -- rejected on its own text, `adjacent` because of whose
+        board it is on, and 94% of that population has no body at all.
+        """
+        previous = tagging._QUANT_BOARDS
+        row = [_posting("Software Developer", description="")]
+        try:
+            tagging._init_worker(frozenset({("greenhouse", "firm")}))
+            self.assertEqual(tagging._QUANT_BOARDS, frozenset({("greenhouse", "firm")}))
+            on = {t[3]: t[4] for t in tagging._tag_chunk(row)}
+            tagging._init_worker(frozenset())
+            off = {t[3]: t[4] for t in tagging._tag_chunk(row)}
+            self.assertEqual(on["relevance"], "adjacent")
+            self.assertEqual(off["relevance"], "rejected")
+        finally:
+            tagging._QUANT_BOARDS = previous
+
+    def test_the_floor_keeps_small_runs_serial(self):
+        """Spawning eight interpreters to tag a hundred rows is a loss.
+
+        Windows re-imports this module per worker, so the pool has to earn
+        about a second apiece before it is worth starting -- which is why
+        `run` has a floor at all rather than always reaching for the pool.
+        """
+        self.assertGreaterEqual(tagging._PARALLEL_FLOOR, 1_000)
+
+
+class BuriedRatherThanRejectedTest(unittest.TestCase):
+    """**Four families the reader asked to be rid of, and two ways of being
+    rid.** Legal and audit are a *pass* -- they leave the board. Sell-side
+    research, enterprise IT and non-quant development are real work in a real
+    industry that this reader does not want, so they keep their relevance
+    verdict and their evidence and sort last, under `unknown`. `fit` is the
+    dimension that encodes the reader's profile, which is why the burial
+    happens there and not in `relevance`.
+    """
+
+    def test_sell_side_research_is_buried(self):
+        for title in ("Equity Research Associate",
+                      "Equity Research Associate - Large Cap Banks",
+                      "Credit Research Analyst", "Senior Investment Research Analyst"):
+            self.assertEqual(_tags(title=title)["fit"], {"background"}, title)
+
+    def test_a_markets_word_does_not_rescue_sell_side_research(self):
+        """`equity research` is itself on `MARKETS`, so a guard that spared any
+        title carrying a markets word would spare every one of these -- it would
+        read the words naming the thing being buried as a reason to keep it."""
+        tags = _tags(title="Equity Research Associate - Large Cap Banks")
+        self.assertEqual(tags["fit"], {"background"})
+
+    def test_enterprise_it_and_generic_development_are_buried(self):
+        # `out_of_scope` where `judge` also rejects the title outright, which
+        # is most of them -- both sort below `unknown`, which is the property
+        # under test. What matters is that none of these reads as a posting
+        # worth putting in front of the reader.
+        for title in ("Security Engineer", "Senior Network Engineer",
+                      "Senior Cyber Threat Analyst", "Desktop Support Engineer",
+                      "Software Engineer, Full Stack", "Staff Platform Engineer"):
+            self.assertLessEqual(_tags(title=title)["fit"],
+                                 {"background", "out_of_scope"}, title)
+
+    def test_a_quant_word_in_the_title_spares_it(self):
+        for title in ("Quantitative Technologist (Full-Time - DevOps)",
+                      "Credit Quantitative Research - Associate",
+                      "Quant DevOps Engineer"):
+            self.assertNotIn("different_field",
+                             _tags(title=title).get("exclusion_reason", set()), title)
+
+    def test_a_markets_word_spares_an_engineering_title(self):
+        """The asymmetry with sell-side research: here the markets word is a
+        qualifier somebody added, and it is what separates a desk seat from a
+        generic one."""
+        for title in ("Full Stack Engineer - Equities Autocallables",
+                      "Site Reliability Engineer - Algorithmic Trading"):
+            self.assertNotIn("different_field",
+                             _tags(title=title).get("exclusion_reason", set()), title)
+
+    def test_background_sorts_below_unknown_on_the_board(self):
+        """`unknown` is not the bottom and should not be: "nothing decided" is a
+        weaker reason to skip a card than "read, and it is a different line of
+        work". Pinned against `index.html` so the two cannot drift."""
+        page = Path(__file__).resolve().parent.parent / "web" / "index.html"
+        rank = re.search(r"const FIT_RANK = \{([^}]*)\}", page.read_text(encoding="utf-8"))
+        self.assertIsNotNone(rank)
+        values = dict(re.findall(r"(\w+):\s*(-?\d+)", rank.group(1)))
+        self.assertLess(int(values["background"]), int(values["unknown"]))
+        self.assertLess(int(values["out_of_scope"]), int(values["background"]))
+
+
+class LegalAndAuditLeaveTheBoardTest(unittest.TestCase):
+    """`lexicon.CORPORATE` and `NON_QUANT_FINANCE` reject inside `judge`, which
+    runs **last** -- so a legal or audit title carrying an ordinary markets word
+    had already reached `adjacent` on the branch above it. They are
+    `_EXCLUSION` categories too, where `rejecting` is tested before the weak
+    positive, which is the ordering `lending` already relies on."""
+
+    def test_a_markets_word_does_not_rescue_a_legal_title(self):
+        for title in ("Securities Trading Attorney",
+                      "Legal Counsel - Equity Derivatives, Trading Documentation",
+                      "Jr Legal Counsel - Trading",
+                      "Legal Structuring - Infrastructure Investments"):
+            self.assertEqual(_tags(title=title)["relevance"], {"rejected"}, title)
+
+    def test_a_markets_word_does_not_rescue_an_audit_or_tax_title(self):
+        for title in ("Senior Auditor - Capital Markets",
+                      "Global Treasury Audit, Officer",
+                      "Tax Structuring and Advisory Specialist",
+                      "Tax Specialist, Private Credit"):
+            self.assertEqual(_tags(title=title)["relevance"], {"rejected"}, title)
+
+    def test_an_unambiguous_quant_domain_word_still_spares_it(self):
+        """`core` is tested before `rejecting`, so the one audit posting in the
+        corpus that carries a quant domain word keeps its reading."""
+        self.assertEqual(_tags(title="Audit Specialist, Credit Risk")["relevance"],
+                         {"less_relevant"})
+
+    def test_a_quant_title_is_untouched(self):
+        for title in ("Quantitative Researcher", "Quantitative Risk Analyst"):
+            self.assertEqual(_tags(title=title)["relevance"], {"relevant"}, title)

@@ -97,7 +97,7 @@ import re
 from dataclasses import dataclass
 from functools import lru_cache
 
-VERSION = 9
+VERSION = 14
 
 # Everything that is not a letter, digit, `+` or `#` is a separator. Those two
 # are kept because `c++` and `c#` name things a posting is graded on, and
@@ -116,11 +116,19 @@ MAX_BODY = 200_000
 MIN_BODY = 200
 
 
+@lru_cache(maxsize=8)
 def normalize(text: str | None) -> str:
     """Fold text to space-delimited lowercase tokens, padded at both ends.
 
     The padding is what makes `" quant "` a token match rather than a substring
     one, which is the entire safety property of this module.
+
+    **Cached, because one posting normalizes the same body several times.**
+    `judge` reads it once and `tagging._markets` reads it again on each branch
+    that asks whether the posting is in markets at all -- up to five passes
+    over the same 200 KB, each a `casefold` and two regex substitutions. Eight
+    entries is a posting's worth of fields with room to spare; the pool workers
+    each keep their own, as they do for every module-level state here.
     """
     if not text:
         return " "
@@ -135,25 +143,45 @@ def _terms(*phrases: str) -> tuple[str, ...]:
     return tuple(normalize(phrase).strip() for phrase in phrases)
 
 
-# A phrase can only match if its first word is a token of the text, so most of
-# a long list can be skipped on a set lookup instead of scanned. Measured over
-# the corpus: 9x on the largest list, and matching is half the cost of a re-tag.
+# **A phrase can only match if every one of its words is a token of the text**,
+# which is what makes a 1,400-phrase list cheap: each phrase is filed under one
+# of its own words, the text's tokens are a set, and the intersection of the
+# two is the only part of either that has to be looked at. `set & set` iterates
+# whichever side is smaller, in C -- and which side that is genuinely varies. A
+# folded title is six tokens against a list of hundreds; a folded body is
+# thousands of tokens against a list of thirty. Measured over 5,000 real
+# postings, taking the smaller side turns 13.7M phrase tests into 2.9M.
 #
-# Keyed by `id()` for an O(1) lookup -- hashing a 600-tuple on every call would
-# cost more than it saves -- and each tuple is stored beside its index so it
-# cannot be freed and have its id reused.
-_INDEX: dict[int, tuple[tuple[str, ...], tuple[tuple[str, str, str], ...]]] = {}
+# **Filed under its rarest word, not its first.** Any word of the phrase is
+# correct -- the phrase cannot match unless all of them are present, and the
+# padded substring test settles it either way -- so the only question is which
+# key is most selective. `_SPOKEN_REQUIRED` is the case that shows it: 1,386
+# phrases built from 35 frames crossed with 12 languages, where *fluent* keys
+# hundreds and *portuguese* keys 35. Keying on the first word made every
+# posting mentioning fluency walk most of the list.
+#
+# Keyed by `id()` for an O(1) lookup -- hashing a 1,400-tuple on every call
+# would cost more than it saves -- and each tuple is stored beside its index so
+# it cannot be freed and have its id reused.
+_INDEX: dict[int, tuple] = {}
 
 
-def _index(terms: tuple[str, ...]) -> tuple[tuple[str, str, str], ...]:
-    """(first word, padded phrase, phrase) for each phrase, built once."""
+def _index(terms: tuple[str, ...]) -> tuple:
+    """(terms, key word -> [(position, padded phrase)], the key words)."""
     entry = _INDEX.get(id(terms))
     if entry is None or entry[0] is not terms:
-        entry = (terms, tuple(
-            (term.split(" ", 1)[0], f" {term} ", term) for term in terms
-        ))
+        split = [term.split(" ") for term in terms]
+        shared: dict[str, int] = {}
+        for words in split:
+            for word in words:
+                shared[word] = shared.get(word, 0) + 1
+        by_key: dict[str, list[tuple[int, str]]] = {}
+        for position, (term, words) in enumerate(zip(terms, split)):
+            key = min(words, key=lambda word: shared[word])
+            by_key.setdefault(key, []).append((position, f" {term} "))
+        entry = (terms, by_key, frozenset(by_key))
         _INDEX[id(terms)] = entry
-    return entry[1]
+    return entry
 
 
 @lru_cache(maxsize=16)
@@ -163,20 +191,84 @@ def _words(text: str) -> frozenset[str]:
     return frozenset(text.split())
 
 
+def _at(text: str, terms: tuple[str, ...]) -> int:
+    """Position in `terms` of the first phrase present, or `len(terms)`.
+
+    A position rather than the phrase, because the callers below need both and
+    one of them uses it to index a parallel list of answers. **The written
+    order is the answer** -- it is the priority everywhere this module is read,
+    `head_or_md` before `junior_0_2` -- so the lowest position wins rather than
+    whichever token happened to be visited first.
+    """
+    _, by_key, keys = _index(terms)
+    best = len(terms)
+    for word in _words(text) & keys:
+        for position, padded in by_key[word]:
+            if position < best and padded in text:
+                best = position
+    return best
+
+
+def _positions(text: str, terms: tuple[str, ...]) -> list[int]:
+    """Position of every phrase of `terms` present, in the order `terms` lists."""
+    _, by_key, keys = _index(terms)
+    found = [position
+             for word in _words(text) & keys
+             for position, padded in by_key[word]
+             if padded in text]
+    found.sort()
+    return found
+
+
 def first(text: str, terms: tuple[str, ...]) -> str | None:
     """The first phrase of `terms` present in already-normalized `text`."""
-    words = _words(text)
-    for head, padded, term in _index(terms):
-        if head in words and padded in text:
-            return term
-    return None
+    at = _at(text, terms)
+    return terms[at] if at < len(terms) else None
 
 
 def every(text: str, terms: tuple[str, ...]) -> list[str]:
     """Every phrase of `terms` present, for the rules that count corroboration."""
-    words = _words(text)
-    return [term for head, padded, term in _index(terms)
-            if head in words and padded in text]
+    return [terms[at] for at in _positions(text, terms)]
+
+
+# A dict of needle lists -- a ladder, where the key is the answer and the order
+# is the priority -- is matched as **one** index rather than one per rung.
+# `tagging` holds eleven of these and the widest has fifteen rungs, so asking
+# them separately walked the same tokens once per rung to answer one question.
+# Flattened, a rung's position in the concatenation *is* its priority, so the
+# lowest matching position is the first rung that hits and no ordering has to
+# be reconstructed. Measured over 5,000 real postings: 677,000 list walks
+# become 180,000, and a re-tag of the corpus loses a third of its CPU.
+_LADDERS: dict[int, tuple] = {}
+
+
+def _ladder(mapping: dict[str, tuple[str, ...]]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """`mapping`'s phrases concatenated in rung order, and the rung of each."""
+    entry = _LADDERS.get(id(mapping))
+    if entry is None or entry[0] is not mapping:
+        entry = (
+            mapping,
+            tuple(term for terms in mapping.values() for term in terms),
+            tuple(value for value, terms in mapping.items() for _ in terms),
+        )
+        _LADDERS[id(mapping)] = entry
+    return entry[1], entry[2]
+
+
+def rung(text: str, mapping: dict[str, tuple[str, ...]]) -> tuple[str, str] | None:
+    """The first rung of `mapping` whose needles hit `text`, and what hit."""
+    phrases, rungs = _ladder(mapping)
+    at = _at(text, phrases)
+    return (rungs[at], phrases[at]) if at < len(phrases) else None
+
+
+def every_rung(text: str, mapping: dict[str, tuple[str, ...]]) -> list[tuple[str, str]]:
+    """Every rung of `mapping` that hits, in rung order, with its first hit."""
+    phrases, rungs = _ladder(mapping)
+    hits: dict[str, str] = {}
+    for at in _positions(text, phrases):
+        hits.setdefault(rungs[at], phrases[at])
+    return [(value, hits[value]) for value in mapping if value in hits]
 
 
 # --------------------------------------------------------------------------
@@ -419,6 +511,54 @@ MARKETS = _terms(
 )
 
 
+# **The phrases above that name what a firm *is*, not what a job *does*.**
+# Exactly the `GENERIC_IN_BODY` split one list up, applied to markets instead
+# of to quant, and for the same reason the module's own docstring gives: "a
+# markets word in the title is about the job; the same word in the body may
+# only be about the employer's customers."
+#
+# **It was measured before it was written and the numbers are not close.**
+# 1,406 of the postings this classifier leaves at `relevance: unknown` are held
+# open by a single markets word in a body, and the histogram of which word is
+# doing it reads `asset management` 180, `investment management` 110,
+# `financial institutions` 94, `treasury` 76 -- the paragraph every bank puts
+# at the top of every advertisement it publishes. What that rescued: `Senior
+# Furniture Consultant, Interior Workspace Design` on *investment management*,
+# `Research Associate II Biotechnology` on *equity research*, `Corporate Card &
+# Travel Expense Associate`, `Workplace Associate`, `UK TAX - Sr. Associate`.
+#
+# **`judge` step 9 was fixed for this and steps 7 and 8 were not.** The note
+# there says the two remaining body reads are safe because "the title has
+# already been recognised as an engineer or an analyst, so the body
+# corroborates a reading rather than supplying the only one there is". That is
+# true of an engineer and false of `AMBIGUOUS`, which carries bare *consultant*
+# and bare *associate* -- words that are not finance-adjacent at all, so there
+# is no reading for the body to corroborate.
+#
+# **What is deliberately *not* here.** `proprietary trading`, `hedge fund`,
+# `trading floor`, `trading desk`, `buy side` and `sell side` name a firm that
+# is a markets firm rather than a firm that has a markets department, which is
+# a different claim: every large bank writes *asset management* and only a prop
+# shop writes *proprietary trading*. They keep their body reading.
+#
+# Measured over the whole live corpus: 453 postings move `unknown` ->
+# `rejected`, 206 of them cards currently on the board, and of the 20 that
+# carry a hand or machine label, **17 are labelled `rejected`, including both
+# rows in the hand sheet**.
+MARKETS_EMPLOYER = frozenset(_terms(
+    "asset management", "investment management", "fund management",
+    "financial institutions", "prime brokerage", "brokerage",
+    "front office", "back office", "middle office", "corporate banking",
+    "private markets", "alternative investments", "treasury",
+    "mutual fund", "mutual funds", "kapitalförvaltning", "vermogensbeheer",
+))
+
+# What a *body* may anchor on. The title keeps the whole list: a posting headed
+# `Asset Management Analyst` is about asset management, and only the same words
+# in a paragraph are boilerplate.
+MARKETS_IN_BODY = tuple(term for term in MARKETS if term not in MARKETS_EMPLOYER)
+
+
 # --------------------------------------------------------------------------
 # Hard negatives -- occupations a title fully determines
 # --------------------------------------------------------------------------
@@ -501,8 +641,8 @@ UNRELATED = _terms(
     "hemstädning", "städuppdrag", "trädgårdsuppdrag", "barberare",
     "däckskiftare", "mötesbokare", "taxiförare", "ordningsvakt",
     "parkeringsvakt", "optiker", "kalkylator", "besiktningsman",
-    "fastighetsskötare", "plattsättare", "golvläggare", "takläggare",
-    "murare", "lackerare", "plåtslagare", "rivare", "konditor", "kallskänka",
+    "golvläggare", "takläggare",
+    "lackerare", "plåtslagare", "rivare", "konditor",
     "maskinoperatörer", "montörer", "chaufförer", "lagermedarbetare",
     # Danish. `jobindex` is gated by its own taxonomy and leaks almost nothing,
     # but a `--since` top-up writes a NULL category and a NULL category passes
@@ -550,13 +690,26 @@ CORPORATE = _terms(
     "ui designer", "product designer", "designer", "design lead",
     "community manager", "customer success", "event manager",
     "legal counsel", "counsel", "paralegal", "attorney", "lawyer", "solicitor",
+    # **The legal family, added at the reader's instruction and dry-run
+    # first.** `counsel` and `paralegal` were here and bare `legal <noun>` was
+    # not, so `Legal Analyst`, `Legal Associate` and `Legal Officer` fell
+    # through to `judge` step 8 -- where `analyst` and `associate` are
+    # AMBIGUOUS and one markets word in a body held them open. Measured over
+    # 502,782 live postings: **not one of these reaches a posting rated
+    # `relevant` or `less_relevant`**, which is the test every rejecting needle
+    # is held to.
+    "legal analyst", "legal associate", "legal officer", "legal specialist",
+    "legal manager", "legal advisor", "legal intern", "legal operations",
+    "general counsel", "deputy general counsel", "associate general counsel",
+    "corporate counsel", "regulatory counsel", "contract negotiator",
+    "litigation", "law clerk", "notary", "bolagsjurist", "advokat",
     "translator", "interpreter", "archivist", "librarian",
     "project manager", "programme manager", "program manager",
     "operations manager", "service manager", "general manager", "team leader",
     "subject matter expert", "corporate administrator", "senior executive",
     "associate executive", "training", "trainer", "quality assurance",
     "executive", "program administrator", "property administrator",
-    "office coordinator", "administration",
+    "administration",
     "rekryterare", "lönespecialist", "kommunikatör", "marknadsförare",
     "administratör", "avtalsadministratör", "jurist", "personalchef",
     "kundtjänst", "kundservice", "receptionist",
@@ -578,7 +731,24 @@ NON_QUANT_FINANCE = _terms(
     "call center", "account manager", "account executive", "business development",
     "sales manager", "sales representative", "sales executive", "sales support",
     "inside sales", "telesales", "sales trader", "client onboarding",
-    "onboarding specialist", "accountant", "accounting", "bookkeeper",
+    "onboarding specialist",
+    # **The audit and tax family, added at the reader's instruction.** This
+    # list carried `auditor`, `internal audit` and `tax analyst` and stopped
+    # short of the grades those firms actually advertise -- `Audit Associate`,
+    # `Tax Senior`, `Tax Specialist`, `Assurance Associate` -- so they reached
+    # step 8 and a body saying `trading` once held them open. Dry-run over
+    # 502,782 live postings: **not one reaches a positively-rated posting**.
+    # `transfer pricing` was measured too and left out: clean on the numbers,
+    # but it also names *funds* transfer pricing, which is an ALM seat, and one
+    # card did not justify the ambiguity.
+    "audit associate", "audit senior", "senior auditor", "audit manager",
+    "audit analyst", "internal auditor", "audit assistant",
+    "audit supervisor", "assurance associate", "assurance senior",
+    "assurance manager", "business audit", "it audit",
+    "tax associate", "tax senior", "tax specialist", "tax accountant",
+    "tax consultant", "tax director", "tax compliance", "tax reporting",
+    "taxation", "indirect tax", "tax operations", "tax assistant",
+    "accountant", "accounting", "bookkeeper",
     "accounts payable", "accounts receivable", "financial reporting",
     "fund accounting", "fund administration", "fund administrator",
     "transfer agency", "tax manager", "tax advisor", "tax analyst", "auditor",
@@ -791,13 +961,40 @@ SWEDISH_HEADS = (
 MIN_COMPOUND = 9  # shorter than this and a suffix is a coincidence
 
 
-def compound(text: str, heads: tuple[str, ...] = SWEDISH_HEADS) -> str | None:
-    """The first token of `text` that ends in an occupational head."""
+# A head can only be a token's suffix if the two agree on their last four
+# characters, and every head here is at least that long -- so a dict keyed on
+# those four characters replaces a scan of the whole list. `_TRADE_HEADS_INFLECTED`
+# is 139 heads tested against every long token of every title, which is where
+# it shows.
+_SUFFIXES: dict[int, tuple] = {}
+_KEY = 4
+
+
+def _by_suffix(heads: tuple[str, ...]) -> dict[str, tuple[str, ...]]:
+    entry = _SUFFIXES.get(id(heads))
+    if entry is None or entry[0] is not heads:
+        index: dict[str, list[str]] = {}
+        for head in heads:
+            index.setdefault(head[-_KEY:], []).append(head)
+        entry = (heads, {key: tuple(v) for key, v in index.items()})
+        _SUFFIXES[id(heads)] = entry
+    return entry[1]
+
+
+def compound(text: str, heads: tuple[str, ...] = SWEDISH_HEADS,
+             *, margin: int = 1) -> str | None:
+    """The first token of `text` that ends in an occupational head.
+
+    `margin` is how much of the token has to be left in front of the head: one
+    character for the Swedish list here, two for `tagging`'s trade heads, where
+    a single-letter prefix is a coincidence rather than a compound.
+    """
+    index = _by_suffix(heads)
     for token in text.split():
         if len(token) < MIN_COMPOUND:
             continue
-        for head in heads:
-            if len(token) > len(head) and token.endswith(head):
+        for head in index.get(token[-_KEY:], ()):
+            if len(token) >= len(head) + margin and token.endswith(head):
                 return token
     return None
 
@@ -826,9 +1023,20 @@ INTERN_TITLE = _terms(
 # and an over-eager student rule threw them away once already. An internship
 # is often open to a recent graduate; an enrolment-bound programme is not.
 STUDENT_PROGRAMME = _terms(
-    "duales studium", "dual course of studies", "duale ausbildung",
-    "ausbildung zum", "ausbildung zur", "werkstudent", "werkstudentin",
+    "duales studium", "dual course of studies", "werkstudent", "werkstudentin",
     "werkstudium",
+    # **Bare `ausbildung`, which replaced `ausbildung zum`, `ausbildung zur`
+    # and `duale ausbildung`.** The qualified forms were three of the many
+    # ways German writes the same contract and the board carried the rest:
+    # `Ausbildung als Hotelfachfrau/-mann`, `Ausbildung Groß- und
+    # Außenhandelsmanagement 2027`, `Ausbildung Fachkraft für Lagerlogistik`.
+    # A head is worth more than the phrases it replaces because it also
+    # catches the next form nobody has seen -- the argument
+    # `_TRADE_HEADS_INFLECTED` makes one module over. Dry-run: 332 live
+    # titles, not one rated positively, 19 board cards. Token matching is what
+    # makes it safe -- `Weiterbildung` and `Ausbildungsleiter` are each one
+    # token and neither contains this one.
+    "ausbildung", "auszubildende", "auszubildender",
     # A contract or a contest that cannot be held without being a student, both
     # from the hand-labelled sheet: `Euronext Securities Copenhagen - Student
     # Employee` ("student job - also no relevant tasks") and Walleye's `Stock
@@ -850,6 +1058,18 @@ STUDENT_PROGRAMME = _terms(
     # the point: its one positively-rated hit is `Praktikum Private Equity
     # (m/w/d)`, a posting this reader could take.
     "lehrstelle", "lernende", "lernender",
+    # The same contract in the four other languages the corpus writes it in,
+    # all of them reaching the board through one European truck-dealership
+    # network. Dry-run, live titles / positively rated / board cards:
+    # `lehrling` 8/0/8, `alternance` 93/0/9, `apprenti` 77/0/0,
+    # `aprendiz` 25/0/2, `vocational trainee` 7/0/6.
+    #
+    # **Bare English `apprentice` is deliberately left out**, on the reason
+    # rather than the count: it reaches Euronext's `Treasury Apprentice`, a
+    # finance seat this reader could hold, and this list rejects outright. The
+    # same care that keeps `intern` off it.
+    "lehrling", "lehrlinge", "alternance", "apprenti", "apprentie",
+    "aprendiz", "vocational trainee",
 )
 
 # `are enrolled` is deliberately absent: "employees who are enrolled in our
@@ -914,6 +1134,22 @@ def judge(
     # a market-data vendor's every backend engineer came out as a markets hire.
     markets_role = first(role, MARKETS)
     markets_body = first(body, MARKETS)
+    # **And step 8 reads a narrower list than step 7 does.** A phrase naming
+    # what the *firm* is -- `asset management`, `financial institutions`,
+    # `treasury` -- is in the opening paragraph of every advertisement a bank
+    # publishes, so reading one out of a body is reading the letterhead. See
+    # `MARKETS_EMPLOYER` for the histogram that measured it.
+    #
+    # **Step 7 keeps the full list and that was measured too.** Narrowing both
+    # was tried: it moved 743 postings out of `unknown` and cost the hand sheet
+    # its first false rejection, an `AI Engineer` the reader had labelled
+    # `adjacent`. That is the difference the note at step 7 already names --
+    # there the title has been recognised as an engineer and the body
+    # corroborates a reading, and the reader's own scope calls heavy systems
+    # engineering "a down-rank rather than a hard-drop". At step 8 there is no
+    # reading to corroborate: `AMBIGUOUS` carries bare *consultant* and bare
+    # *associate*.
+    markets_body_job = first(body, MARKETS_IN_BODY)
 
     # **A methodology phrase is evidence only next to a markets anchor** -- the
     # two-sided test step 7 applies to engineering titles, which steps 6, 8 and
@@ -1043,9 +1279,9 @@ def judge(
     if hit:
         if quant_body:
             return Verdict("keep", None, f"{hit} + {quant_body}", "strong")
-        if markets_role or markets_body:
+        if markets_role or markets_body_job:
             return Verdict("undecided", None,
-                           f"{hit} + {markets_role or markets_body}", "weak")
+                           f"{hit} + {markets_role or markets_body_job}", "weak")
         if has_body:
             return Verdict("reject", "non_quant_finance",
                            f"{hit}, no markets language in the body", "weak")
@@ -1117,7 +1353,16 @@ MIN_BOARD = 10  # below this a share is noise, not a profile
 # was wired to a gate that gap went live: `jobindex/denmark` sits on 13 keeps
 # against a floor of 10, so a lexicon change costing Denmark four keeps would
 # have silently gated the whole Danish feed.
-NOT_A_BOARD = ("jobtech", "jobbsafari", "jobindex", "jobroom", "mycareersfuture")
+#
+# **`iesjobs` is the one to check first when Hong Kong empties.** Its whole
+# board is 14,287 postings under one token and 137 of them are filed under
+# Finance, so it profiles `non_markets` on any threshold -- and the hub it
+# feeds is a focus hub, where `non_markets_board` would have removed every
+# unread card in the territory. Adding a national portal to this list is part
+# of landing one, not an afterthought.
+NOT_A_BOARD = (
+    "jobtech", "jobbsafari", "jobindex", "jobroom", "mycareersfuture", "iesjobs",
+)
 
 
 def board_profile(keep: int, undecided: int, rejected: int) -> tuple[str, str] | None:

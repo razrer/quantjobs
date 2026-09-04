@@ -38,8 +38,11 @@ from __future__ import annotations
 import csv
 import difflib
 import hashlib
+import os
 import re
 import sqlite3
+import tempfile
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -47,23 +50,55 @@ from . import lexicon, tagging
 
 PATH = Path(__file__).with_name("labels.csv")
 AUTO_PATH = Path(__file__).with_name("auto_labels.csv")
+AGENT_PATH = Path(__file__).with_name("agent_labels.csv")
 
-# Both sheets, scored together by default.
+# All three sheets, scored together by default.
 #
-# `TAGGING.md` argued the machine sheet must never be the criterion -- "a model
+# `TAGGING.md` argued a machine sheet must never be the criterion -- "a model
 # grading a model agrees with it for the wrong reasons, and this one shares a
-# family with the classifier's author". That argument is about *unread* labels.
-# The user has since read the sheet and confirmed it, which is the step that
-# turns it from an echo into evidence, so it is scored alongside the hand sheet
-# and `labels` still reports each file on its own line.
-SHEETS = (PATH, AUTO_PATH)
+# family with the classifier's author". That argument is about *unread*
+# labels. The reader has confirmed both machine sheets, which is the step that
+# turns one from an echo into evidence, so all three are scored and `labels`
+# still reports each file on its own line -- which is the part that matters,
+# because they do not agree and a single blended number would hide it.
+#
+# **`agent_labels.csv` is the noisiest of the three and its own limits are
+# worth keeping in front of whoever reads the score.** Twelve model labellers
+# over 471 postings, told to prefer `adjacent` when torn -- and they did,
+# calling `Slack Administrator`, `IT Support Engineer` and
+# `Network Security Engineer` adjacent while calling
+# `Junior Quantitative Analyst (Credit & FI)` rejected. It is scored because
+# the reader has read it; it is still not the sheet to tune a needle against,
+# and the per-file lines are how that stays visible.
+SHEETS = (PATH, AUTO_PATH, AGENT_PATH)
 
 # Column order is reading order. What you type comes first so the cursor lands
-# on it, what you read comes next, the long description sits after that, and
-# the three keys go last -- they are how a row joins back to `jobs` and they
-# are never edited, so they have no business occupying columns A to C.
+# on it, what you read comes next, and the three keys go last -- they are how a
+# row joins back to `jobs` and they are never edited, so they have no business
+# occupying columns A to C.
+#
+# **`description` is deliberately not here, and dropping it was worth 13x.**
+# The three sheets were 4.3 MB of which **3.6 MB was a verbatim copy of
+# `jobs.description`** -- a column the database already owns, checked into git,
+# and rewritten in full whenever a sheet is redrawn. Measured against every
+# alternative before choosing: SQLite as a binary table is 4.9 MB (*larger*,
+# on page overhead), CSV+gzip 1.4 MB, CSV+xz 0.9 MB, and Parquet would land
+# near those -- so a new dependency would still have lost to simply not
+# storing the column, and would have cost the git diff, the Excel edit and
+# `serve.py`'s write path along the way.
+#
+# What the labeller loses is the body text inline; what they keep is the
+# title, the firm, the place, the department and a **clickable `url`**, which
+# is the posting itself rather than a 4,000-character truncation of it. The
+# description is one click away and regenerable from `jobs` at any time -- the
+# verdicts are the only thing here that cannot be.
+#
+# To reverse: put `"description"` back on `CONTEXT` and append the column to
+# the row `write` builds. It wants flattening first -- markup stripped,
+# entities decoded, whitespace collapsed, capped -- which is what
+# `bodies._clean` already does for the tagger.
 FILL = ("relevance", "seniority", "note")
-CONTEXT = ("title", "firm", "location", "department", "url", "description")
+CONTEXT = ("title", "firm", "location", "department", "url")
 KEYS = ("ats", "token", "job_id")
 HEADER = ("n", *FILL, *CONTEXT, *KEYS)
 
@@ -153,18 +188,6 @@ MAX_PER_BOARD = 2
 
 _MARKUP = re.compile(r"<[^>]{0,4000}>")
 _SPACE = re.compile(r"\s+")
-
-
-def readable(description: str | None, limit: int = 4000) -> str:
-    """A description a person can read in a spreadsheet cell."""
-    if not description:
-        return ""
-    text = _MARKUP.sub(" ", description[:20_000])
-    for entity, plain in (("&nbsp;", " "), ("&amp;", "&"), ("&lt;", "<"),
-                          ("&gt;", ">"), ("&#39;", "'"), ("&quot;", '"')):
-        text = text.replace(entity, plain)
-    text = _SPACE.sub(" ", text).strip()
-    return text[:limit]
 
 
 # --------------------------------------------------------------------------
@@ -316,6 +339,51 @@ def choose(rows: list[dict], limit: int) -> list[tuple[str, str, str]]:
     return chosen
 
 
+# **The sheet is written under a lock and replaced atomically**, and both
+# halves are about the same file: `labels.csv` is the one input here a machine
+# cannot regenerate, and the two ways it can be lost are both reachable today.
+#
+# *Lost update.* `web/serve.py` is a `ThreadingHTTPServer` and `upsert` is a
+# read-modify-write of the whole file, so two corrections in flight at once
+# read the same rows and the second write drops the first. One click and a
+# quick second one is all that takes.
+#
+# *Truncation.* `open(path, "w")` empties the file before a single row is
+# written, so an exception or a killed process between those two moments
+# leaves an empty `labels.csv` -- the project's own exit criterion, gone, and
+# the failure looks like "the sheet has no rows in it" rather than like a
+# crash. Writing beside it and renaming means the old file survives until the
+# new one is complete; `os.replace` is atomic on Windows as well as POSIX.
+_SHEET_LOCK = threading.Lock()
+
+
+def _write_sheet(path: Path, rows) -> None:
+    """Write `rows` (header first) to `path`, atomically. Caller holds the lock.
+
+    Excel on Windows reads a BOM-less UTF-8 CSV as cp1252, which turns every
+    Swedish and Dutch posting into mojibake. `load` reads `utf-8-sig`, so this
+    round-trips.
+    """
+    handle = tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8-sig", newline="", delete=False,
+        dir=str(path.parent or "."), prefix=path.name, suffix=".tmp",
+    )
+    try:
+        with handle:
+            csv.writer(handle).writerows(rows)
+        os.replace(handle.name, path)
+    except BaseException:
+        pathlib_unlink(handle.name)
+        raise
+
+
+def pathlib_unlink(name: str) -> None:
+    try:
+        os.unlink(name)
+    except OSError:
+        pass
+
+
 def draw(connection: sqlite3.Connection, limit: int, path: Path) -> tuple[int, int]:
     """Write the labelling sheet. Returns (rows written, labels preserved).
 
@@ -339,33 +407,29 @@ def draw(connection: sqlite3.Connection, limit: int, path: Path) -> tuple[int, i
     ordered = sorted(dict.fromkeys([*done, *drawn]), key=_scatter)
 
     written = 0
-    # Excel on Windows reads a BOM-less UTF-8 CSV as cp1252, which turns every
-    # Swedish and Dutch posting into mojibake. `load` reads `utf-8-sig`, so
-    # this round-trips.
-    with path.open("w", encoding="utf-8-sig", newline="") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(HEADER)
-        for key in ordered:
-            row = connection.execute(
-                "SELECT title, department, location, url, description, domain"
-                " FROM jobs WHERE ats = ? AND token = ? AND job_id = ?", key,
-            ).fetchone()
-            if row is None:
-                continue
-            label = done.get(key)
-            written += 1
-            writer.writerow([
-                written,
-                label.relevance if label else "",
-                label.seniority if label else "",
-                label.note if label else "",
-                row["title"] or "",
-                row["domain"] or key[1],
-                row["location"] or "",
-                row["department"] or "",
-                row["url"] or "",
-                readable(row["description"]),
-            ] + list(key))
+    rows = [list(HEADER)]
+    for key in ordered:
+        row = connection.execute(
+            "SELECT title, department, location, url, description, domain"
+            " FROM jobs WHERE ats = ? AND token = ? AND job_id = ?", key,
+        ).fetchone()
+        if row is None:
+            continue
+        label = done.get(key)
+        written += 1
+        rows.append([
+            written,
+            label.relevance if label else "",
+            label.seniority if label else "",
+            label.note if label else "",
+            row["title"] or "",
+            row["domain"] or key[1],
+            row["location"] or "",
+            row["department"] or "",
+            row["url"] or "",
+        ] + list(key))
+    with _SHEET_LOCK:
+        _write_sheet(path, rows)
     return written, len(done)
 
 
@@ -382,6 +446,13 @@ class Label:
     relevance: str
     seniority: str
     note: str
+    # Which sheet the row came from. Defaulted so nothing that builds a Label
+    # by hand has to care, and set by `load`, because with three sheets of
+    # unequal quality being scored together the *provenance* of a
+    # disagreement is most of what makes it readable -- a false rejection
+    # against the hand sheet is a bug and one against `agent_labels.csv` is
+    # usually the model having preferred `adjacent` when torn.
+    sheet: str = ""
 
 
 def _scatter(key: tuple[str, str, str]) -> str:
@@ -436,6 +507,7 @@ def load(path: Path = PATH) -> list[Label]:
                 (row.get("token") or "").strip(),
                 (row.get("job_id") or "").strip(),
                 relevance, seniority, (row.get("note") or "").strip(),
+                path.name,
             ))
     return labels
 
@@ -453,6 +525,13 @@ def upsert(path: Path, key: tuple[str, str, str], dimension: str, value: str,
     existing row keeps whatever a person already put there, same as `draw`
     never overwriting a filled-in label.
     """
+    with _SHEET_LOCK:
+        _upsert(path, key, dimension, value, context)
+
+
+def _upsert(path: Path, key: tuple[str, str, str], dimension: str, value: str,
+            context: dict[str, str]) -> None:
+    """`upsert`'s read-modify-write. The caller holds `_SHEET_LOCK`."""
     header = list(HEADER)
     rows: list[list[str]] = []
     if path.exists():
@@ -494,10 +573,7 @@ def upsert(path: Path, key: tuple[str, str, str], dimension: str, value: str,
     if dimension in idx:
         target[idx[dimension]] = value
 
-    with path.open("w", encoding="utf-8-sig", newline="") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(header)
-        writer.writerows(rows)
+    _write_sheet(path, [header, *rows])
 
 
 def nearest(value: str, allowed: tuple[str, ...]) -> str | None:
@@ -545,6 +621,7 @@ class Disagreement:
     tagged: str
     evidence: str
     note: str
+    sheet: str = ""
 
     @property
     def false_rejection(self) -> bool:
@@ -575,6 +652,7 @@ def score(connection: sqlite3.Connection, labels: list[Label]):
             found.append(Disagreement(
                 *key, "(not in the database)", "key", "-", "-",
                 "no posting matches these three columns", label.note,
+                label.sheet,
             ))
             continue
         if not tags:
@@ -584,7 +662,7 @@ def score(connection: sqlite3.Connection, labels: list[Label]):
             found.append(Disagreement(
                 *key, posting["title"] or "", "key", "-", "-",
                 f"no tags at lexicon {tagging.TAGGER} -- run `tag` first",
-                label.note,
+                label.note, label.sheet,
             ))
             continue
 
@@ -599,7 +677,7 @@ def score(connection: sqlite3.Connection, labels: list[Label]):
             else:
                 found.append(Disagreement(
                     *key, posting["title"] or "", dimension, labelled, tagged,
-                    evidence, label.note,
+                    evidence, label.note, label.sheet,
                 ))
 
     rates = {

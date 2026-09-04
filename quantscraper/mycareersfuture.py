@@ -48,9 +48,11 @@ own oracle for whether a name is real.
 **Paging guards, per the Workday lesson.** A page-count bound is a silent cap
 on exactly the boards that matter, so `MAX_PAGES` is five times the real length
 -- a backstop against a server that never terminates, not a limit on how big
-the portal may be. The walk stops on a short page, or on one whose contents
-repeat the previous: a server ignoring `page` serves page one forever and never
-returns an empty page.
+the portal may be. The walk stops on an **empty** page, or on one whose
+contents repeat the previous: a server ignoring `page` serves page one forever
+and never returns an empty page. It does **not** stop on a short one, which is
+the Jobbsafari and Oracle lesson and is worth restating here because this walk
+had that stop until it was measured out -- see `walk`.
 
 **The index moves under the walk, so the sweep audits its own arithmetic.**
 `total` drifted by 14 across a single walk and 6 rows in the first 10,094
@@ -84,7 +86,6 @@ name. That is the `Trading Operations` mistake with a new coat of paint.
 
 from __future__ import annotations
 
-import html
 import json
 import re
 import sqlite3
@@ -93,7 +94,7 @@ import urllib.parse
 from collections.abc import Iterator
 from dataclasses import dataclass
 
-from . import db, http
+from . import db, http, parsing, sweep
 from .models import Job
 
 NAME = "mycareersfuture"
@@ -107,8 +108,8 @@ LIST_URL = "https://api.mycareersfuture.gov.sg/v2/jobs?limit={limit}&page={page}
 # merely used, so raising it fails here instead of at the far end of a sweep.
 PAGE_SIZE = 100
 
-# A backstop against a server that never returns a short page, not a limit on
-# how big the portal may be. The real walk ends at page 847.
+# A backstop against a server that never returns an empty page, not a limit on
+# how big the portal may be. The real walk ends at page 941.
 MAX_PAGES = 5_000
 
 # An implausibly small result is a failure. The portal holds ~85,000 postings;
@@ -117,10 +118,8 @@ MAX_PAGES = 5_000
 # -- this only catches the case where the endpoint changed shape entirely.
 MIN_EXPECTED = 20_000
 
-# The index shifts while the walk runs, so a few postings slide across a page
-# boundary and are seen twice or not at all. 6 duplicates in the first 10,094
-# rows; anything past this is a truncation, not turbulence.
-SHORTFALL_TOLERANCE = 0.02
+# One definition, in `sweep`, with the measurement that set it.
+SHORTFALL_TOLERANCE = sweep.SHORTFALL_TOLERANCE
 
 # The portal's own taxonomy, whose union is exactly the unfiltered total. Kept
 # for two reasons: it is the partition that enumerates the board if `/v2/jobs`
@@ -146,7 +145,6 @@ CATEGORIES = (
     "Travel / Tourism", "Wholesale Trade",
 )
 
-_TAGS = re.compile(r"<[^>]+>")
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,30 +179,10 @@ class Sweep:
             return f"{self.blocked} -- {got} before the portal stopped serving"
         if self.partial:
             return None
-        if self.seen < MIN_EXPECTED:
-            return (
-                f"collected {self.seen:,d} postings, expected at least "
-                f"{MIN_EXPECTED:,d} -- treating as a broken source"
-            )
-        if self.advertised and self.shortfall > self.advertised * SHORTFALL_TOLERANCE:
-            return (
-                f"collected {self.seen:,d} of the {self.advertised:,d} the portal "
-                f"advertised -- {self.shortfall:,d} short, which is truncation "
-                f"rather than a moving index"
-            )
-        return None
+        return sweep.problem(self.seen, self.advertised, MIN_EXPECTED, noun="portal")
 
 
-def _text(value: str | None) -> str | None:
-    """Plain text out of the portal's HTML descriptions.
-
-    Tags are stripped before entities are decoded, never after: an employer who
-    writes a literal `&lt;p&gt;` in their prose would otherwise have it decoded
-    into a tag and then eaten.
-    """
-    if not value:
-        return None
-    return " ".join(html.unescape(_TAGS.sub(" ", value)).split()) or None
+_text = parsing.text  # one definition, in `parsing`
 
 
 def _employer(row: dict) -> str | None:
@@ -319,9 +297,23 @@ def walk(
     sharing a day are in no particular order and stopping on a whole page rather
     than on a row leaves a full day of slack at the boundary.
 
-    Stops on a short page, on a page that repeats the previous one, or at
-    `max_pages` -- which is a backstop against a server that does neither, not a
-    cap on how big the portal may be.
+    **Stops on an empty page, never on a short one.** This walk used to stop on
+    a short page, which is the trap Jobbsafari and Oracle have each already
+    taught this project: Jobbsafari reported 5,421 postings of 48,000 because
+    one page came back 499 rows instead of 500, and Oracle truncated Kotak at
+    3,199 of 9,959 the same way. A short page in the middle of a board looks
+    exactly like the real last one from outside, and the arithmetic looks
+    perfect either way. Nothing had gone wrong here yet -- a seven-page sample
+    across the walk was 100 rows every time, and the shortfall check is a real
+    backstop -- but it is a latent truncation on a source that is 98% of the
+    board's dated cards, and the fix costs one request. Measured live: page 940
+    is the genuine last page at 58 rows and pages 941 and 942 answer with an
+    empty result set, so the empty page is a real terminator.
+
+    The repeat guard is what makes that safe: a server ignoring `page` serves
+    page one forever and never returns an empty page. `max_pages` is the
+    backstop against a server that does neither, not a cap on how big the
+    portal may be.
     """
     previous: set[str] = set()
     for number in range(max_pages):
@@ -337,8 +329,6 @@ def walk(
 
         yield rows, advertised
 
-        if len(rows) < PAGE_SIZE:
-            return
         if since and max(
             (row.get("metadata") or {}).get("newPostingDate") or "" for row in rows
         ) < since:

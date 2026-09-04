@@ -54,14 +54,6 @@ TOKEN = "jobstream"  # one national feed, so the board identifier is constant
 
 URL = "https://jobstream.api.jobtechdev.se/stream?date={since}"
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS feed_state (
-    feed       TEXT PRIMARY KEY,
-    cursor     TEXT NOT NULL,   -- epoch milliseconds, as the feed reports them
-    updated_at TEXT NOT NULL
-);
-"""
-
 # Re-read this much on every resume. Cheap insurance against a boundary ad.
 OVERLAP = timedelta(minutes=10)
 
@@ -75,24 +67,15 @@ def _iso(moment: datetime) -> str:
 
 def cursor(connection: sqlite3.Connection) -> datetime:
     """Where the next poll starts."""
-    connection.executescript(SCHEMA)
-    row = connection.execute(
-        "SELECT cursor FROM feed_state WHERE feed = ?", (NAME,)
-    ).fetchone()
-    if not row:
+    stored = db.cursor(connection, NAME)
+    if stored is None:
         return datetime.now(timezone.utc) - COLD_START
-    seen = datetime.fromtimestamp(int(row["cursor"]) / 1000, timezone.utc)
+    seen = datetime.fromtimestamp(int(stored) / 1000, timezone.utc)
     return seen - OVERLAP
 
 
 def save_cursor(connection: sqlite3.Connection, milliseconds: int) -> None:
-    with connection:
-        connection.execute(
-            "INSERT INTO feed_state (feed, cursor, updated_at) VALUES (?, ?, ?)"
-            " ON CONFLICT (feed) DO UPDATE SET cursor = excluded.cursor,"
-            " updated_at = excluded.updated_at",
-            (NAME, str(milliseconds), db.now()),
-        )
+    db.save_cursor(connection, NAME, str(milliseconds))
 
 
 def fetch(since: datetime) -> list[dict]:
@@ -173,7 +156,6 @@ def run(
     designed for exactly this. Replay is safe -- every write is an idempotent
     upsert, and the cursor only ever moves to the newest timestamp seen.
     """
-    connection.executescript(SCHEMA)
     since = since or cursor(connection)
     ads = fetch(since)
     if not ads:

@@ -68,6 +68,13 @@ _SUFFIX = re.compile(
     r"[\s,]+(?:llc|l\.l\.c\.|inc\.?|ltd\.?|limited|plc|ab|a/s|aps|as|asa|nv|n\.v\.|bv|b\.v\."
     r"|gmbh|mbh|ug|ag|sa|s\.a\.?|sas|sarl|s\.a\.r\.l\.|sca|sicav|icav|oyj|oy|kb|kg"
     r"|srl|spa|pte|pty|lp|llp|co\.?|corp\.?|corporation"
+    # The Singaporean and American tails, added when the portal employers
+    # started going through here: `PRIVATE LIMITED` is how half of Singapore
+    # incorporates and `N.A.` is a US national association, so `SMART
+    # INFORMATION MANAGEMENT SYSTEMS PRIVATE LIMITED` came out as
+    # "... Systems Private" and `JPMORGAN CHASE BANK, N.A.` kept its tail.
+    # Measured over the live board: 35 names change and every one reads better.
+    r"|company|private|public|n\.a\.?|sdn bhd|bhd|pjsc"
     r"|holdings?|group|international|europe|\(uk\)|\(europe\))\.?$",
     re.I,
 )
@@ -147,7 +154,76 @@ GATES = {
     # another machine. It fires on the strongest evidence this project has --
     # the reader read the posting and said no.
     "hand_rejected": "you rejected this on the board",
+    # **The eighth, and it exists because the seventh cannot reach Hong Kong.**
+    # `non_markets_employer` is how a national portal's noise is removed --
+    # profile the *employer* rather than the token, since one token carries a
+    # whole territory. That works for Singapore, which publishes an employer
+    # name on every row, and it cannot work for Hong Kong's statutory board,
+    # which publishes one **nowhere on either list view**. So the noise there
+    # has nothing to profile and needs the source-level answer instead.
+    #
+    # **Measured before it went in, and the numbers are not close.** Of 13,465
+    # live Hong Kong postings from that portal, **six** are rated above
+    # `unknown` -- against 277 from 1,789 postings on the firms' own boards in
+    # the same hub. That is a 0.04% yield against 15.5%. The 2,822 unreadable
+    # ones were the bulk of what the Hong Kong view showed.
+    #
+    # **This reverses a call recorded in `CLAUDE.md`**, which kept `iesjobs` in
+    # `lexicon.NOT_A_BOARD` on the reasoning that profiling it would
+    # "have removed every unread card in a focus hub". It would, and that turns
+    # out to be right rather than dangerous -- the reasoning was written when
+    # the source landed and before anything had counted what those cards were
+    # worth. It stays out of `NOT_A_BOARD` all the same, because that list also
+    # feeds `lexicon.board_profile` and `dedup`, and this is one gate rather
+    # than a claim that a territory's labour market is a firm's job board.
+    #
+    # Deleting the line puts all 2,822 back on the next build with no re-tag,
+    # which is the property every gate in this table has.
+    "unread_census_card": "a whole-territory census card the tagger could not read",
 }
+
+# **Sources where an unreadable card is measured noise rather than a gap.**
+# A set rather than a literal so the next portal that publishes no employer is
+# one line, and so the reason a source is here stays attached to the name.
+UNREAD_IS_NOISE = frozenset({"iesjobs"})
+
+
+# **The floor every other source in this project has, on the one step that
+# ships.** `MIN_EXPECTED` guards each registry and each national board because
+# "a scraper that breaks and returns zero rows with HTTP 200 is far more
+# dangerous than one that crashes" -- and this file, which produces the
+# artifact the reader actually looks at, had none.
+#
+# **It is not hypothetical: it happened while this line was being written.**
+# `tagging.TAGGER` was bumped and the re-tag had not run, so every posting had
+# tags at the previous version and none at the current one, every row fell out
+# as `untagged`, and `main` wrote a **0-posting `data.js`** and returned
+# normally. `publish.py` checks that the file exists and that the CLI did not
+# print an error; it would have uploaded it. The route is ordinary: `daily`
+# runs `tag` in a phase where a failing step is logged and the run continues,
+# and then rebuilds and publishes.
+#
+# The bound is deliberately far below any real board -- the recorded range is
+# 4,211 to 8,513 cards -- because this is a catastrophe check and not a
+# regression check. A board that halves is a story; a board that empties is a
+# broken pipeline.
+MIN_CARDS = 500
+
+# What "worth reading" counts on this page. Named separately from the board's
+# own `WORTH` preset, which includes `plausible`: the same phrase already meant
+# two things in this project and naming both is how they stop being confused.
+SHORTLIST = ("apply_now", "strong")
+
+
+def unread_census(ats: str, relevance: str) -> bool:
+    """Is this an unreadable card from a source whose unreadable cards are noise?
+
+    Named rather than inlined so it can be asserted on directly -- both halves
+    have to hold, and the second is the whole safety argument: a *rated* card
+    from one of these sources is never touched, however bad the source's
+    average is. All six of Hong Kong's survive.
+    """
+    return relevance == "unknown" and ats in UNREAD_IS_NOISE
 
 # Below this a board has too few postings for its profile to mean anything, and
 # `lexicon.board_profile` returns None. Kept as a name here because the gate
@@ -354,31 +430,51 @@ def display_name(names: list[str], domain: str) -> str:
         return _domain_label(domain)
     candidates = operating
 
-    best = min(candidates, key=len)
+    return readable(min(candidates, key=len))
+
+
+def readable(name: str) -> str:
+    """One legal name cut down to something a card can be headed with.
+
+    **Split out of `display_name` because the other caller is 45% of the
+    board.** That function chooses among the several names a *domain* carries
+    and then cleans the winner; a national portal publishes exactly one name
+    per employer and there is nothing to choose, so the cleaning was skipped
+    and `QUBE RESEARCH & TECHNOLOGIES SINGAPORE PTE. LTD.` went on the page as
+    typed. Measured on the live board: **462 of 1,031 firm tiles were fully
+    capitalised legal names** -- `PERSOL SINGAPORE PTE. LTD.`, `KGI SECURITIES
+    (SINGAPORE) PTE. LTD.`, `JPMORGAN CHASE BANK, N.A.` -- and the board groups
+    by firm by default, so that is what the reader is looking at.
+
+    Cosmetic only, and deliberately kept away from anything that decides
+    identity: `firm_key` still groups on the name as published, `dedup` folds
+    on `company_tokens`, which lowercases and strips legal words itself, and
+    the raw name is still carried into `xs.names` beside this one.
+    """
     # Strip the legal form first, so `DPE INVESTMENT GESELLSCHAFT MBH` does not
     # come out of the case fixer as "Mbh". Only fully-cased names are touched at
     # all -- anything already mixed case is the firm's own styling.
     for _ in range(3):  # "... GmbH & Co. KG" is three suffixes deep
-        shorter = _SUFFIX.sub("", best).strip(" ,.&")
-        if shorter == best or not shorter:
+        shorter = _SUFFIX.sub("", name).strip(" ,.&")
+        if shorter == name or not shorter:
             break
-        best = shorter
+        name = shorter
 
     # Stripping can leave the name hanging on a connector. `_SUFFIX` carries
     # both `europe` and `nv`, so "Cigna Life Insurance Company of Europe NV"
     # came out as "Cigna Life Insurance Company of" -- which reads as a
     # truncation bug rather than a name.
-    words = best.split()
+    words = name.split()
     while len(words) > 1 and words[-1].casefold() in _CONNECTORS:
         words.pop()
-    best = " ".join(words) or best
+    name = " ".join(words) or name
 
-    if best.isupper() or best.islower():
-        parts = [_recase(w) for w in best.split()]
+    if name.isupper() or name.islower():
+        parts = [_recase(w) for w in name.split()]
         if parts and parts[0].islower():  # a name does not open on "of"
             parts[0] = parts[0].title()
-        best = " ".join(parts)
-    return best
+        name = " ".join(parts)
+    return name
 
 
 _CONNECTORS = {"of", "and", "the", "for", "van", "de", "der", "den", "och"}
@@ -774,6 +870,18 @@ def main() -> None:
             hit = "non_markets_employer"
             label = (row["employer"] or "").strip()
             by_board[label] = by_board.get(label, 0) + 1
+        elif hit is None and unread_census(row["ats"], relevance):
+            # The same "twice over" shape as the two above: the source is one
+            # whose unread cards have been counted and found worthless, *and*
+            # this is a posting the tagger could not place. Every rated card
+            # survives -- all six of them.
+            # **Deliberately not counted into `by_board`.** That breakdown
+            # answers "which boards did the non-markets gates empty", and this
+            # gate names one source by construction -- writing 1,223 rows of
+            # `iesjobs` into it pushes the boards it was built to surface out
+            # of the top eight. The gate's own line above says everything there
+            # is to say about it.
+            hit = "unread_census_card"
         domain = one_domain.get((row["ats"], row["token"]), row["domain"])
         key = firm_key(domain, row["employer"])
 
@@ -795,7 +903,8 @@ def main() -> None:
 
         if key not in firms:
             firms[key] = {
-                "name": row["employer"] or display_name(names.get(domain, []), key),
+                "name": (readable(row["employer"]) if row["employer"]
+                         else display_name(names.get(domain, []), key)),
                 "domain": domain,
                 "ats": row["ats"],
                 "n": 0,
@@ -892,23 +1001,14 @@ def main() -> None:
             card["posted"],
         ))
     folded_across = across - len(jobs)
-    payload = {
-        "built": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "tagger": tagging.TAGGER,
-        "firms": firms,
-        "jobs": jobs,
-    }
-    OUT.write_text(
-        "window.BOARD = " + json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + ";\n",
-        encoding="utf-8",
-    )
-    shortlist = sum(1 for j in jobs if j.get("fit") in ("apply_now", "strong"))
+
+    # **The diagnostics print before anything is written and before anything
+    # can fail**, because they are what says *which* gate ate the board -- and
+    # the one build that has to be readable is the one that refuses.
+    shortlist = sum(1 for j in jobs if j.get("fit") in SHORTLIST)
     dated = sum(1 for j in jobs if "due" in j)
-    print(
-        f"{len(jobs):,d} postings from {len(firms):,d} firms -> {OUT.name}"
-        f"  ({shortlist:,d} worth reading, {dated:,d} with a closing date,"
-        f" {OUT.stat().st_size / 1e6:.1f} MB)"
-    )
+    print(f"{len(jobs):,d} postings from {len(firms):,d} firms"
+          f"  ({shortlist:,d} worth reading, {dated:,d} with a closing date)")
     if collapsed:
         print(f"{collapsed:>7,d} folded into a card already shown"
               f"  (same firm, same place, same text)")
@@ -922,24 +1022,54 @@ def main() -> None:
         print(f"{count:>7,d} gated  {reason:<13} {GATES[reason]}")
     if by_board:
         top = sorted(by_board.items(), key=lambda kv: -kv[1])[:8]
-        print(
-            "        of which, the boards it emptied: "
-            + ", ".join(f"{name} {count:,d}" for name, count in top)
-        )
+        print("        of which, the boards it emptied: "
+              + ", ".join(f"{name} {count:,d}" for name, count in top))
     if untitled:
-        # Also not a gate. A record with no title on it cannot be read by the
-        # reader or by the tagger, and the only honest thing to do with one is
-        # not to render it.
+        # Not a gate. A record with no title on it cannot be read by the reader
+        # or by the tagger, and the only honest thing to do is not render it.
         print(f"{untitled:>7,d} held   untitled      (no title -- an extractor "
               f"wrote a record with nothing on it)")
     if untagged:
         # Not a gate: these were never read. It is a queue depth, and the
         # answer is to run `tag`, which is why it prints separately.
-        print(
-            f"{untagged:>7,d} held   untagged      (no verdict at lexicon "
-            f"{tagging.TAGGER} -- run `tag`)"
+        print(f"{untagged:>7,d} held   untagged      (no verdict at lexicon "
+              f"{tagging.TAGGER} -- run `tag`)")
+    print(f"{sum(gated.values()):>7,d} gated  total"
+          "         (kept in the database; `list --exclude <reason>` shows them)")
+
+    # **The floor `MIN_CARDS` documents, and it is checked before the file is
+    # opened** -- a refused build leaves the last good `data.js` in place
+    # rather than replacing it with an empty one, which is the same reason
+    # `labels.py` writes its sheet beside the old one and renames. The two
+    # causes are separate because their remedies are: one is a classifier that
+    # has not been run, the other is anything else.
+    if untagged > len(jobs):
+        raise SystemExit(
+            "REFUSED: "
+            f"{untagged:,d} live postings have no verdict at lexicon"
+            f" {tagging.TAGGER} against {len(jobs):,d} that reached the board."
+            " That is a stale-tag build rather than a board -- run"
+            " `python -m quantscraper tag` and rebuild. `data.js` is untouched."
         )
-    print(f"{sum(gated.values()):>7,d} gated  total         (kept in the database; `list --exclude <reason>` shows them)")
+    if len(jobs) < MIN_CARDS:
+        raise SystemExit(
+            "REFUSED: "
+            f"{len(jobs):,d} postings reached the board, under the"
+            f" floor of {MIN_CARDS:,d}. Something upstream is broken rather than"
+            " quiet; the gate counts above say which one ate it. `data.js` is"
+            " untouched."
+        )
+
+    OUT.write_text(
+        "window.BOARD = " + json.dumps({
+            "built": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "tagger": tagging.TAGGER,
+            "firms": firms,
+            "jobs": jobs,
+        }, ensure_ascii=False, separators=(",", ":")) + ";\n",
+        encoding="utf-8",
+    )
+    print(f"        wrote {OUT.name}, {OUT.stat().st_size / 1e6:.1f} MB")
 
 
 if __name__ == "__main__":

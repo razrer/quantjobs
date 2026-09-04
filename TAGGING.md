@@ -80,6 +80,35 @@ when *none* of them is somewhere the reader would go. But `sweden_other` means
 when every needle it matched was the country's own name, or `Copenhagen, Aarhus`
 loses its second city.
 
+**A national board writes an administrative place, and the reader has to bring
+the country.** Jobindex writes a postcode and a town, job-room.ch a town and a
+canton code, and Hong Kong's statutory board writes a *neighbourhood* --
+`Tsing Yi`, `Kwai Hing`, `Mong Kok`, finer even than its own 21-district
+taxonomy. None of those matches a needle, so all of them read `other`, which
+the board gates. The handle is not a longer place list: it is the source
+prefixing the territory, as `mycareersfuture._location` and
+`iesjobs._location` both do. **Whenever a new source lands, bucket its `hub`
+values before believing the board** -- `other` filling up is what a place-list
+gap looks like from outside.
+
+**The strongest gate a source can give you is its own occupation taxonomy,
+and it is only usable if the slices *partition*.** JobStream files every
+Swedish ad under one of 21 `occupation_field` values, MyCareersFuture and
+Jobindex under several categories each, and Hong Kong's statutory board under
+exactly one of 29 job types — measured, its hitcounts sum to 14,287 against an
+unfiltered total of 14,287. That last one is why `_IES_OFF_INDUSTRY` is an
+**equality** test where `_MCF_OFF_INDUSTRY` and `_JOBINDEX_OFF_INDUSTRY` are
+subset tests: with a partition, one label is the whole of what the employer
+said. The same portal's 27-industry facet sums to 15,175 and is refused for
+exactly that reason — it covers rather than partitions, so a posting filed
+under none would be missing and the arithmetic would still look right.
+
+Each of the four is a **drop** list rather than a keep list, because an
+unrecognised label has to pass: failing towards keeping is the direction this
+project always picks. And each keeps its catch-all — `Others`, `Øvrige`,
+`Other Professional/Associate Professional` — since a catch-all is where a
+posting nobody classified lands, which is the opposite of evidence.
+
 **Considered and deliberately not built:** `research_vs_engineering`,
 `work_mode`, `compensation`, `freshness`, `firm_type`, `firm_scale`,
 `hiring_volume`. The firm-level signal that survived is
@@ -109,6 +138,24 @@ tokens and every needle matched with its padding.
 **Grade every tag `strong` or `weak`**, as `domains.py` grades a match. A tag
 read from a body is evidence; a tag read from a six-word title is a guess that
 happens to be usually right.
+
+**And where there is no text at all, the *employer* is the last evidence
+there is.** Two branches read `tagging.quant_boards` — a board where at
+least two titles and at least 5% of them name quant work or a quant domain —
+and both fire **only when the posting has no body**:
+
+- `pure_engineering` ranks instead of rejecting. The reader's own scope calls
+  heavy systems engineering a down-rank rather than a hard drop, and `judge`
+  step 7 is three-sided on markets words *in the posting*, so a firm that
+  publishes no descriptions has no side to land on.
+- `unknown` becomes `adjacent`. This is the mirror of `non_markets_board`,
+  which removes a posting nothing could read on a board that publishes no
+  markets work; until now the mirror did not exist.
+
+The profile is measured from **titles alone** — no tags, no bodies — so it
+cannot feed the tagger its own output, and `_fit` notches whatever it confers
+one bucket down, because a relevance read off the employer is weaker than one
+read off the posting's own text.
 
 ## How this stage knows it is finished
 
@@ -166,13 +213,42 @@ plainly as a column would, so rows are scattered by a digest of the posting key.
 Stable across redraws, so a half-filled sheet is never rearranged under the
 reader; `hash()` is salted per process and would reshuffle every run.
 
+**The sheet does not carry the description, and measuring that was worth
+13x.** The three sheets were 4.3 MB of which **3.6 MB was a verbatim copy of
+`jobs.description`** — a column the database already owns, checked into git and
+rewritten in full on every redraw. Every binary alternative was measured
+against simply dropping it and every one lost: SQLite as a table is **4.9 MB**
+(larger, on page overhead), CSV+gzip 1.4 MB, CSV+xz 0.9 MB, and Parquet lands
+near those while costing a third-party dependency, the git diff, the Excel edit
+and `web/serve.py`'s write path. The sheets are 604 KB now. What a labeller
+keeps is the title, firm, place, department and a **clickable `url`** — the
+posting itself rather than a 4,000-character truncation of it. **The verdicts
+are the only thing in these files that cannot be regenerated**; the context
+always could be.
+
 The file is written with a BOM, because Excel on Windows reads a BOM-less UTF-8
 CSV as cp1252 and turns every Swedish posting into mojibake. `sample` is
 non-destructive: a row already carrying a verdict keeps it. Hand-labelling is
 the one input here that cannot be regenerated.
 
-**`auto_labels.csv` is scored beside the hand sheet, never gated on.** It earns
-its place as a diagnostic — it found a body-matched `underwriting` rule wrongly
-rejecting 1,834 postings, which eighty hand rows never could — but its rubric
-prefers the generous label when torn, so its "false rejections" contradict the
-reader's own hand labels rather than the lexicon.
+**The two machine sheets are scored beside the hand sheet, never gated on.**
+`auto_labels.csv` earns its place as a diagnostic — it found a body-matched
+`underwriting` rule wrongly rejecting 1,834 postings, which eighty hand rows
+never could — but its rubric prefers the generous label when torn, so its
+"false rejections" contradict the reader's own hand labels rather than the
+lexicon. `agent_labels.csv` joined it after the reader confirmed it, and it is
+the noisiest of the three: twelve model labellers over 471 postings, told to
+prefer `adjacent` when torn, which duly produced `adjacent` for
+`Slack Administrator` and `rejected` for
+`Junior Quantitative Analyst (Credit & FI)`.
+
+**Read the per-file lines, never the blended one.** Relevance agreement is
+84.9% on the hand sheet, 77.9% on auto and **45.0%** on agent; averaged
+together that is 69.0%, which measures the labellers rather than the
+classifier. The same asymmetry is why every disagreement carries the sheet it
+came from: the exit criterion is *no false rejection*, and the list runs
+**41 agent, 37 auto, 0 hand** — the number that matters is the last one, and
+without the provenance it is invisible.
+
+**The bar is still the hand sheet, and the criterion in `cli.py` says so in
+code.** A machine sheet is evidence to mine, not a target to tune against.

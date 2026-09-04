@@ -18,3 +18,7 @@ web/data.js
 __pycache__/
 *.py[cod]
 .venv/
+
+# Transcripts from the Wednesday sweep (`weekly.ps1`). Derived, per-machine,
+# and rotated to the last twelve weeks by the script itself.
+logs/

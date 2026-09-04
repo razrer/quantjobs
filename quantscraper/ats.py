@@ -294,6 +294,14 @@ _NOT_A_TOKEN = {
     # domains agree on is the vendor's infrastructure, not anyone's board.
     "career", "careers", "jobs", "job", "analytics", "staticfe", "portal",
     "login", "account", "accounts", "profile", "profiles",
+    # **The vendor's own initials.** `tt.teamtailor.com` was recorded as the
+    # board `tt` against `savills.com`, which is `www.teamtailor.com` yielding
+    # `www` one abbreviation over -- and it slipped the "several unrelated
+    # domains agree" signal because only one domain claimed it. Listed by name
+    # rather than caught by a length rule: a two-character token is not
+    # inherently wrong, and `ashby/3e` is `endicottgp.com`'s real board with 16
+    # live postings.
+    "tt",
     # Two more found by the same signal, by asking which tokens more than one
     # unrelated domain claims. `teamtailor/na` is held by `vincicompass.com`,
     # `patria.com` and `crossmint.com` -- a placeholder the vendor writes where

@@ -299,7 +299,7 @@ class ProseBoardTest(unittest.TestCase):
         """
         with mock.patch.object(sites.http, "get_text", return_value="<h1>Hej</h1>"):
             with self.assertRaises(sites.SiteChanged):
-                sites.norron()
+                sites.captor()
 
     def test_the_english_phrasing_counts_too(self):
         with mock.patch.object(

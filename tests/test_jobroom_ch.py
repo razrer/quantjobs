@@ -22,7 +22,6 @@ def _memory(test: unittest.TestCase) -> sqlite3.Connection:
     test.addCleanup(connection.close)
     connection.row_factory = sqlite3.Row
     connection.executescript(db.SCHEMA)
-    connection.executescript(jobroom_ch.SCHEMA)
     return connection
 
 

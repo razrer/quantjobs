@@ -18,6 +18,7 @@ Run with: python -m unittest discover -s tests
 
 from __future__ import annotations
 
+import inspect
 import json
 import time
 import unittest
@@ -885,3 +886,43 @@ class EmplyTokenTest(unittest.TestCase):
     def test_the_bare_vendor_host_yields_no_token(self):
         """`career` is infrastructure, and five firms resolved to it."""
         self.assertEqual(ats.fingerprint("https://career.emply.com/x")[1], None)
+
+
+class PersonioFeedTest(unittest.TestCase):
+    """`search.json` publishes `"description": ""` on every posting, which reads
+    as an employer who wrote nothing rather than as a gap -- and it is why this
+    source sat at 0% in `bodies.coverage` with no fetcher. The XML feed is the
+    same board, the same ids, and carries the prose."""
+
+    XML = (
+        '<?xml version="1.0"?><workzag-jobs><position>'
+        '<id>1060645</id><office>Frankfurt</office><department>Quant</department>'
+        '<name>Quantitative Researcher</name>'
+        '<jobDescriptions>'
+        '<jobDescription><name>Your Role</name><value>Build alpha models.</value></jobDescription>'
+        '<jobDescription><name>Your Profile</name><value>Five years of it.</value></jobDescription>'
+        '</jobDescriptions>'
+        '<occupationCategory>finance</occupationCategory>'
+        '<createdAt>2026-02-06T15:31:21+00:00</createdAt>'
+        '</position></workzag-jobs>'
+    )
+
+    def test_the_feed_carries_prose_and_the_taxonomy(self):
+        with mock.patch.object(extract.http, "get_text", return_value=self.XML):
+            jobs = extract.personio("acme")
+        self.assertEqual(len(jobs), 1)
+        job = jobs[0]
+        self.assertEqual(job.job_id, "1060645")
+        self.assertEqual(job.title, "Quantitative Researcher")
+        self.assertIn("Build alpha models", job.description)
+        self.assertIn("Five years of it", job.description)
+        self.assertEqual(job.category, "finance")
+        self.assertEqual(job.posted_at, "2026-02-06T15:31:21+00:00")
+
+    def test_a_tenant_with_no_feed_falls_back(self):
+        """**Measured, not assumed**: 4 of the 25 boards held here answer 404 on
+        `/xml` while serving `search.json` normally. Reading only the XML would
+        have taken those boards silently to zero, which is "this vendor is
+        closed" written as a reader instead of as a note."""
+        self.assertIn("_personio_json", inspect.getsource(extract.personio))
+        self.assertIn("search.json", inspect.getsource(extract._personio_json))

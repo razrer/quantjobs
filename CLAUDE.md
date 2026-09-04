@@ -40,10 +40,13 @@ python -m quantscraper <command>
 | 2C | `discover --roster` | find boards no careers page named |
 | 3 | `jobs --limit 100` | pull postings from resolved boards |
 | 3B | `pages --limit 500` | watch tier-B careers pages |
+| 3C | `bodies --limit 2000` | fetch the description a list endpoint omitted |
 | 4 | `jobstream` | Sweden's national delta feed (`--since` replays a window) |
 | 4 | `switzerland` | job-room.ch |
 | 4 | `sweden` | Jobbsafari, all of it |
 | 4 | `denmark` | Jobindex, every category (`--since` tops up with one query) |
+| 4 | `singapore` | MyCareersFuture, the whole portal (weekly, ~70 min) |
+| 4 | `hongkong` | the Labour Department's board, all 29 job types (weekly, ~50 min) |
 | 5 | `tag` | classify postings into tags |
 | 5 | `list --fit apply_now --hub amsterdam` | filter the tags |
 | 5 | `list --dimensions` | every filterable value |
@@ -61,18 +64,55 @@ python -m unittest discover -s tests            # regression tests
 `daily` runs corrections, sweden, denmark, switzerland, jobstream, jobs, pages,
 tag, bodies, re-tag, alerts, then a rebuild — **`tag` twice, on purpose**, since
 `bodies` fetches text and places the first pass could not see and
-`bodies.targets` reads the current tagger to know what to fetch. **It is
-deliberately manual**: the search is
-the expensive half, free here and billable anywhere else, so nothing schedules
-it — what is deployed is the *output*, not the scraper. A failing step does not
+`bodies.targets` reads the current tagger to know what to fetch. **It runs
+weekly, on this machine, and only here**: the search is the expensive half,
+free here and billable anywhere else — what is deployed is the *output*, not
+the scraper. A failing step does not
 stop the run, because a board redesigned underneath us should cost its own
 postings and not the other eight sources', nor the re-tag, nor the rebuild —
 which would otherwise leave yesterday's file up with no sign of why. `alerts`
 says which one went quiet and the exit code says whether any did.
 
-`--full` sweeps every Jobindex category and MyCareersFuture as well, and widens
-the page and body queues. Without it, Denmark tops up with one query from where
-the data already reaches: `_denmark_since` reads the newest Danish row we hold
+**Wednesdays at 03:00, by Windows Task Scheduler.** `weekly.ps1` runs
+`daily --full --publish`; `install-weekly.ps1` registers or removes the task.
+**This reverses a line that used to stand here** — *"nothing schedules it"* —
+at the reader's instruction, and the reasoning behind that line is untouched:
+the cost still lands on this machine, once a week, and the deployed artifact
+is still the output.
+
+It has to be a *local* timer and that is not a preference. `data.js` is built
+from the SQLite database, which exists only here, so the build cannot run in
+CI — the same fact that keeps `.github/workflows/publish-board-static.yml`
+limited to `index.html` and `robots.txt`.
+
+Four things the wrapper exists for, each of which fails silently at 3am
+otherwise: it names the **Windows interpreter** (bare `python` is the msys2
+build with no CA bundle, so every HTTPS request would die), sets
+**`PYTHONIOENCODING`**, captures **both streams** through `Start-Process` with
+two redirect files rather than `*>&1` (PowerShell 5.1 wraps a native command's
+redirected stderr in `NativeCommandError` records, which would bury exactly
+the `FAIL` lines worth reading), and reads those files back with
+**`-Encoding UTF8`** — without which `Öhman` logs as `Ã–hman`, measured on a
+probe run before it reached a real transcript. Transcripts are
+`logs/weekly-<date>.log`, last twelve kept, gitignored.
+
+The task runs as `Interactive` rather than `S4U` on purpose: the sweep needs
+the user's own profile — the interpreter under `%LOCALAPPDATA%`, the `.env`
+holding the FCA key, and the Spawned CLI's stored login that `publish.py`
+uses — and no password is stored anywhere. The cost is that a fully logged-out
+machine skips the week, which `StartWhenAvailable` then makes up at the next
+opportunity.
+
+`--full` sweeps every Jobindex category and **both national portals** —
+MyCareersFuture and Hong Kong's Interactive Employment Service — and widens the
+page and body queues. Those two are weekly rather than daily for one reason
+each and the same reason: neither has an incremental form worth using, because
+only a completed walk refreshes `last_seen` on every live row, which is how a
+withdrawal is noticed on a board nothing else polls; and each is about an hour
+of deliberately slow requests. **They are in `--full` because they are
+expensive, not because they are optional.**
+
+Without it, Denmark tops up with one query from where the data already reaches: `_denmark_since` reads the newest Danish row we hold
 rather than the calendar, because the board's own result window covers about a
 day and a half — and when the gap is wider it sweeps the whole taxonomy rather
 than quietly fetching the most recent 1,000 and reporting success.
@@ -150,6 +190,16 @@ Three things that cost an afternoon:
   bytes — measured rather than assumed. Nothing has to invalidate the
   distribution and no cache-busting query string is needed.
 
+**`labels.csv` is the one input a machine cannot regenerate, and both ways of
+losing it were reachable.** `web/serve.py` is a `ThreadingHTTPServer` and
+`labels.upsert` is a read-modify-write of the whole file, so two corrections in
+flight read the same rows and the second dropped the first — one click and a
+quick second one. And `open(path, "w")` empties the file before a row is
+written, so an exception between those two moments left an empty sheet, which
+reads as *"there are no labels"* rather than as a crash. The sheet is written
+under a module lock and replaced with `os.replace` now, atomic on Windows as
+well as POSIX. **Both tests were verified by planting the failure back.**
+
 **The board's reclassify clicks needed a way off a static site, and the answer
 is one Function, not a database.** `functions/correction_writer` (`infra.json`'s
 `correction-writer`, at `quantjobs-api.spawned.app`) appends into one JSON blob
@@ -159,6 +209,23 @@ than one object per correction, and no DynamoDB table: this is one person
 clicking a handful of corrections a month, so a read-modify-write race is not a
 real risk, and it keeps the added cost to one component (~$3.89/mo for a
 Function, billed per second regardless of invocation count).
+
+**That route is public and unauthenticated, and nothing bounded what it would
+store.** CORS keeps a *browser* on another origin out and does nothing about a
+plain POST, so the blob — read back by `corrections` and written into
+`labels.csv`, which feeds the `hand_rejected` gate — could be grown without
+limit by anyone who found the URL. Three bounds, none of which a real
+correction comes near: the value is length-capped as the vocabulary term it is,
+the context fields are capped at 500 characters, and the store refuses a *new*
+key past 20,000 entries (re-correcting a card overwrites its own key and can
+never fill it). Deliberately **not** an allow-list of the vocabulary: this
+function cannot import `quantscraper.labels`, and a copy of `RELEVANCE` and
+`SENIORITY` here would be a second definition free to drift — `labels.validate`
+already refuses an unknown value on the way in. **`description` is no longer
+stored at all**: `labels.CONTEXT` dropped it on purpose, so it was the largest
+field in a blob rewritten on every correction and nothing had ever read it.
+Changing this Function needs a deploy; the code here is ahead of what is live
+until one runs.
 
 ## Architecture
 
@@ -173,8 +240,11 @@ registries/*.py  ->  employers table  ->  resolve.py  ->  firms table
 
 - `models.py` — `Employer`, the one record type registries produce
 - `http.py` — throttled, retrying GET and form POST, sharing one cookie jar
-- `parsing.py` — minimal HTML table and `.xlsx` readers, standard library only
+- `parsing.py` — minimal HTML table and `.xlsx` readers, plus `text()`, the
+  one strip-tags-then-unescape used by every reader that touches markup
 - `db.py` — SQLite schema and upserts
+- `sweep.py` — the two checks every national-board walk owes its caller: an
+  implausibly small result, and a shortfall against the board's own total
 - `resolve.py` — entity resolution, plus the shared name/country normalizers
 - `audit.py` — coverage measurement against `roster.csv`; reads only
 - `domains.py` — Layer 2: firm name → domain, guessed then verified
@@ -194,6 +264,8 @@ registries/*.py  ->  employers table  ->  resolve.py  ->  firms table
 - `jobbsafari.py` — Layer 4: Sweden's widest board. One unfiltered walk, no
   result window, robots-clean
 - `mycareersfuture.py` — Layer 4: Singapore
+- `iesjobs.py` — Layer 4: Hong Kong's statutory board, walked as its own
+  job-type partition
 - `lexicon.py` / `tagging.py` — Layer 5, the deterministic classifier
 - `labels.py` — the hand-labelled fixture and the scoring
 - `alerts.py` — per-source volume anomaly detection over the `runs` history
@@ -207,7 +279,33 @@ says nothing. Keep names specific: a bare `Grasshopper` matched an unrelated
 `GRASSHOPPER ESCAPEMENT, LLC` and reported a hub better covered than it was. A
 false hit hides a miss, so it is worse than a false miss.
 
-**No third-party dependencies.** Standard library only. Keep it that way.
+**Third-party dependencies are allowed, at the user's instruction, provided
+they cost nothing.** Free as in no licence fee, no account, no API key and no
+metered service -- an ordinary PyPI package under an open licence qualifies and
+a hosted API does not, whatever its free tier says, because a free tier is a
+bill waiting for a threshold. **This reverses the older rule** (*"standard
+library only, keep it that way"*), and the reasoning behind that rule is worth
+keeping as a default rather than as a prohibition: everything here still runs
+from a clean checkout on this machine, and a dependency that saves twenty lines
+is not worth a build step.
+
+Three tests before adding one, in order:
+
+1. **Does it remove a *measured* cost?** Not "would be nicer" -- a number.
+   `parsing.py`'s hand-written `.xlsx` reader is ninety lines and is called
+   twice a month; `openpyxl` would replace it and save nothing that has ever
+   been measured.
+2. **Would its absence be loud?** A pinned import that fails at start-up is
+   fine. A dependency read at the bottom of a fetcher, inside a thread, on one
+   source, is how a step goes quiet -- which is principle 2 arriving through
+   the package manager.
+3. **Is it doing something this project would otherwise do badly?** Parsing,
+   throttling and classification are load-bearing here and are deliberately
+   ours. Connection pooling, compression and date handling are not.
+
+Whatever is added goes in `requirements.txt` with a pinned version and a line
+saying which measurement justified it, and `weekly.ps1` keeps working on a
+machine that has only run `pip install -r`.
 
 ### Adding a registry
 
@@ -239,6 +337,28 @@ Load-bearing. If a change appears to require breaking one, stop and raise it.
    version of that idea is filtering the *work*, which `bodies.py` already does.
 5. **Raw tables are append-only.** `employers` is never edited; derived tables
    like `firms` rebuild from scratch on demand.
+
+## How this project crawls
+
+**`robots.txt` is not honoured, at the user's instruction, and the whole of
+what is offered instead is rate.** Any host whose rules this project reads past
+runs at one request per four seconds in `http.HOST_INTERVAL_S` — four times
+slower than the default `MIN_INTERVAL_S` — and no such source is swept more
+than weekly. Jobindex's `page=`, Citadel's sitemaps and Hong Kong's whole
+statutory board are all read on that basis.
+
+**The line that does not move is bot detection.** A `Disallow:` is a text file
+asking a crawler not to index; a CAPTCHA and a WAF are a server refusing *this
+client*, and getting past either means completing a challenge or pretending to
+be a browser. So Dubai's DFSA reCAPTCHA, Jefferies' Altcha, Quantlab's Jobvite
+403, and `efinancialcareers.hk` and `ctgoodjobs.hk` answering HTTP 405 to every
+path are all recorded as closed and stay closed. **Do not change the user agent
+to get past a refusal**, and do not probe for where a threshold sits.
+
+**A 429 is still obeyed, and it is not the same question.** MyCareersFuture's
+`robots.txt` reads `Disallow:` with a sitemap — it never asked us not to read,
+it asked us to slow down, and slowing down is what a 429 requests. See
+`http._retry_after`.
 
 ## Geographic priority
 
@@ -402,345 +522,430 @@ nothing public — Da Vinci Derivatives is the standing example.
 
 ## ATS fingerprinting and extraction (Layers 2–3)
 
-- **Workday's real trap is `total`, not `limit`.** It reports the true `total`
-  on the first page and **`total: 0` on every page after it**, so stopping when
-  `len(jobs) >= total` truncates every board at 20 postings with no error at
-  all. Cap the page at 20, page by `offset`, stop only on a short page.
+### Paging: every stop condition here was wrong once
+
+- **Workday's trap is `total`, not `limit`.** True `total` on page one and
+  **`total: 0` on every page after**, so `len(jobs) >= total` truncates every
+  board at 20. Cap the page at 20, page by `offset`, stop on a short page.
   `tests/test_workday.py` pins all three.
-- **Workday needs `tenant|wdN|site`.** A tenant alone builds a URL that 404s on
-  every poll while the board looks resolved.
-- **A URL built unconditionally from a missing field becomes a link to the
-  vendor's landing page, which is worse than no link.** `extract.workday` did
-  `url=f"{origin}/en-US/{site}{path}"` with `path = externalPath or ""`, so an
-  entry Workday published without a path produced the board's own front door.
-  **42 Workday boards held exactly one each** — empty `job_id`, empty `title`,
-  and a card that opens a recruiting site — and the reader found two of them,
-  at Nasdaq and Sun Life. The two halves are handled separately on purpose: a
-  posting with a **title and no path** is kept with `url=None`, because it is a
-  posting however badly it was published, while an entry with **neither** is not
-  a posting at all — nothing about it can ever be read and there is no id to
-  re-fetch it by. `web/build_data.py` counts `untitled` separately as the guard
-  for the next source that does this.
-- **Every live SmartRecruiters row had a NULL URL — 1,507 of them, across all 12
-  boards — and the code carried a comment describing the cause.** `ref` is a
-  dict of links on some boards and a bare API self-link string on others; where
-  it is a string, `applyUrl` is `null` too, so `ref.get("jobAd") or applyUrl`
-  resolved to nothing and the board rendered cards nobody could open. The public
-  ad is `jobs.smartrecruiters.com/{company}/{id}`, verified against the live
-  board, and the title slug some boards append is optional. **A comment noting
-  that a field comes in two shapes is not the same as handling the second one.**
+- **Stop on an empty page, never on a short one — Oracle is the second format
+  to teach it.** Its API serves the occasional 199-row page mid-board (Kotak's
+  tenant: offset 3,000 → 199, offset 3,200 → 200), so the short-page stop
+  truncated Kotak at **3,199 of 9,959** and Tata Capital at **1,599 of 5,542**
+  — both the round number a cap leaves behind. Removing that stop needs
+  Workday's repeat-page guard, or a tenant ignoring `offset` pages forever.
+- **A page-count guard is a silent cap on the boards that matter most.** The
+  Workday reader stopped at 40 pages and LSEG and State Street both came back
+  at exactly **800**; State Street has 1,295. The bound is 1,000 pages now.
+  **Whenever a per-board count is suspiciously round, suspect our guard before
+  their register.**
+- **A trailing slash was a silent 50-posting cap.** Jobvite pages at
+  `/{token}/search/?p=1`; without the slash it serves page one while looking
+  like it paged. Sikich's own text says `1-50 of 73` — **the board states its
+  own size, so compare against it.**
+- **Eightfold ignores `num` and serves ten**, the MAS trap one vendor over.
+  Paging fifty at a time skipped forty in every fifty and **the advertised
+  total was the only thing that said so.**
+- **iCIMS has no feed** (`format=rss` 302s to a staff login). Links are
+  `/jobs/{id}/{slug}/job`, `pr` pages 50 at a time, and the list carries **no
+  anchor text** — the slug is the title, losing casing and `c++`. Stop when a
+  page adds no *new* id: a portal ignoring `pr` serves page one forever and
+  never returns an empty page.
+- **A shortfall check must tolerate churn, or it deletes the board it was
+  written to protect.** Oracle's raised on any difference; BNY advertises 1,390
+  and hands over 1,387 — three requisitions closing mid-walk — and **1,387 real
+  postings were thrown away**. `_ORACLE_CHURN` is what one walk may lose;
+  anything wider is our paging. (`TotalJobsCount` is honest on every page, so
+  Oracle has no `total: 0` trap; it is a *check*, never the stop condition.)
+
+### Tokens: the wrong answer looks right
+
+- **Workday needs `tenant|wdN|site`.** A tenant alone builds a URL that 404s
+  every poll while the board reads resolved.
 - **Workday has a second host and it inverts the URL.** On `myworkdayjobs.com`
   the tenant is the subdomain; on `myworkdaysite.com` the subdomain is a bare
-  `wdN` and the tenant moves into the path. The two patterns capture the same
-  three parts in *different orders*, so they capture by name — joining by
-  position built `wd3|brevanhoward|BH_ExternalCareers`, which is well-formed and
-  addresses nothing.
-- **A page-count guard is a silent cap on the boards that matter most.** The
-  Workday reader stopped after 40 pages and LSEG and State Street both came back
-  at exactly **800** postings; State Street really has 1,295. A round number in
-  the output is what a cap looks like from outside. The bound is 1,000 pages
-  now, and paging stops on a short page *or* one that repeats the previous (a
-  tenant ignoring `offset` serves page one forever). **Whenever a per-board
-  count is suspiciously round, suspect our guard before their register.**
-- **Fingerprinting an ATS and reading it are separate capabilities, and the gap
-  is silent.** `ats.py` once recognised 22 systems while `extract.py` read 11,
-  so 88 boards sat tier A with a token, counted as resolved everywhere, polling
-  nothing. `tests/test_oracle_hcm.EveryFingerprintHasAReaderTest` is the guard:
-  every name in `ATS_PATTERNS` must be in `extract.EXTRACTORS` or listed in that
-  test's `INVESTIGATED` map with the reason there is no reader.
-- **ATS board tokens are easy to extract wrongly, and the wrong answer looks
-  right.** `boards-api.greenhouse.io/v1/boards/{token}` puts an API version
-  before the board, so matching the host alone yields `v1` for every Greenhouse
-  user; `www.teamtailor.com` fits `{board}.teamtailor.com` and yields `www`.
-  Both are filtered against a list of infrastructure hostnames. **Always read
-  the first handful of tokens before trusting a batch.**
-- **The infrastructure-token list is an *all-pieces* rule, and that is only half
-  right.** It must be, or `jane-street` and `da-vinci` get thrown away. But
-  `jobs.jobvite.com/__assets__` was recorded as a board against three unrelated
-  firms at once, and `vs-errors.eightfold.ai` passed because `vs` means nothing
-  while `errors` is the vendor's host. Split on `_` as well as `-`, and check
-  the unambiguous words (`assets`, `cdn`, `errors`, `sentry`, `staging`) with
-  *any* rather than *all*.
+  `wdN` and the tenant moves into the path. Capture by *name*: joining by
+  position built `wd3|brevanhoward|BH_ExternalCareers`, well-formed and
+  addressing nothing.
 - **A vendor can serve its tenants from two hosts, and a tenant lives on
-  exactly one.** UKG's `recruiting2.ultipro.com` answers 404 for a
-  `recruiting.ultipro.com` board and the reverse, and this reader addressed the
-  first unconditionally — so eight boards 404'd on every poll while **every one
-  of them had `recruiting2` written in its own stored evidence.** Mesirow
-  Financial and Calamos, both Chicago, were in it. Same trap as Workday's
-  `myworkdayjobs.com`/`myworkdaysite.com`, and the tell was in the database
-  the whole time: **when a board 404s, read the evidence that resolved it
-  before doubting the token.**
-- **Stop on an empty page, never on a short one — and Oracle is the second
-  format to teach it.** Its API serves the occasional 199-row page in the
-  middle of a board: measured on Kotak's tenant, offset 3,000 hands back 199
-  and offset 3,200 a full 200. The short-page stop ended the walk wherever one
-  landed, truncating Kotak at **3,199 of 9,959** and Tata Capital at **1,599 of
-  5,542** — both the round number a cap leaves behind. Removing that stop needs
-  the repeat-page guard Workday already had, or a tenant ignoring `offset`
-  pages forever.
-- **A shortfall check must tolerate churn, or it deletes the board it was
-  written to protect.** Oracle's raised on any difference, and BNY advertises
-  1,390 while handing over 1,387 — three requisitions closing during a walk
-  that takes minutes. The reader raised and **1,387 real postings were thrown
-  away**: the guard against silent truncation causing the loud kind of the same
-  loss. `_ORACLE_CHURN` is what one walk may lose; anything wider is our paging.
-- **A migrated board answers HTTP 200 with a redirect script and no postings,
-  which is principle 2 exactly.** Twelve of 36 iCIMS boards served a 150-byte
-  `window.top.location.href = ...` stub — Principal, AXA and SiriusXM among
-  them — and the reader reported "an empty board" for every one. The stub names
-  where the board went, and that splits in two: a target still on `icims.com`
-  is the same portal under a different prefix (`allcareers-frankrimerman`,
-  `uscareers-siriusxmradio`) and is followed; anything else is a migration and
-  is raised with the target in the message.
-- **A retired board says so by redirecting, and both vendors that do it were
-  reporting something else.** BambooHR 302s a dead subdomain to its own
-  marketing site, so the JSON endpoint answers HTTP 200 with HTML and the
-  reader failed with `JSONDecodeError: Expecting value: line 1 column 1` —
-  four boards saying "this customer is gone" in the least readable way
-  available. iCIMS says the same thing with a script tag. **Compare the URL
-  that answered against the one asked for**; `http.get_with_url` exists for it.
-- **iCIMS' career sites are a different product on the firm's own hostname,
-  and they beat the classic portal on more than volume.** SIG's 250 postings
-  arrive from the career site with a location and a description and from the
-  classic portal with **neither** — and the board gates on geography, so 1,805
-  portal postings currently carry no place at all. The endpoint is
-  `/api/jobs?limit=100&page=N`, read off the site's own `featured-jobs.js`.
-- **A verified board outranks a host pattern, and the rule turns on the
-  vendor.** The career sites still print `careers-{token}.icims.com` for their
-  login link, so the classic-portal pattern matched first and won — a board
-  that is the redirect stub the firm migrated *away* from. `_custom_host` now
-  wins when it names a *different* vendor, because the two are then different
-  products and only one is live; when it names the same vendor it defers,
-  because `careers.optiver.com` and `optiver.teamtailor.com` are one board on
-  two hostnames.
-- **A suspiciously *small* board deserves the suspicion a suspiciously round
-  one gets.** Aon's classic iCIMS portal answers with **one** posting while its
-  career site holds **1,058** — so the board was not silent and was not working
-  either, and a board holding one row is invisible to every check here,
-  including the "tier A and no postings" sweep that found the other two.
-- **`tbe.taleo.net` is Taleo Business Edition, a host every small tenant
-  shares.** `varde.com` and `hanoverco.com` both resolved to the board `tbe` — a
-  token several unrelated domains agree on is the vendor's infrastructure, which
-  is the signal `_NOT_A_TOKEN` exists for.
-- **An ATS board often lives on the firm's own hostname, and every host pattern
-  misses it.** `careers.lynxhedge.se` is Lynx and `jobs.swedbank.com` is
-  Swedbank — Teamtailor boards that never spell `{board}.teamtailor.com`
-  anywhere. The vendor's asset CDN is still in the markup and the custom host is
-  the token. **Verify it**: the CDN proves the firm *uses* Teamtailor, not where
-  its board lives, and the first three domains matched this way all 404'd on
-  `/jobs.rss`. `careers.sig.com` is the same shape via a cookie-banner script
-  path, worth 237 postings.
-- **A board URL escaped inside a JSON island matches no host pattern.** Julius
-  Baer ships its navigation as JSON inside an HTML attribute, so its Workday
-  board arrives as `&quot;https:\/\/juliusbaer.wd3.myworkdayjobs.com\/...`.
-  `fingerprint` unescapes before matching. On a random tier-B sample that
-  rescues 1 page in 400 and among tier-B *roster* firms it rescued one in ten —
-  **pick the frame before believing a yield.**
-- **Tier A with a NULL token is a board nobody can poll, and a tier-B sweep
-  never touches it.** 98 rows sat in that state. When re-probing for a
-  fingerprinting fix, clear tier A with no token too.
-- **And the larger population is tier A *with* a token and no postings**, which
-  no sweep revisited either, because having a token is what both other clauses
-  test for. **167 rows** were in it. A stored answer goes stale exactly as a
-  NULL one does: three carried a `/` from a JSON island the escape table
-  had since learned to undo, four carried `tbe`, and the rest were boards that
-  had moved or died. `reprobe_targets` covers it now — excluding any row whose
-  evidence names `sites.py`, because a hand-written reader is there precisely
-  because the walk could not find the board, and Captor and Norron advertise
-  nothing by design. The marker is the evidence string rather than
-  `ats = 'site'`: two thirds of that file names an extractor that already
-  exists, so testing the ATS name would leave every hand-verified token exposed.
-- **A capture that lands one segment early is the quiet kind of wrong**, and
-  two patterns did it. Workday's optional locale skipped only the hyphen form,
-  so `mmc.wd1.myworkdayjobs.com/en_US/MMC` made the *locale* the site —
-  `mmc|wd1|en_US`, which 404s forever, while `mmc|wd1|MMC` read from Marsh's
-  own domain holds **2,437 postings**. And `apply.workable.com/j/{shortcode}`
-  is one posting's page, read as the board `j` against two unrelated domains.
-  Both tokens are well-formed, both rows read tier A, and both name a board
-  that either does not exist or already belongs to somebody else.
-- **The careers walk must try every candidate and go two hops.** The loop used
-  to `return` tier B on the first readable careers page, so candidates two and
-  three were fetched by nobody — and Swedbank's board is a link *off* its
-  careers page. Six fetches per domain is the ceiling.
-- **A careers page can link to a board that is not the firm's.**
-  `palmersquare.com` linked to `jobs.lever.co/heyrowan` — syndicated content
-  with a Google `srsltid` still attached — and the feed delivered 90
-  jewellery-retail postings under a credit manager's domain. Well-formed token,
-  real ATS, live feed, wrong company. **Read the postings, not just the token.**
-- **A regex over fetched markup is a denial-of-service waiting to happen, and it
-  fails as a *stall*, not an error.** Two `ats` runs sat at 100% CPU for two and
-  a half hours, wrote nothing, and looked exactly like slow network. Two causes,
-  both quadratic: `[^"']*(?:career|jobs|…)[^"']*` over an href that never
-  closes, and `([a-z0-9-]+)\.host\.com` over an inline base64 data URI. Extract
-  hrefs with a bounded pattern and match words in Python; bound every host label
-  to 63 characters and prefix it with `(?<![a-z0-9-])`. Cap fetched markup too —
-  23 patterns over an unbounded body blocks every other thread through the GIL.
-- **A trailing slash was a silent 50-posting cap.** Jobvite pages at
-  `/{token}/search/?p=1`; without the slash it serves the first page while
-  looking like it paged. Sikich's own pagination text says `1-50 of 73`, which
-  is the check: **the board states its own size, so compare against it.**
-- **iCIMS has no feed.** The vendor's `format=rss` 302s to a staff login, so the
-  portal HTML is the only public surface. Job links are `/jobs/{id}/{slug}/job`,
-  `pr` pages 50 at a time, and the list page carries **no anchor text** — the
-  slug is the title, which loses casing and `c++`. Stop paging when a page adds
-  no *new* id: a portal ignoring `pr` serves page one forever and never returns
-  an empty page.
-- **Oracle Fusion's board token is `podhost|siteNumber`, and neither half works
-  alone.** `CX_1001` is Oracle's default site number that most tenants keep, so
-  a token of the site alone collides across every firm on the platform.
-  `TotalJobsCount` is honest on every page, so Oracle has no `total: 0` trap —
-  it is still used as a *check* against what arrived rather than as the stop
-  condition. UKG's token is `code|boardGuid`, the same both-halves shape.
-- **A board page serving a dead end does not mean there is no feed.** Varbi's
-  `/{lang}/what:list/` answers *404 Unallowed call* for every language, and
-  Homerun's board is script-rendered and links out to the firm's own host. Both
-  publish a feed — `/what:rssfeed/` and `feed.homerun.co/{token}` — and both
-  carry the description the board page does not. **Read the page's own link
-  shapes before concluding a vendor has no feed**; guessing paths found neither.
-- **Taleo needs a per-board portal id and does not publish one**, and it is
-  now the only fingerprinted ATS with no reader. Without the right `portal=`
-  the search endpoint returns `careerSectionUnAvailable: true`, and the section
-  page is a 1,534-byte redirect stub. Its ten rows are worse than that:
-  `ocbc.taleo.net` does not resolve, `socgen.taleo.net` redirects to the
-  recruiter login, and `tbe` is the shared host. **OCBC is not a miss** — 43 of
-  its postings arrive through MyCareersFuture, which is what a national board
-  is for.
-- **"This vendor is closed" is a claim about one tenant on one endpoint until
-  a second is checked, and five of the six closures recorded here were
-  wrong.** Each was written from a single firm's board and generalised to the
-  vendor, which is exactly what made them expensive: the note then gets read
-  instead of the endpoint, so nobody asks again. Only Taleo survived the
-  re-check — `ocbc.taleo.net` no longer resolves at all and `socgen.taleo.net`
-  serves the recruiter login. What the other five turned out to be:
-  - **Eightfold answers per tenant.** The note says `/api/apply/v2/jobs`
-    returns 403, and it does — on Morgan Stanley's tenant and NAB's. Vale's
-    answers 200 with 193 positions and **Millennium's with 219**, including
-    `Quantitative Researcher`, `Portfolio Researcher` and `Deep Learning
-    Quantitative Researcher` across New York, Hong Kong and Singapore. One
-    marquee quant board sat behind a one-line note for months.
-  - **SuccessFactors' dead end was a different surface.** What was tested is
-    the `?company=pfapensionP` form, which really is a shell with no job id.
-    The firms here run **RMK on their own hostname**, and it renders its list
-    server-side: Nomura 514 postings, Fitch 266, Janus Henderson 81, Carnegie 7.
-    61 rows sat tier A with a NULL token behind that sentence.
-  - **Emply's board is client-side and names its own endpoint.** The page is
-    209 KB with no job id, which is true and is not the same as unreadable:
-    `/api/integration/vacancy/get-page` is in an inline script beside the exact
-    body it POSTs. Read the page's own call rather than guessing paths — the
-    job-room.ch lesson, which had already been written down.
-  - **Jobylon is the same shape.** Its board is an Angular widget, and the
-    widget page it embeds carries the whole list as a JavaScript array.
-  - **Join's API really does 422** on every `page`/`pageSize` combination, and
-    the company page carries `"jobs":{"items":[...]}` as an unescaped JSON
-    island beside its own pagination block. **When a vendor's API refuses,
-    read the page the customer publishes** — the same answer DRW's
-    `__NEXT_DATA__` gave.
-  Paylocity and Jefferies were re-checked and are genuinely closed: Paylocity
-  still renders client-side, and Jefferies' `tal.net` portal now answers with
-  an Altcha CAPTCHA, which this project does not complete.
-- **Eightfold ignores `num` and serves ten**, whatever is asked for — the MAS
-  trap one vendor over. Paging fifty at a time skipped forty in every fifty,
-  and **the advertised total is the only thing that said so.**
-- **SuccessFactors RMK ships two list layouts and a firm may run either** — a
-  table of `<tr class="data-row">` and a list of `<li class="job-tile">`. They
-  agree on the `jobTitle-link` anchor and on nothing else. Reading only the
-  table found 81 postings at Janus Henderson and none at Carnegie, which is
-  what a layout gap looks like from outside: a board answering 200 and coming
-  back empty. Clarksons adds a third variation, a path prefix in front of
-  `/job/`, worth 33 postings.
-- **Paylocity, Rippling and Phenom render their lists client-side** — the 41
-  "job ids" a naive count finds in Paylocity's HTML are analytics and CSS.
-  Recorded as investigated.
-- **Greenhouse's own copy-paste snippet did not match the Greenhouse
-  pattern, and 29 boards sat unread because of it.** The rule allowed
-  `boards.greenhouse.io/embed/job_board?for={board}`; what a firm actually
-  pastes onto its careers page is **`/embed/job_board/js?for={board}`**, with a
-  path segment before the query string. The general host rule underneath then
-  matched and captured `embed`, which `_NOT_A_TOKEN` correctly refused — so the
-  domain landed at **tier A with a NULL token**, the one state `discover.targets`
-  calls out as a board nobody can poll and no sweep revisits. Maven Securities
-  (39 postings across Amsterdam, Chicago and Hong Kong), GSA Capital, Geneva
-  Trading, Acadian and Vatic were all in it. **A NULL token on a recognised ATS
-  is not a small gap; it is a firm that reads as resolved everywhere and yields
-  nothing forever.**
-- **`job_app?for=` names the board too, and refusing it looked like the careful
-  choice.** That embed is one posting's application form rather than a list, so
-  the first version of the fix skipped it — and `for=` is the *board* in every
-  Greenhouse embed whatever is being embedded. GSA Capital publishes its whole
-  careers page as a list of `job_app` forms and names the board nowhere else, so
-  it stayed tokenless through the fix meant to clear exactly that.
+  exactly one.** UKG's `recruiting2.ultipro.com` 404s a `recruiting.ultipro.com`
+  board and the reverse; this reader addressed the first unconditionally, so
+  eight boards 404'd on every poll while **every one had `recruiting2` in its
+  own stored evidence** (Mesirow Financial and Calamos among them). **When a
+  board 404s, read the evidence that resolved it before doubting the token.**
+- **A capture that lands one segment early is the quiet kind of wrong.**
+  Workday's optional locale skipped the underscore form, so
+  `mmc.wd1.myworkdayjobs.com/en_US/MMC` made the locale the site —
+  `mmc|wd1|en_US` 404s forever while `mmc|wd1|MMC` holds **2,437 postings**.
+  And `apply.workable.com/j/{shortcode}` is one posting's page, read as the
+  board `j` against two unrelated domains. Both are well-formed, both read
+  tier A, both address nothing or somebody else's board.
+- **Vendor infrastructure is not a board.** `boards-api.greenhouse.io/v1/...`
+  yields `v1` for every Greenhouse user and `www.teamtailor.com` yields `www`;
+  `tbe.taleo.net` is Taleo Business Edition, which `varde.com` and
+  `hanoverco.com` both resolved to. **A token several unrelated domains agree
+  on is the vendor's**, which is what `_NOT_A_TOKEN` is for. **Always read the
+  first handful of tokens before trusting a batch.**
+- **That list is an *all-pieces* rule and that is only half right.** It must
+  be, or `jane-street` and `da-vinci` are thrown away — but
+  `jobs.jobvite.com/__assets__` was recorded against three unrelated firms and
+  `vs-errors.eightfold.ai` passed because `vs` means nothing. Split on `_` as
+  well as `-`, and check the unambiguous words (`assets`, `cdn`, `errors`,
+  `sentry`, `staging`) with *any* rather than *all*.
+- **Oracle Fusion's token is `podhost|siteNumber` and neither half works
+  alone**: `CX_1001` is Oracle's default site number, so a token of the site
+  collides across every firm on the platform. UKG's `code|boardGuid` is the
+  same shape.
+- **Greenhouse's own copy-paste snippet did not match the Greenhouse pattern,
+  and 29 boards sat unread.** The rule allowed
+  `/embed/job_board?for={board}`; what a firm actually pastes is
+  **`/embed/job_board/js?for={board}`**, a path segment before the query. The
+  general host rule then captured `embed`, `_NOT_A_TOKEN` correctly refused it,
+  and the domain landed at **tier A with a NULL token**, the one state
+  `discover.targets` calls out as a board nobody can poll — Maven Securities (39
+  postings across Amsterdam, Chicago and Hong Kong), GSA Capital, Geneva
+  Trading, Acadian, Vatic. **A NULL token on a
+  recognised ATS is a firm that reads as resolved everywhere and yields nothing
+  forever.** `job_app?for=` names the board too: that embed is an application
+  form rather than a list, so the first fix skipped it — and `for=` is the
+  board in *every* Greenhouse embed. GSA publishes its whole careers page as
+  `job_app` forms and names the board nowhere else.
 - **And GSA then added no postings, because its board was already polled under
-  another of its own domains** -- `gsa-coral.com`, a sibling of the same group,
-  resolving to the same Greenhouse token. `jobs`'s upsert keys on
-  `(ats, token, job_id)` and does not move `domain`, so the rows stayed where
-  they first landed. **A tier-A row with a NULL token can be a duplicate of a
-  board already reached; check `SELECT domain FROM jobs WHERE token = ?` before
-  counting the fix as postings.**
-- **And the same upsert leaves one board split between two domains, which
-  reads as two firms and names the bigger half wrong.** 24 firm boards are
-  claimed by more than one domain and 1,668 postings sit on the minority one.
-  Barclays is the expensive case: `barclays|wd3|External_Career_Site_Barclays`
-  held 1,557 rows under **`cards.barclaycardus.com`** -- a US card brand -- and
-  3 under `home.barclays`, so the board appeared on the page as
-  *"Barclaycardus"*. That is not only a bad label. It is the name anything
-  matching this firm across sources would have to match, so MyCareersFuture's
-  `BARCLAYS BANK PLC` could never be recognised as the same employer and its
-  copy of the internship stayed on the board as a second card.
-  **The token names the tenant, so the token picks the domain**
-  (`build_data.board_domains`): Workday's is `tenant|wdN|site` and Greenhouse's
-  is the board itself, and the domain whose registrable label is one of those
-  pieces is the firm whose board it is. Measured over all 24: right or harmless
-  on every one, and better than "whichever brought the most rows" on nine --
-  Barclays, Chicago Trading (`ctceurope.com` held 23 rows to
+  a sibling domain** (`gsa-coral.com`, same Greenhouse token). `jobs`'s upsert
+  keys on `(ats, token, job_id)` and does not move `domain`. **Check
+  `SELECT domain FROM jobs WHERE token = ?` before counting a fix as
+  postings.**
+- **The same upsert leaves one board split between two domains, which reads as
+  two firms and names the bigger half wrong.** 24 boards are claimed by more
+  than one domain, 1,668 postings sit on the minority one, and
+  `barclays|wd3|External_Career_Site_Barclays` held 1,557 rows under
+  **`cards.barclaycardus.com`** against 3 under `home.barclays` — so the board
+  read *"Barclaycardus"*, and nothing matching this firm across sources could
+  ever recognise MyCareersFuture's `BARCLAYS BANK PLC`. **The token names the
+  tenant, so the token picks the domain** (`build_data.board_domains`): the
+  domain whose registrable label is one of the token's pieces is the firm whose
+  board it is. Right or harmless on all 24 and better than "most rows" on nine
+  — Barclays, Chicago Trading (`ctceurope.com` 23 rows to
   `chicagotrading.com`'s 2), Piper Sandler, Bain Capital, Quilter, Toyota,
   ORIX, Mariner, Corebridge. It reads `ats._NOT_A_TOKEN` rather than restating
   it, or a token containing `careers` would pick `careers.sig.com`. Where the
   token names nothing, **the parent brand wins before the majority**: `mmc`
   matches neither `marsh.com` nor `marshmma.com`, and the majority alone
-  renamed fifteen `Marsh` cards *"Mma Asset Management"*. Dry-run first --
-  that clause fires on exactly one board in the corpus.
-- **Avature serves each customer from the customer's own hostname**, so
-  `careers.twosigma.com` matches no `{board}.vendor.com` pattern and the board
-  *is* the host — the `careers.lynxhedge.se` shape, and the reason
-  `_VENDOR_ASSETS` exists. The giveaway is the vendor's CDN,
+  renamed fifteen `Marsh` cards *"Mma Asset Management"*. Dry-run first — that
+  clause fires on exactly one board.
+
+### Boards that live on the firm's own hostname
+
+- **An ATS board often lives there, and every host pattern misses it.**
+  `careers.lynxhedge.se` is Lynx and `jobs.swedbank.com` is Swedbank —
+  Teamtailor boards that never spell `{board}.teamtailor.com`. The vendor's
+  asset CDN is in the markup and the custom host is the token. **Verify it**:
+  the CDN proves the firm *uses* the vendor, not where its board is, and the
+  first three domains matched this way all 404'd on `/jobs.rss`.
+  `careers.sig.com` is the same shape, worth 237 postings.
+- **Avature serves every customer this way**, so `careers.twosigma.com` matches
+  no `{board}.vendor.com` pattern and the board *is* the host — the reason
+  `_VENDOR_ASSETS` exists; the giveaway is
   `templates-static-assets.avacdn.net`. **Its list page is named by the tenant
-  rather than by the vendor**: Two Sigma calls it `/careers/OpenRoles` and
-  Avature's default is `/careers/SearchJobs`, so both the reader and the
-  fingerprint try a list of names — a wrong one answers 404, which cannot be
-  mistaken for an empty board. `extract.AVATURE_LIST_PATHS` is the single
-  definition both read, because two copies of it are two sides of a comparison
-  free to drift.
-- **`_VENDOR_ASSETS` is a second fingerprinting table and had no
-  reader guard.** `EveryFingerprintHasAReaderTest` walked `ATS_PATTERNS` only,
-  so a vendor recognised by its CDN could resolve tier A with a token and poll
-  nothing — the 88-board silence of Stage 14, one table over. It checks both now.
-- **Ranking vendors by how many firms they rescue is the right sweep and the
-  wrong order to build in.** The measured list put Avature ninth at 3 firms.
-  One of those three is **Two Sigma**, which is worth more to this project than
-  ADP's nineteen — the count answers "what is most common", and the question
-  here is "who do I want to work for". **Weight that list by the firms on it
-  before picking the next reader.**
-- **Which ATS to build next is a measurable question, not a guess.** 1,400
-  tier-B careers pages were swept for unrecognised third-party *hiring* hosts,
-  ranked by how many distinct firms each would rescue: ADP 19, Paylocity 18,
-  Radancy 12, Rippling 11, Phenom 7, UKG 5, HiBob 5, Talentsoft 4, Avature 3,
-  JazzHR 3, Dayforce 3, Zoho 3, Cornerstone 2. Build down that list, not down a
-  list of vendors you have heard of.
+  rather than the vendor**: Two Sigma calls it `/careers/OpenRoles` against
+  Avature's default `/careers/SearchJobs`, so reader and fingerprint try a list
+  of names — a wrong one 404s, which cannot be mistaken for an empty board.
+  `extract.AVATURE_LIST_PATHS` is one definition both read.
+- **`_VENDOR_ASSETS` is a second fingerprinting table and had no reader
+  guard.** `EveryFingerprintHasAReaderTest` walked `ATS_PATTERNS` only, so a
+  vendor recognised by its CDN could resolve tier A and poll nothing — the
+  88-board silence one table over. It checks both now.
+- **A verified board outranks a host pattern, and the rule turns on the
+  vendor.** iCIMS career sites still print `careers-{token}.icims.com` for
+  their login link, so the classic-portal pattern won — a board the firm had
+  migrated *away* from. `_custom_host` wins when it names a *different* vendor
+  (two products, one live) and defers when it names the same one
+  (`careers.optiver.com` and `optiver.teamtailor.com` are one board).
+- **A board URL escaped inside a JSON island matches no host pattern.** Julius
+  Baer ships its navigation as JSON inside an HTML attribute, so its Workday
+  board arrives as `&quot;https:\/\/juliusbaer.wd3.myworkdayjobs.com\/...`.
+  `fingerprint` unescapes first. On a random tier-B sample that rescues 1 page
+  in 400; among tier-B *roster* firms, one in ten — **pick the frame before
+  believing a yield.**
+
+### Boards that answer 200 and are not boards
+
+- **Every tier-A board holding no postings was polled once and the answers
+  sorted, which is the audit this section is made of.** 118 boards: **70
+  answer 200 and are genuinely empty**, 29 raise (26 of them 404), 10 are
+  Taleo and have no reader, 7 raise a shortfall, and **2 were live and simply
+  had never been reached**. The 70 are the finding worth keeping: they are
+  small VC and PE firms with nothing open, and the JSON vendors say so
+  authoritatively -- `pinpoint` answers `{"data":[]}`, `join` answers
+  `"items":[],"total":0`, Homerun and Varbi serve feeds with no entries. **A
+  board that answers 200 with nothing is usually telling the truth**, and the
+  way to know which is to ask the endpoint rather than the reader.
+- **Most of the 404s are somebody else's board.** `8vc.com` resolving to
+  `greenhouse/habi`, `valuestreamventures.com` to `userinterviews`,
+  `infinityvc.capital` to `sensible` -- a venture firm's careers page links to
+  its portfolio companies, which is the `palmersquare.com` shape at scale. The
+  two that looked recoverable were checked on every Greenhouse host there is
+  (`boards-api`, `api`, `job-boards`, `job-boards.eu`, the `embed` endpoint)
+  and 404 on all of them while `mangroup` answers on all of them, so
+  `questpartnersllc` and `monoceros` are stale embeds on the firms' own pages.
+- **Jobvite ships two list layouts and a firm may run either**, which is the
+  SuccessFactors lesson one vendor over. A *table*, where `jv-job-list-name`
+  labels the cell containing the anchor, and a *card list*, where the anchor
+  comes first and the name and location are `<div>`s inside it. They agree on
+  the class names and on nothing else, so the table pattern found zero on a
+  card board: `addendacapital` advertised `1-3 of 3` and `mercycorps` 32, and
+  both read as nought. **The board stating its own size is what caught it** --
+  the shortfall check raised rather than the board reading as empty.
+  `class="jv-job-list-location ml-auto"` then cost every location, because the
+  pattern wanted a quote where the markup has a space.
+
+
+- **A migrated board answers HTTP 200 with a redirect script and no postings,
+  which is principle 2 exactly.** Twelve of 36 iCIMS boards served a 150-byte
+  `window.top.location.href = ...` stub (Principal, AXA, SiriusXM) and the
+  reader called every one "an empty board". The stub names where it went: a
+  target still on `icims.com` is the same portal under a different prefix
+  (`allcareers-frankrimerman`, `uscareers-siriusxmradio`) and is followed;
+  anything else is a migration and is raised with the target.
+- **A retired board says so by redirecting.** BambooHR 302s a dead subdomain to
+  its marketing site, so the JSON endpoint answers 200 with HTML and the reader
+  failed with `JSONDecodeError` — four boards saying "this customer is gone" in
+  the least readable way available. **Compare the URL that answered against the
+  one asked for**; `http.get_with_url` exists for it.
+- **A suspiciously *small* board deserves the suspicion a suspiciously round
+  one gets.** Aon's classic iCIMS portal answers with **one** posting while its
+  career site holds **1,058** — not silent, not working, and invisible to every
+  check here including the "tier A and no postings" sweep.
+- **iCIMS' career sites beat the classic portal on more than volume.** SIG's
+  250 postings arrive from the career site with a location and a description
+  and from the portal with **neither** — and the board gates on geography, so
+  1,805 portal postings carry no place at all. The endpoint is
+  `/api/jobs?limit=100&page=N`, read off the site's own `featured-jobs.js`.
+- **SuccessFactors RMK ships two list layouts and a firm may run either** — a
+  table of `<tr class="data-row">` and a list of `<li class="job-tile">`,
+  agreeing on the `jobTitle-link` anchor and nothing else. Reading only the
+  table found 81 postings at Janus Henderson and none at Carnegie: a board
+  answering 200 and coming back empty. Clarksons adds a third, a path prefix
+  before `/job/`, worth 33 postings.
+- **A board page serving a dead end does not mean there is no feed.** Varbi's
+  `/{lang}/what:list/` answers *404 Unallowed call* for every language and
+  Homerun's board is script-rendered; both publish a feed (`/what:rssfeed/`,
+  `feed.homerun.co/{token}`) carrying the description the page does not.
+  **Read the page's own link shapes before concluding a vendor has no feed**;
+  guessing paths found neither.
+- **A careers page can link to a board that is not the firm's.**
+  `palmersquare.com` linked to `jobs.lever.co/heyrowan` — syndicated content
+  with a Google `srsltid` still attached — and delivered 90 jewellery-retail
+  postings under a credit manager's domain. Well-formed token, real ATS, live
+  feed, wrong company. **Read the postings, not just the token.**
+- **The careers walk must try every candidate and go two hops.** The loop used
+  to `return` tier B on the first readable page, so candidates two and three
+  were fetched by nobody — and Swedbank's board is a link *off* its careers
+  page. Six fetches per domain is the ceiling.
+
+### Vendors recorded as closed, and why most of those notes were wrong
+
+- **"This vendor is closed" is a claim about one tenant on one endpoint until a
+  second is checked, and five of the six closures here were wrong.** Each was
+  written from a single firm's board and generalised, which is what made them
+  expensive: the note then gets read instead of the endpoint.
+  - **Eightfold answers per tenant.** `/api/apply/v2/jobs` really does 403 on
+    Morgan Stanley's tenant and NAB's; Vale's answers 200 with 193 positions
+    and **Millennium's with 219**, including `Quantitative Researcher`,
+    `Portfolio Researcher` and `Deep Learning Quantitative Researcher` across
+    New York, Hong Kong and Singapore. One marquee quant board behind a
+    one-line note for months.
+  - **SuccessFactors' dead end was a different surface.** The
+    `?company=pfapensionP` form really is a shell with no `job_id`; these firms run **RMK on their own hostname**,
+    rendered server-side — Nomura 514, Fitch 266, Janus Henderson 81, Carnegie
+    7. 61 rows sat tier A with a NULL token behind that sentence.
+  - **Emply's board is client-side and names its own endpoint.** The page is
+    209 KB with no job id, which is true and is not the same as unreadable:
+    `/api/integration/vacancy/get-page` sits in an inline script beside the
+    exact body it POSTs. **Jobylon** is the same shape — an Angular widget whose embedded
+    page carries the whole list as a JavaScript array.
+  - **Join's API really does 422** on every `page`/`pageSize` combination, and
+    the company page carries
+    `"jobs":{"items":[...]}` as an unescaped JSON island. **When a vendor's API
+    refuses, read the page the customer publishes** — the answer DRW's
+    `__NEXT_DATA__` gave.
+- **Genuinely closed:** Paylocity, Rippling and Phenom render client-side (the
+  41 "job ids" in Paylocity's HTML are analytics and CSS); Jefferies' `tal.net`
+  answers with an Altcha CAPTCHA, which this project does not complete.
+- **Taleo needs a per-board portal id and does not publish one**, so it is the
+  only fingerprinted ATS with no reader: without the right `portal=` the search
+  endpoint returns `careerSectionUnAvailable: true` and the section page is a
+  1,534-byte stub. Its ten rows are worse — `ocbc.taleo.net` does not resolve,
+  `socgen.taleo.net` redirects to the recruiter login, `tbe` is the shared
+  host. **OCBC is not a miss**: 43 of its postings arrive through
+  MyCareersFuture, which is what a national board is for.
+
+### A vendor's shared host is not a tenant, and 24 rows sat on one
+
+- **`careerN.successfactors.com` is the pod, not the board.** 24 of the 43
+  tier-A rows with a NULL token named one, and `_NOT_A_TOKEN` was right to
+  refuse it -- it is `careers-analytics.recruitee.com` one vendor over. But
+  refusing leaves the row in the state this file calls *a firm that reads as
+  resolved everywhere and yields nothing forever*, and nothing re-asked. The
+  board is on the **firm's own hostname**, as it is for every RMK tenant this
+  project already reads: `careers.nomura.com`, `jobs.scania.com`,
+  `careers.fitch.group`.
+- **Seven of the 24 answered, and one of them matters.** Found by walking each
+  domain for a `jobs.`/`careers.` host and running the reader against it:
+  **GIC**, Singapore's sovereign fund, **171 postings, 133 of them in a focus
+  hub**, carrying `Portfolio Manager, Securities Finance` and `Associate - VP,
+  External Managers, Macro/Fixed Income`. Then Quintet 19, PartnerRe 56, Grace
+  67, Popular 59, Valentino 55, Sonepar 929. **GIC was unreachable by any
+  walk**: `gic.com.sg` does not resolve at all, only `www.gic.com.sg` does, so
+  every careers path this project tries fails at DNS.
+- **Two of the 24 were duplicates of a board already polled** -- `scania.com`
+  resolving to `jobs.scania.com`, which is held under `traton.com`. Check
+  `SELECT domain FROM jobs WHERE token = ?` before counting a recovery, which
+  is the GSA rule in a second place.
+- **`tt.teamtailor.com` is the vendor's own initials**, recorded as the board
+  `tt` against `savills.com` -- `www.teamtailor.com` yielding `www` one
+  abbreviation over. It slipped the "several unrelated domains agree" signal
+  because only one domain claimed it. Listed in `_NOT_A_TOKEN` by name rather
+  than caught by a length rule: **a two-character token is not inherently
+  wrong**, and `ashby/3e` is `endicottgp.com`'s real board with 16 live
+  postings.
+
+### Capabilities that look like one and are three
+
+- **Fingerprinting an ATS and reading it are separate, and the gap is silent.**
+  `ats.py` once recognised 22 systems while `extract.py` read 11, so 88 boards
+  sat tier A with a token, resolved everywhere, polling nothing.
+  `tests/test_oracle_hcm.EveryFingerprintHasAReaderTest` is the guard: every
+  name in `ATS_PATTERNS` and `_VENDOR_ASSETS` must be in `extract.EXTRACTORS`
+  or in that test's `INVESTIGATED` map with a reason.
+- **Reading a board and reading a *posting* are a third, and that gap was
+  silent for longer.** A reader whose list carries no description leaves every
+  posting at `relevance: unknown` — 991 cards for SuccessFactors, 430 Oracle,
+  230 iCIMS — while `bodies.FETCHERS` had two entries against 33 extractors.
+  **The number to check for a new reader is not "does it list" but "does the
+  list carry prose"**, and the answer is usually a per-posting resource the
+  vendor already publishes: `itemprop="description"` microdata
+  (SuccessFactors), a schema.org island behind `?in_iframe=1` (iCIMS),
+  `recruitingCEJobRequisitionDetails` (Oracle), `/postings/{id}`
+  (SmartRecruiters). `bodies.coverage` prints the per-source share; a `0%` row
+  is the tell.
+- **Nine sources published no description at all, and the answer differs per
+  vendor -- so each was asked rather than assumed.** `bodies.coverage` printed
+  `0%` for `site`, `adp`, `bamboohr`, `jobvite`, `breezy`, `personio`, `join`,
+  `avature` and `jobylon`, about 2,690 postings reaching the tagger as a title
+  and a date. What the probe found:
+  - **Jobvite and Breezy publish a schema.org `JobPosting` island** on the
+    posting page whose URL the list already stores -- the same island
+    `icims_body` has parsed since it was written, carrying `jobLocation` as
+    well. One shared `_ld_body` reads all three, because a vendor-shaped copy
+    of it is what let the entity-decoding bug live in three modules at once.
+  - **Personio publishes the whole board as XML** at `/{token}.jobs.personio.de/xml`,
+    with the prose, `createdAt`, `yearsOfExperience` and `occupationCategory`
+    -- its own occupation taxonomy, which is what `Job.category` is for. It is
+    the *same ids* as `search.json` (26 of 26 overlap, checked before the
+    switch, because a new id space would have orphaned every stored row) and
+    the same one request. `search.json` publishes `"description": ""` on every
+    row, which reads as an employer who wrote nothing rather than as a gap.
+    **The feed is a fallback and not a replacement**: 4 of 25 tenants answer
+    404 on `/xml` while serving `search.json` normally, so reading only the
+    XML would have taken those boards silently to zero.
+  - **ADP and BambooHR are genuinely closed** and it took asking properly. ADP's
+    requisition carries no description key, `links` and `postingInstructions`
+    are empty arrays, the per-requisition route returns `{}`, and `$expand` and
+    `$select` change nothing; the recruitment page is a federation redirector
+    in front of a JS shell. BambooHR's job page is 98 KB of application
+    bootstrap with no JSON-LD, no embedded payload and an `og:description`
+    reading *"Take a look at the current openings at 17Capital"*.
+- **Ask what else the detail page settles before assuming a fetcher only
+  returns prose.** Two of the three fields `bodies.Fetched` carries were added after
+  the fact: `location` for Workday's `N Locations`, and `employer` for Hong
+  Kong, whose portal publishes the employer's name on the card and nowhere on
+  either list view. Without it that hub would carry fourteen thousand postings
+  from nobody, which is the JobStream failure.
+- **A detail URL that cannot be re-derived needs a marker, not a status code.**
+  Hong Kong mints its card link per render and a rotted one answers **HTTP
+  200** with the vacancy-search page. `iesjobs_body` tests the card's own
+  `data-ordno` against the row it was fetched for — `get_with_url`'s lesson
+  where the URL itself cannot be compared, and the `palmersquare.com` guard
+  against writing one firm's description onto another's row.
+- **Tier A with a NULL token is a board nobody can poll and a tier-B sweep
+  never touches it** — 98 rows. **The larger population is tier A *with* a
+  token and no postings**, which no sweep revisited either because having a
+  token is what both other clauses test for: **167 rows**, of which three
+  carried a `/` from a JSON island, four carried `tbe`, and the rest had moved
+  or died. `reprobe_targets` covers both now, excluding any row whose evidence
+  names `sites.py` — a hand-written reader is there precisely because the walk
+  could not find the board, and Captor advertises nothing by design. The marker
+  is the evidence string rather than `ats = 'site'`: two thirds of that file
+  names an existing extractor, so testing the ATS name would leave every
+  hand-verified token exposed.
+
+### Fields, text and failure modes
+
+- **A URL built unconditionally from a missing field becomes a link to the
+  vendor's landing page, which is worse than no link.** `extract.workday` did
+  `url=f"{origin}/en-US/{site}{path}"` with `path = externalPath or ""`, so
+  **42 Workday boards held exactly one** empty-id, empty-title card opening the
+  recruiting site (found at Nasdaq and Sun Life). The halves are handled
+  separately: a **title and no path** is kept with `url=None` — it is a posting
+  however badly published — and **neither** is not a posting at all, since
+  nothing about it can be read and there is no id to re-fetch it by.
+  `build_data` counts `untitled` separately as the guard for the next source
+  that does this.
+- **Every live SmartRecruiters row had a NULL URL — 1,507 across all 12 boards
+  — and the code carried a comment describing the cause.** `ref` is a dict of
+  links on some boards and a bare API self-link string on others; where it is a
+  string, `applyUrl` is `null` too, so `ref.get("jobAd") or applyUrl` resolved
+  to nothing and the board rendered cards nobody could open. The public ad is `jobs.smartrecruiters.com/{company}/{id}`;
+  the title slug is optional. **A comment noting that a field comes in two
+  shapes is not the same as handling the second one.**
 - **ADP's `meta.links` looks like a location map and is a filter facet.** It
-  pairs an id with a readable place — "Hong Kong - Wanchai, HK" — and joining it
-  to the requisition's `itemID` yields a confident location matching nothing:
-  those are *location* ids, the places you may search by. **A wrong location is
-  worse than none**, because the board gates on geography and `unknown` survives
-  the gate while a wrong city does not.
+  pairs an id with "Hong Kong - Wanchai, HK", and joining it to `itemID` yields
+  a confident location matching nothing — those are the places you may *search*
+  by. **A wrong location is worse than none**, because the board gates on
+  geography and `unknown` survives the gate.
 - **Some employers write titles in letters that only look Latin.** Jane Street
-  publishes `ꓟachine ꓡearning ꓣesearcher` — M, L and R as Lisu — so it arrived
-  as "achine earning esearcher" and matched nothing. Scan before writing the
-  map: of 75 suspicious codepoints across all titles, nearly all are genuine CJK
-  and must be left alone. Only letters impersonating an ASCII one are folded.
-- **Entities were never decoded, and HTML-sourced formats carry them.** Coeli's
-  `Business &amp; Risk Operations` folded to the token `amp`; Swedish spells `ä`
-  as `&#xE4;`, which would fold to nothing. `extract._text` runs
-  `html.unescape`.
+  publishes `ꓟachine ꓡearning ꓣesearcher` (Lisu M, L, R), which arrived as
+  "achine earning esearcher". Scan before writing the map: of 75 suspicious
+  codepoints across all titles, nearly all are genuine CJK and must be left
+  alone. Only letters impersonating an ASCII one are folded.
+- **Entities were never decoded, and every HTML-sourced format carries them.**
+  Coeli's `Business &amp; Risk Operations` folded to the token `amp`; Swedish
+  spells `ä` as `&#xE4;`, which folds to nothing. Fixed in `extract`, then
+  found again in `bodies` — three fetchers read HTML, so every description
+  SuccessFactors, iCIMS and Jobbsafari backfilled reached the tagger with its
+  entities intact. **Strip tags first, unescape second**, or a literal
+  `&lt;p&gt;` is decoded into a tag and then eaten. There is now one
+  implementation, `parsing.text`, and five readers call it. **Whenever a
+  fixed-in-one-place rule turns up, grep for the other places.**
+- **An exception inside a body fetcher ends the *pass*, not the posting.**
+  `bodies.run` maps twelve threads over the queue and writes in batches of a
+  hundred, so an `AttributeError` from a `.get()` on something that is not a
+  dict discards up to a hundred fetched rows and skips the trailing write.
+  Each fetcher shape-checks its own payload at every level. **A blanket `try`
+  around the worker is deliberately not the fix**: a missing column must still
+  raise, or a schema change reads as a zero-filled run —
+  `tests/test_bodies.TargetsTest` pins that.
+- **A regex over fetched markup is a denial-of-service waiting to happen, and
+  it fails as a *stall*, not an error.** Two `ats` runs sat at 100% CPU for two
+  and a half hours, wrote nothing, and looked like slow network. Both causes
+  quadratic: `[^"']*(?:career|jobs|…)[^"']*` over an href that never closes,
+  and `([a-z0-9-]+)\.host\.com` over an inline base64 data URI. Extract hrefs
+  with a bounded pattern and match words in Python; bound every host label to
+  63 characters and prefix it with `(?<![a-z0-9-])`. Cap fetched markup too —
+  23 patterns over an unbounded body blocks every other thread through the GIL.
+
+### Which reader to build next
+
+- **It is a measurable question, not a guess.** 1,400 tier-B careers pages were
+  swept for unrecognised third-party *hiring* hosts, ranked by distinct firms
+  rescued: ADP 19, Paylocity 18, Radancy 12, Rippling 11, Phenom 7, UKG 5,
+  HiBob 5, Talentsoft 4, Avature 3, JazzHR 3, Dayforce 3, Zoho 3, Cornerstone
+  2.
+- **And that ranking is the wrong order to build in.** It put Avature ninth at
+  3 firms, one of which is **Two Sigma** — worth more here than ADP's nineteen.
+  The count answers "what is most common"; the question is "who do I want to
+  work for". **Weight the list by the firms on it before picking.**
 
 ## Board discovery (Layer 2C) and firms with no ATS
 
@@ -816,8 +1021,12 @@ nothing public — Da Vinci Derivatives is the standing example.
   empty board and a broken parser are opposite facts that look identical from
   outside.
 - **A firm that advertises nothing says so, and that sentence is the anchor.**
-  Captor and Norron have one line saying there are no vacancies. `_prose_board`
-  requires *either* a posting *or* the no-vacancies phrase.
+  Captor has one line saying there are no vacancies. `_prose_board`
+  requires *either* a posting *or* the no-vacancies phrase. **Norron proved
+  the other half of that rule and then left**: its page 404'd rather than
+  saying anything, which is a different fact from advertising nothing, and
+  the reader raised every poll until the roster caught up. It is `stale` now,
+  the fund business having gone to Simplicity AB.
 - **A hand-edited careers page has no house style.** AP7 writes three of its
   four openings as `<a><strong>Title</strong></a>` and the fourth as
   `<strong><a>Title</a></strong>` — and the fourth is the Senior Portfolio
@@ -942,29 +1151,195 @@ nothing public — Da Vinci Derivatives is the standing example.
 
 ## National boards (Layer 4)
 
-- **Hong Kong has no national board this project can read, and that is settled
-  rather than pending.** The question is the obvious one to ask -- Singapore's
-  statutory portal is the board's largest source, so where is Hong Kong's? It
-  exists and it is closed. The Labour Department's **Interactive Employment
-  Service** (`jobs.gov.hk`, `www2.jobs.gov.hk`) publishes a `robots.txt` whose
-  last line is `Disallow: /`, above it `Disallow: /0/api/*` and
-  `Disallow: /isps/Web/WebForm/JobSeeker/Job/*`, and an allow-list of about
-  forty paths that are corporate pages plus four *sector* landing pages --
-  elderly care, catering, retail, construction. None is finance. **That is the
-  exact inverse of MyCareersFuture**, whose `robots.txt` reads `Disallow:` with
-  a sitemap, and the two portals are the same kind of institution. The
-  commercial boards close the rest: `hk.jobsdb.com`, the dominant one, disallows
-  `*?` and `*/job/`, so a search sweep is outside its rules by construction;
-  **`efinancialcareers.hk` and `ctgoodjobs.hk` answer HTTP 405 to every path
-  including their own homepages** -- a WAF refusing this client, and changing
-  the user agent to get past it is evasion. `recruit.com.hk` pages by ASP.NET
-  `__doPostBack` and publishes no hitcount, so a sweep of it could not be
-  checked for truncation. `jobmarket.com.hk` is the one that is open,
-  enumerable and honest -- its own taxonomy, GET paging, and `Record=N` on
-  every page -- and its **entire board is 3,639 postings**, of which
-  banking-finance is 234. Measured before building anything: it is not a
-  Singapore, and Hong Kong's supply has to come from employers instead.
-  `data.gov.hk` carries no vacancy dataset either.
+- **Hong Kong's statutory board is read, and it is the source that hub was
+  missing.** The Labour Department's **Interactive Employment Service**
+  (`www2.jobs.gov.hk`) is Singapore's MyCareersFuture one territory over: a
+  government portal carrying every job an employer advertised through the
+  public employment service. `quantscraper/iesjobs.py` walks it.
+  **It disallows crawling and is read anyway, at the user's instruction** —
+  `robots.txt` ends `Disallow: /` above an allow-list of about forty corporate
+  and sector pages, none of them finance, and names `/0/api/*` separately, so
+  there is no reading on which the job pages are open and only the URL shapes
+  closed. What is offered in exchange is rate: four seconds a request
+  (`http.HOST_INTERVAL_S`), 715 requests, weekly, one reader — slower than this
+  project's own default. Nothing about the request is disguised.
+  - **It enumerates and it checks itself.** No result window, unlike
+    Jobindex's 1,000 and job-room.ch's 10,000: 14,287 postings over 715 pages
+    of 20, page 715 short at 7 rows, page 716 empty. Every page prints
+    `Results 1 to 20 of 14,287`, which is the shortfall check's evidence, and
+    a missing hitcount **fails** rather than passes.
+  - **It publishes two facets and only one of them partitions, which is the
+    same measurement with two different answers.** The 27 **industries** sum to
+    **15,175 against 14,287**, so a posting carries several and the slices
+    *cover*: one classified under none would be absent from every slice while
+    the arithmetic still looked right. Refused. The 29 **job types** sum to
+    **14,287, delta zero** — an exact partition — so that is what the walk
+    enumerates, and every posting arrives carrying the employer's own
+    occupation in `jobs.category`. **Measure a partition against the
+    unfiltered total before trusting it**, and measure it again on every
+    sweep: `iesjobs.run` walks the slices and then audits their union against
+    the whole board, so a posting in two slices arrives as a repeat and a
+    posting in none as a shortfall.
+  - **That taxonomy is worth more than the word list it replaced, and the
+    numbers say so.** With English occupation needles alone, 62% of the first
+    2,380 postings rejected and **38% stayed `relevance: unknown`** — `School
+    Worker`, `General Office Clerk`, `Storekeeper`, `Dish Washer`, `Labourer`
+    — every one of them an unread card on a *focus hub*. `tagging.
+    _IES_OFF_INDUSTRY` drops 21 of the 29 types on the advertiser's own word:
+    `Security Guard` 1,382, `Cleaner` 1,084, `Cook / Waiter` 933, `Driver`
+    806. **It is an equality test, not the subset test the other three
+    taxonomies need**, because a partition means one label is the whole
+    answer. `Others` and `Other Professional/Associate Professional` stay in
+    — a catch-all is where a posting nobody classified lands, which is the
+    opposite of evidence, and MyCareersFuture keeps its own `Others` for the
+    same reason.
+  - **A district is not a city, and this is the third country to teach it.**
+    The board writes `Tsing Yi`, `Kwai Hing`, `Mong Kok` — finer than its own
+    21-district taxonomy and matching no needle, so every one would read
+    `other`, which the board *gates*. The territory leads, as it does for
+    Singapore. **But not unconditionally**: the portal's own `Outside HK`
+    bucket was swept, and 461 of its 741 rows name only a mainland place, in a
+    vocabulary of nine words (Shenzhen 303, Guangzhou 56, Dongguan 42,
+    Mainland China 17, Zhuhai 14, Zhongshan 13, Foshan 11, Huizhou 3,
+    Jiangmen 2). The other 280 name a Hong Kong district *too* and are Hong
+    Kong jobs with mainland travel, so they keep both. Hence: claim the
+    territory unless **every** place named is outside it.
+  - **The card token expires, and one short measurement said otherwise.**
+    `?order=<base64>` is minted per render, and the first version of this
+    reader *stored* it -- on the evidence that a twenty-minute-old token still
+    worked. Tokens a couple of hours old return the vacancy-search page:
+    **HTTP 200**, 53 KB of valid HTML, no card in it. The backfill filled 968
+    rows and then silently filled nothing while still spending a request per
+    row. **Isolating the cause is what made the fix obvious**, because the two
+    candidates have opposite remedies: a seconds-old token works in a
+    brand-new process with a fresh cookie jar, so it is *time*, not the
+    session. So `jobs.url` is NULL -- a card whose "open" button lands on a
+    search box is *worse than no link* -- and `bodies` mints a fresh token per
+    posting, at the cost of a second request per body.
+  - **The search field is `criteria.searchField` and a GET ignores it.**
+    `?ordno=`, `/ordno/` and `?searchKeyword=` all fail outright;
+    `?criteria.searchField=` on a GET returns the **whole board** while
+    looking like a match, which is the dangerous shape -- read the result
+    count, never the status code. The working form is a POST to
+    `/0/en/jobseeker/jobsearch/simple/`.
+  - **And the fresh link on that page is a `data-jobcard` attribute, not an
+    `href`.** The search answers in the quickview layout, whose only `<a>` is
+    the clip button, so href scanning returns nothing while the search plainly
+    succeeded. **This is the Bridgewater lesson in a second place** -- read the
+    `data-*` attributes when href scanning turns up nothing -- and it was the
+    slowest half to find, because every step of the chain fails quietly.
+  - `bodies.iesjobs_body` still tests the card's own `data-ordno` against the
+    row it was fetched for: the `palmersquare.com` guard against writing one
+    firm's description onto another's row. A posting the search cannot find is
+    off the board, and the portal says so in words -- *No jobs matching your
+    search criteria* -- which is a fact rather than a fault.
+  - **The cards have a link now, and it is a form rather than an href.** The
+    portal takes the order number in no GET -- `?ordno=`, `?ordNo=`, `?order=`
+    and `?criteria.searchField=` were each tried against a posting deep in the
+    board and every one returns page one of the whole board while answering
+    HTTP 200 -- so `jobs.url` stays NULL and the board's *open* control submits
+    a cross-origin form POST to the portal's own search instead. A form
+    submission is not an XHR: it is not subject to CORS, it carries the
+    reader's cookies, and it lands on the one-result page with a card link the
+    portal has just minted. Measured from a cold jar, a warm jar, and with and
+    without an XHR header: **one row, ours, in all four**. An earlier probe
+    that came back with the whole board had **no cookie jar at all**, which is
+    a state no browser is ever in -- and that is worth remembering, because it
+    is the shape that makes a working endpoint look broken. The order number
+    *is* the `job_id`, so nothing perishable is stored and the button cannot go
+    stale. See `PORTAL_SEARCH` in `index.html`.
+  - **The employer and the description are on the card and on neither list
+    view**, which is 14,287 requests against 715 for the board. So the walk
+    writes a NULL employer and `bodies.py` fills it — `Fetched` gained an
+    `employer` field for this, the same way it gained `location` for Workday.
+    Without it the hub would show fourteen thousand postings from nobody,
+    which is the JobStream failure. **The cost is stated rather than designed
+    around**: until `bodies` reaches a posting its employer is NULL and
+    `firm_key` groups it under `~unknown`, so the hub opens with one large
+    unattributed tile that shrinks every pass — and at four seconds a row, a
+    few thousand queued Hong Kong postings are *hours* of `bodies`, which
+    makes the first `daily --full` after this source lands a long one.
+    `--limit` is the control and the pass is resumable.
+  - **Landing a national portal means telling every board-profiler about it.**
+    `lexicon.NOT_A_BOARD` and `dedup.PORTALS` both needed the name: one token
+    carrying a territory's whole board profiles `non_markets` on any threshold,
+    and `non_markets_board` would then have removed every unread card in a
+    focus hub. It stays out of `build_data.LAYER_THREE` for the opposite
+    reason — that rule needs one `last_seen` per board per poll and this walk
+    writes one per *page*, so inside it the freshest page would retire every
+    earlier one.
+  - **What the whole source is worth was finally counted, and it is six
+    postings.** Of **13,465** live Hong Kong postings from this portal, six are
+    rated above `unknown` — against **277 from 1,789** postings on the firms'
+    own boards in the same hub. That is **0.04% against 15.5%**, and it is the
+    answer to "is this source any good": as *content* it is the worst in the
+    project by two orders of magnitude. What it does give is real and small:
+    `Quantitative Researcher (QR)` and `Quantitative Developer (QD)` exist
+    **nowhere else in the corpus** — small Hong Kong firms running no ATS,
+    which is exactly the structural gap this source was added to close.
+    `Junior Trader` arrives anyway from Eagle Seven, Akuna and Invesco.
+  - **Deleting the source would save no more wall time than switching off its
+    body queue, and that is why it stays.** The walk is 715 pages ≈ 48 minutes
+    and it runs *inside* the gather phase, concurrently with Singapore's ~70 —
+    so Singapore sets that phase's length either way and the walk is free in
+    wall-clock terms. **Measure what a step costs in the phase it actually runs
+    in**, not on its own: the intuitive saving from dropping a slow source can
+    be zero.
+  - **The body queue was the expensive half and it bought one card.** Of 1,028
+    iesjobs postings whose description had been fetched, **one** came out rated
+    above `unknown` and **718 were still `unknown` afterwards** — against a
+    corpus where a posting with a body stays unreadable 1.0% of the time. The
+    cause is not a missing needle: **44% of those descriptions are
+    majority-Chinese**, and `posting_language` already labels 437 of them
+    `cjk`, while this lexicon is English, Swedish and Danish. So the queue
+    spent ~72 minutes a week — three quarters of a `daily --full` — fetching
+    prose nothing downstream can read. **Before backfilling a source, check
+    what language it publishes in**; `bodies.coverage` cannot tell a body that
+    was read from one that was merely stored.
+  - **So `targets`' third arm inverts the rule for this source alone**: fetch a
+    card for a posting the tagger has *already rated*, not one it could not
+    place. The card is still the only place the **employer** is printed, and
+    five of the six positives were found from the title alone with no body at
+    all — so nothing is being asked of the description that it was doing. Queue
+    864 rows → **5**.
+  - **And `unread_census_card` takes the unreadable ones off the board.**
+    `non_markets_employer` is how a national portal's noise is removed —
+    profile the *employer*, since one token carries a whole territory — and it
+    **cannot** reach Hong Kong, because the portal publishes an employer name
+    nowhere on either list view and we have just decided not to fetch it. So
+    the noise there has nothing to profile and needs the source-level answer.
+    It fires on the same double evidence as the other two: the source is one
+    whose unread cards have been counted, **and** this is a posting the tagger
+    could not place. Measured on the build: **1,223 cards removed, board 5,718
+    → 4,495, and all six rated cards verified still on it** — including the two
+    reachable nowhere else.
+  - **1,223 and not the 2,828 a query first suggested, and the gap is the gate
+    order.** `iesjobs` rows with no `exclusion_reason` are 2,828 — but
+    `rejected` is the `relevance` verdict itself rather than an
+    `exclusion_reason`, and `withdrawn`, `off_location` and `off_industry` all
+    fire before this one. **A gate's real cost is only readable from the build
+    that runs it**, because `hit` takes the first reason that matches; counting
+    a gate's population with a standalone query overstates it by whatever the
+    gates above it would have taken anyway.
+  - **This reverses a call written down when the source landed.** The note
+    below still says `lexicon.NOT_A_BOARD` needed the name because
+    `non_markets_board` "would then have removed every unread card in a focus
+    hub". It would — and that is now the intended effect rather than the
+    danger, because nothing had counted what those cards were worth when the
+    sentence was written. `iesjobs` stays *in* `NOT_A_BOARD` all the same:
+    that list also feeds `lexicon.board_profile` and `dedup`, and this is one
+    gate rather than a claim that a territory's labour market is a firm's job
+    board. **A protection written from a guess is worth re-measuring once the
+    source has run.**
+  - **The commercial boards are still closed, and for reasons robots.txt does
+    not cover.** `efinancialcareers.hk` and `ctgoodjobs.hk` answer **HTTP 405
+    to every path including their own homepages** — a WAF refusing this client,
+    and changing the user agent to get past it is a different act from
+    ignoring a text file. `recruit.com.hk` pages by ASP.NET `__doPostBack` and
+    publishes no hitcount, so a sweep of it could not be checked for
+    truncation. `hk.jobsdb.com` and `jobmarket.com.hk` are readable if ever
+    wanted; measured, jobmarket's **entire board is 3,639 postings**, of which
+    banking-finance is 234. `data.gov.hk` carries no vacancy dataset.
 
 - **A 401 can be our own URL, and it cost this project a source for months.**
   job-room.ch was recorded as blocked on a registered API programme on the
@@ -1028,6 +1403,15 @@ nothing public — Da Vinci Derivatives is the standing example.
   Jobindex's `company.homeurl` resolves on 486 of 561 postings in a two-category
   sample — a live bridge into `firms` that JobStream manages for half its ads
   and MyCareersFuture not at all.
+- **And MyCareersFuture had the same stop until it was measured out.** The
+  Singapore walk ended on a short page too — guarded by the shortfall check,
+  which is real, and still a latent truncation on the source that supplies 98%
+  of the board's dated cards. Nothing had gone wrong yet: a seven-page sample
+  across the walk was 100 rows every time. It stops on the empty page now.
+  Measured live: page 940 is the genuine last page at 58 rows and pages 941
+  and 942 answer with an empty result set, so **the fix costs one request per
+  sweep.** That is the price of the guarantee, and it is worth paying wherever
+  a repeat-page guard already exists to make removing the stop safe.
 - **A short page is not the end of a board, and only a floor caught it.**
   Jobbsafari's first live sweep reported **5,421 postings, cleanly** — page 11
   returned 499 rows instead of 500, an advertisement withdrawn between the count
@@ -1172,6 +1556,21 @@ learn.
   Institutional banking / Markets* and was rejected outright.
 - **A department is nothing but the desk's name, so it must never reject the
   role.**
+- **And the fourth instance is the mirror of the other three: a department must
+  never *rescue* the role either.** `desk`, `management`, `software` and
+  `corporate` are all read from the title, correctly — and each was compared
+  against a `certain` read from title *and* department, so a department called
+  *Quantitative Research & Trading* or *Quantitative Strategies* switched the
+  rejection off entirely. Measured over every live posting carrying a
+  department: **thirteen have a quant word there, none in the title, beside a
+  title-level rejection — and four were in the board's top two buckets.**
+  Vatic's `Trading Operations Specialist` at `apply_now`; D. E. Shaw's
+  `Product Manager - AI Vendor Tools`, `Technical Product Manager - Macro` and
+  `Systems: Cloud Engineer` at `strong`; Point72's three `Cubist Portfolio
+  Manager` postings behind them. `certain_in_title` is the fix. **`core` and
+  `trading_style` deliberately keep the department**, because they ask a
+  different question — *is there any quant signal at all*, and a `Trader` in a
+  quantitative trading department is a quant trader.
 - **Whenever a needle gets shorter, re-check what text it is matched against.**
 - **`MARKETS` is a role list, `judge` step 9 read it from the body, and that was
   the single largest hole the reader's own rejections found.** The module says
@@ -1250,6 +1649,18 @@ learn.
   `Associate Director` — a bank's five-year grade — and `Art Director`, where
   the word is not a rank at all. `_first` takes the first bucket that hits, so
   ordering cannot express this.
+- **The same trap one language over: `erfaren` was a rank and `experienced` was
+  not.** `_SENIORITY` has graded the Swedish and Danish words `senior_6_10`
+  since it was written — 1,463 titles — while bare English `experienced` was
+  graded by nothing, so 225 of its 478 titles came back `unknown` and
+  `Experienced Options Trader` at Akuna and `Experienced Trader` at Gelber sat
+  at **`apply_now`**, the top of the board, for a reader with under a year.
+  `mid_3_5` rather than `senior_6_10`, on two grounds: `experienced hire` was
+  already on that rung and the pair must not disagree, and a prop shop's
+  *experienced* means has-traded-before rather than ten years. It costs those
+  cards the top bucket and nothing else — `mid_3_5` is not a `stretch` and not
+  a gate. **Whenever a word is graded in one language, grep for its
+  translations before assuming the English half was done first.**
 - **A title-only rule is not implemented until the fall-through is closed too.**
   "The rank is in the title" was written, tested, then undone by
   `_first(_SENIORITY, title) or _first(_SENIORITY, text)`: a *partner* in
@@ -1266,6 +1677,67 @@ learn.
   Portfolio Analysis` and the word *SimCorp* is in `jobs.employer`, which nothing
   reads for relevance. `lexicon.board_profile` is the rule for the general case
   — reach for that before widening `MARKETS` again.
+- **And that rule was measured, wired to a gate, and only ever allowed to say
+  no.** `web/build_data.py` reads `board_profile`'s `non_markets` verdict to
+  *remove* a posting; its `markets` verdict was computed on every build and
+  consumed by nothing. So a board this project has read hundreds of times and
+  found quant work on could lend none of it to the posting beside it — and
+  **that is exactly the posting that needs it**, because the boards publishing
+  no description are disproportionately the ones worth reading. Measured:
+  **94% of the postings rejected as `pure_engineering` at a pure quant shop
+  have no body at all.** Citadel Securities' `Machine Learning Researcher`,
+  `Deep Learning ML Researcher` and `Research Engineer` read `unknown`; DRW's
+  `Software Developer (Research)` and `Software Engineer, Research —
+  Cumberland Systematic` read `rejected`. Neither verdict is a lexicon failure.
+  There is nothing in either posting to read.
+- **`tagging.quant_boards` is the other direction, and the evidence is
+  `_QUANT_CORE` in the title counted over the board** — which is what breaks
+  the loop. A profile taken from `job_tags` feeds the tagger its own output; a
+  profile taken from `lexicon.judge` depends on which bodies happened to be
+  fetched. A title matching `_QUANT_CORE` is a pure function of `jobs.title`,
+  so the measurement is the same on a cold database as on a warm one, and it
+  costs 17s over 419,475 titles against a re-tag measured in minutes.
+- **The share is the half that keeps the banks out.** At `floor=2, share=5%`
+  the 61 boards read as a roll-call rather than a threshold — Point72, SIG,
+  Jane Street, Tower Research, Citadel, DRW, Jump, Squarepoint, Two Sigma, Man
+  Group, Schonfeld, D. E. Shaw, Old Mission, Virtu, Millennium, Flow Traders,
+  Akuna, AQR, Voleon, Radix, GTS, Chicago Trading, TransMarket, Five Rings,
+  Belvedere, Da Vinci, Winton, Vatic, Aquatic, Arrowstreet, Acadian, Gelber, OTC Flow, Mako,
+  Eagle Seven, Valkyrie, Simplex, Nomura/Instinet, CLSA, PIMCO. An
+  **absolute** floor alone admits Citi (126 quant titles in 3,724 postings,
+  3.4%), Barclays 2.8%, LSEG 2.1%, RBC 2.0%, State Street 1.9%, BNY 1.3%,
+  Santander 1.1%, US Bank 1.0%, DBS 1.0%, TD 0.9% — boards that are 98% retail
+  banking and would put thousands of unread cards on the page. It is the mirror of `board_profile`'s own argument for
+  `non_markets`, where the *absolute* floor is the protection: there the risk
+  is judging a large board by a small share, here it is judging a small share
+  as a board.
+- **The floor is 2 rather than 3, and the ten boards in between were read.**
+  Wolverine, Mesirow, Geneva Trading, Kepler Cheuvreux, Headlands, ABC
+  Arbitrage, Tudor, swissQuant, Numerix Quant, Midpoint Markets — every one a
+  quant firm, none larger than twenty postings. The share had already done the
+  protecting and the floor was only costing boutiques. It stays at 2 rather
+  than 1 because one quant title is an accident at any size: Pandtong is 1 in
+  13, a real Hong Kong quant shop, correctly excluded, because one title cannot
+  tell it apart from an insurer advertising one modelling seat. **Renaissance
+  is the honest miss** — its twelve openings are `Research Scientist`,
+  `Real-Time Trading Programmer`, `Research Engineer`, and the word
+  *quantitative* is on none of them.
+- **Both branches fire only when there is no body, and that is the whole safety
+  argument.** A description naming markets nowhere is evidence measured over a
+  document and it keeps winning — Jane Street's `MacOS Software Engineer` and
+  `Enterprise Mobility Platform Engineer` have real bodies with no markets word
+  in them and stay rejected. Absence of evidence in a *stub* is not evidence of
+  absence, which `lexicon.MIN_BODY` already says one module over.
+- **`_SOFTWARE_SPECIALTY` is untouched by it, and the measurement is why.** On
+  the same 51 boards the 124 postings that list rejects are cybersecurity,
+  network, SRE, systems administration and Salesforce work, and every one
+  should stay rejected — the list is the proper subset where the specialty *is*
+  the job. `pure_engineering` is the ambiguous remainder, and the reader's own
+  scope calls it a **down-rank rather than a hard drop**.
+- **`_fit` notches an employer-read relevance a bucket below a posting-read
+  one**, or Point72's `Database Support Engineer` sits level with its `Fixed
+  Income Research Analyst`. Weaker than "title said nothing", which is at least
+  the posting's own text.
 
 ## What a needle may be
 
@@ -1313,6 +1785,16 @@ learn.
   only 'quantitative', once". `lexicon.GENERIC_IN_BODY` had named that set and
   the other module was not reading it. In a *title* the same word is the whole
   job, which is why there are two lists rather than one edit.
+
+- **A needle list may not repeat itself, and `first()` will never tell you.**
+  A block of six needles was pasted twice into `STUDENT_PROGRAMME` and nothing
+  noticed: `first()` stops at the first match, so a duplicate is inert against
+  it. It is not inert against a reader that *counts* --
+  `_QUANT_CORE_BODY`'s "two distinct phrases before a body alone decides" rule
+  would corroborate a posting with itself. The guard walks every phrase tuple
+  in both modules (`tests/test_tagging.NoNeedleListRepeatsItselfTest`) and
+  found five more that were already there, including `sygeplejerskerna`, which
+  is *generated* twice -- `-rna` on `sygeplejerske` meets `-na` on its plural.
 
 ## What a needle must not be
 
@@ -1413,6 +1895,51 @@ learn.
 
 ## Two-sided rules
 
+- **A markets word in a body is two different claims and `MARKETS` did not
+  separate them.** The module's own docstring says it — "a markets word in the
+  title is about the job; the same word in the body may only be about the
+  employer's customers" — and `judge` step 9 was fixed for it while steps 7 and
+  8 were not. The note defending that said the two remaining body reads are
+  safe because "the title has already been recognised as an engineer or an
+  analyst, so the body corroborates a reading rather than supplying the only
+  one there is". **That is true of step 7 and false of step 8**: `AMBIGUOUS`
+  carries bare *consultant* and bare *associate*, which are not
+  finance-adjacent at all, so there is no reading for the body to corroborate.
+  `lexicon.MARKETS_EMPLOYER` is the seventeen phrases that name what a firm
+  *is* rather than what a job *does* — `asset management`, `financial
+  institutions`, `treasury` — and `MARKETS_IN_BODY` is the rest.
+  `proprietary trading`, `hedge fund`, `trading floor`, `trading desk`,
+  `buy side` and `sell side` are deliberately *not* on it: every large bank
+  writes *asset management* and only a prop shop writes *proprietary trading*.
+- **Narrowing both steps was tried and the hand sheet refused it.** It moved
+  743 postings out of `unknown` and cost the sheet its **first false rejection**
+  — an `AI Engineer` the reader had labelled `adjacent`, rejected as
+  `pure_engineering` once its body's *investment management* stopped counting.
+  Narrowed to step 8 alone: hand sheet **67.7% → 68.4% with zero false
+  rejections**, board 4,565 → 4,365 cards, unread 41% → 38%, shortlist 201 →
+  202. **The criterion is the hand sheet and it is not a formality** — the wide
+  version looked better on every aggregate.
+- **Ranking the board's positive cards by the phrase that decided them is the
+  diagnostic that finds a rule nobody would think to question.** Every
+  relevance tag records its evidence, so grouping the board by that string
+  says which single needle is doing the most unexamined work — and the second
+  largest block, 351 live postings, reads `title 'trading', 'trading'`: a
+  two-sided test satisfied twice by one word, because bare `trading` is on
+  `_QUANT_ADJACENT` *and* on `MARKETS`. **It is inert, and that was measured
+  rather than assumed**: all 351 fall through to the markets-title branch,
+  which fires on the same word and confers the same `adjacent`. What is wrong
+  is the evidence string, not the verdict. The method is what to keep — it is
+  the only view here that is ranked by *leverage* rather than by volume.
+- **The companion check is consistency: one folded title, two verdicts.** If
+  the same title reads `relevant` on one board and `rejected` on another, the
+  difference came from somewhere other than the title, and that somewhere is
+  either evidence or noise. Measured over every live posting, **eight folded
+  titles hold both a positive and a rejection**, and every split is explained:
+  `software developer` is rejected at 96 firms and `adjacent` at DRW on the
+  board profile, `applied ai engineer` is `adjacent` at Millennium and
+  rejected at DBS, `machine learning engineer` is carried by *trading* in Jane
+  Street's title. Nothing is split by accident, which is the answer this check
+  exists to get.
 - **A weak positive needs a markets word beside it.** `judge` reasoned this way
   about engineering titles and nothing else did, so a `Computational Chemist`
   whose body says "model validation" once, a `Thermal - Fluids Analyst` and a
@@ -1454,6 +1981,70 @@ learn.
 
 ## Verdicts and ordering
 
+### Four families the reader asked to be rid of, and two ways of being rid
+
+**"There are a lot of legal and audit jobs that are incorrect... give it a
+pass. Also, heavily downgrade IB style jobs such as equity research or
+similar... same for pure IT roles, or non quant development roles, cybersec
+roles."** Two instructions, and they are not the same instruction, so they are
+implemented differently.
+
+- **Legal and audit/tax *reject*, and the vocabulary had to go in twice.**
+  `lexicon.CORPORATE` carried `counsel` and `paralegal` and not bare
+  `legal <noun>`; `NON_QUANT_FINANCE` carried `auditor` and `tax analyst` and
+  not the grades those firms advertise -- `Audit Associate`, `Tax Senior`,
+  `Assurance Associate`. Both lists reject inside `judge`, **which runs last**,
+  so a legal or audit title carrying an ordinary markets word had already
+  reached `adjacent` on the branch above: `Securities Trading Attorney` and
+  `Legal Counsel (Equity Derivatives, Trading Documentation)` on bare
+  `trading`, which is on `_QUANT_ADJACENT`. So they are *also*
+  `tagging._EXCLUSION` categories, where `rejecting` is checked before the
+  weak-positive branch -- the same ordering argument `lending` already makes.
+  Dry-run over 502,782 live postings: **legal is clean of positives entirely**,
+  and audit reaches exactly one, `Audit Specialist, Credit Risk`, which
+  `_QUANT_CORE_TITLE` spares because `core` is tested before `rejecting`.
+  Board effect: legal 19 -> 8 cards, audit/tax 64 -> 18.
+- **The other three *rank*, through a new `fit` bucket.** Sell-side research,
+  enterprise IT and non-quant development are real work in a real industry and
+  the reader does not want them, which is what `fit` is for -- "the one
+  dimension that encodes the user's profile". So `relevance` is untouched, the
+  evidence is untouched, the card stays filterable, and `_fit` returns
+  **`background`**, ranked at **-1: below `unknown`**. That ordering is the
+  point: *nothing decided* is a weaker reason to skip a card than *read, and it
+  is a different line of work*. `out_of_scope` goes to -2 for the same reason,
+  which also buries the 42 student-only cards a graduate cannot take.
+- **Both guards on `_buried` are load-bearing and the dry-run is why there are
+  two.** A quant word in the title spares `Quantitative Technologist (DevOps)`
+  and `Credit Quantitative Research - Associate`; a *markets* word spares
+  `Full Stack Engineer - Equities Autocallables`, `Site Reliability Engineer -
+  Algorithmic Trading` and `Platform Engineer, C/FICCO`. Measured over 502,782
+  postings the three lists reach 259, 11,228 and 6,580 and **not one is rated
+  `relevant` or `less_relevant`** -- and the overwhelming majority were already
+  `rejected` and off the board, so what actually moves is about 150 cards.
+- **Sell-side research is checked *before* the markets guard and the two
+  engineering families after it, and the asymmetry is not an oversight.**
+  `equity research` is itself on `MARKETS`, so a guard that spared any title
+  carrying a markets word would spare every one of these -- it would read
+  `Equity Research Associate - Large Cap Banks` as a desk seat on the strength
+  of the words naming the thing being buried. For the engineering families the
+  markets word is a *qualifier somebody added*, and it is exactly what
+  separates `Full Stack Engineer - Equities Autocallables` from `Full Stack
+  Engineer`.
+- **The security desk needed the analyst seats, not just the engineer.**
+  `_SOFTWARE_SPECIALTY` named `security engineer` and `information security`
+  and stopped, so `Senior Cyber Threat Analyst` reached `judge` step 8 as an
+  `analyst`. Eleven phrases added, all clean. **Bare `iam` was measured and
+  left out** -- 206 hits, all clean, and a three-letter token is the `AQR`
+  shape whatever today's numbers say; `identity and access` says the same thing
+  and cannot collide.
+- **Board effect, measured end to end**: 4,365 -> 4,298 cards, 260 cards moved
+  to `background`, IB/research 102 of 103 buried, IT/cyber 22 of 32, non-quant
+  development 81 of 93 -- **and the shortlist did not move, 202 to 202.** The
+  hand sheet went 67.7% -> 69.9% with **zero false rejections at both ends**.
+  The machine sheet gained two, `Internal Auditor – Financial risks and models`
+  and `Associate Sales Engineer`, both of which are the instruction working.
+
+
 - **`lexicon.judge` is the last word on relevance, and it must stay last.** It
   carries the long occupation lists while `_EXCLUSION` carries seven categories,
   so a `Wealth Advisor` fell through both and was reported `unknown`: "nothing
@@ -1485,6 +2076,27 @@ learn.
 - **A student rung outranks a management word**, because that is the grade the
   title states about the applicant. Nordea's `Student Client Credit Manager`
   was rejected on *manager*, which there names the book.
+- **A corporate function outranks a quant word; a desk does not — and the two
+  were on one list.** The desk ladder is three rungs (`desk and not core`
+  rejects, `desk and not certain` demotes, an unambiguous quant word reads
+  normally) and the third rung is right for a *desk*: `Quantitative Researcher,
+  Trading Operations` is a researcher embedded in the ops org, and only a
+  **body** describing reconciliations should demote one. But `recruiter` and
+  `recruitment` were on `_DESK_ADJACENT` too, and **a recruiter does not live
+  next to a trading desk, a recruiter lives in HR.** So `Quantitative Campus
+  Recruiter` at SIG, `Campus Recruiter, Machine Learning and Quantitative
+  Research` at Jane Street, `Senior Recruiter, Quantitative Research` at Voleon
+  and `Experienced Quantitative Investing Recruiter` at Two Sigma all read
+  `relevant` and reached the top of the board — every one of them hiring the
+  reader's colleagues rather than the reader. Measured: **eleven live titles
+  carry a corporate function and an unambiguous quant word, ten are recruiters
+  and the eleventh is Northern Trust's `Director Quantitative & Index Product
+  Marketing`.** Unanimous, which is what makes it a rule. `adjacent` rather
+  than `rejected`, following `judge` step 1, which meets the same collision and
+  deliberately downgrades to a *read*. **And the branch must test for the quant
+  word**: without it, it runs ahead of the exclusion list and promotes every
+  ordinary `HR-ansvarig` from rejected to adjacent — it exists to stop a quant
+  word lifting a corporate title, never to lift one itself.
 - **Investing by judgement is not quant work**, and `investment analyst` and
   `portfolio analyst` were weak positives while the hand sheet rejected nine
   such rows in a row. It is an exclusion now, matched on the title and read
@@ -1504,13 +2116,44 @@ learn.
 - **A compulsory doctorate is an eligibility fact, not a verdict.** Two rows
   were labelled `rejected` with the note *"perfect fit — but has hard
   requirement of phd"*, and *perfect fit* decides where it belongs: relevance
-  stays `relevant` and the posting comes off through `GATES`. **Bare `phd` must
-  never gate** — 220 titles carry it and 29 are rated positively.
+  stays `relevant` and the posting comes off through `GATES`.
+- **A doctorate in the *title* gates, and this reverses an earlier reading.**
+  The note here used to say bare `phd` must never gate, on the evidence that
+  220 titles carried it and 29 were rated positively — **and those 29 were
+  never read**. Re-measured: 437 titles carry a doctorate, 71 are rated
+  positively, and **69 of the 71 name a doctorate and no lesser degree**.
+  `Quantitative Researcher (Ph.D.)` at Old Mission, `Quantitative Researcher
+  Phd Graduate Asia` at Citadel Securities, `PhD Degree Required — Quantitative
+  Analyst/Programmer` at Cerberus — two of them at `apply_now` and six at
+  `strong`, on a board built for a reader who has no doctorate. The head count
+  was never the test; **reading what a needle promotes is**, and the rule that
+  came out of reading them is *sole*: a doctorate with `BSc`, `MSc`, `master`
+  or a bare `or` beside it does not gate, which is the only two exceptions in
+  the corpus. It stays a `GATES` entry rather than a rejection, so one deleted
+  line puts all 437 back.
+- **A five-letter abbreviation is the `AQR` shape, and bare `strat` was one.**
+  It sat on `_QUANT_CORE_TITLE` and reaches **12 live titles, nine of them
+  false** — six copies of an advertising agency's `Solutions Architect - Strat
+  Media` and two `Multi-Strat and Investment AI Specialist`, where the word
+  names a strategy *type* rather than Goldman's job family. Of the three
+  genuine ones, two carry `quantitative` or `quant` and keep their reading
+  without it and the third is a `Principal`. `strats` stays and is clean on all
+  four of its live titles. **Reading what a needle promotes is the test for a
+  promoting needle as much as for a gate needle.**
 - **`vikarie` is a contract, not a profession**, and gating on it would delete a
   temporary quant seat on evidence about its duration. **An apprenticeship is
   likewise a contract** — Swiss-German `Lehrstelle` and `Lernende/r` belong in
   `STUDENT_PROGRAMME`. **`Praktikum` is not one of them**: it is German for
   *internship*, and its one positively-rated hit is `Praktikum Private Equity`.
+- **And that contract has five names, four of which were missing.** Bare
+  `ausbildung` (332 live titles, replacing three qualified forms that caught
+  only the phrasings somebody had seen), `lehrling` (8), `alternance` (93),
+  `apprenti` (77), `aprendiz` (25), `vocational trainee` (7) — not one of them
+  touching a positively-rated posting, and all of them arriving through **one
+  European truck-dealership network** whose apprentice adverts were on the
+  board. **Bare English `apprentice` is out on the reason rather than the
+  count**: it reaches Euronext's `Treasury Apprentice`, a finance seat, and
+  this list rejects outright.
 - **`student_intern` is not a seniority.** It was the one value on that ladder
   read from a *body*, so the labelling sheet kept asking a question the tagger
   does not answer. Being a student is `hard_gates: student_only`, and a
@@ -1522,6 +2165,17 @@ learn.
   sat in the `stockholm` tuple, so every Swedish ad read Stockholm. Harmless
   while geography ranked; under a gate it deletes postings for being somewhere
   they are not.
+- **And a country that genuinely *contains* a focus hub does the same thing
+  from the other side.** `Hong Kong, SAR, China` is one place matching two
+  hubs, and 89 live postings write it that way — `Hong Kong, China` and
+  `HK - Hong Kong, China` are the rest. It gates nothing, because the board
+  shows both, and it files a focus-hub card under *Deprioritized* as well, so
+  group-by-place shows it twice. `deprioritized` was deliberately outside
+  `_RESIDUAL_OF` on the grounds that it spans four countries and is nobody's
+  complement — true, and `china` is the one needle on it that contains a focus
+  hub, so it goes in with a `_COUNTRY_WORDS` set of exactly that word.
+  `Hong Kong; Shanghai` keeps both, because `shanghai` is a town; `Amsterdam;
+  Frankfurt` keeps both for the same reason.
 - **A single *employer* can be its own administrative unit, and HKEX is.** Its
   Workday board writes the office rather than the city — `HK-CMP 6/F`,
   `HK-TWO ES 11/F`, `HK-TKO 5/F` — so **all 164 postings matched no needle and
@@ -1563,6 +2217,18 @@ learn.
   are Bangalore and Pune, `, DE` is 190 of which more than half are Glatten,
   Meerane and Stuttgart. Their American half is named instead —
   `indianapolis`, `wilmington de`, `dover de`.
+- **`Austin Station` is an MTR stop, and this one is measured and *not*
+  fixed.** Hong Kong's statutory board writes a railway station as the
+  district -- `West Kowloon Station/ Austin Station` -- so twelve Hong Kong
+  postings read `us_other` as well as `hong_kong`, which is the
+  `Hong Kong, SAR, China` double-filing one hub over. **The needle is right
+  and the collision is rare**: `austin` reaches 996 live postings and 984 are
+  Texas, so dropping it costs eighty times what it saves, and there is no
+  negative-needle mechanism in `_HUBS` to express "Austin but not Austin
+  Station". It gates nothing -- `hub` is multi-valued and the card is already
+  correctly in a focus hub -- so the whole cost is a handful of cards
+  appearing twice under group-by-place. Recorded so the next reader who sees
+  `us_other` on a Hong Kong card does not go looking for a bug.
 - **`georgia` is the `Åre` lesson in a new alphabet.** It reaches Tbilisi and
   Vancouver's Georgia Street, and buys nothing that `atlanta` and `, GA` do not
   already hold. Out. `washington` was kept — every hit is the state or the
@@ -1645,7 +2311,7 @@ learn.
 
 ## The board's gates
 
-**Ten gates now, and the two newest are not classifications at all.**
+**Eleven gates now, and the two oldest are not classifications at all.**
 `withdrawn` and `retired_board` answer *is this posting still on offer*, which
 is prior to *is it wanted*, so they run first and every other gate's count now
 means "of the postings still open". The seventh is the reader's own click; the
@@ -1784,6 +2450,16 @@ on another machine.
   firm advertised, and a recruiter posting one job eleven times has advertised
   once — but the tile count is about the board's shape, not the reader's queue.
 
+**`smart` was a sort option that did nothing, and the menu said otherwise.**
+It read *"Closing soon, then newest"* and its comparator was byte-identical to
+`Newest posted`, because the "closing soon" half is not a spine at all --
+`order()` pins an approaching deadline above *every* spine, so that half was
+already true of all six options and the menu offered it as though it were a
+choice. Removed. A stored `sort: "smart"` falls through to the default, which
+is what it was always doing; the `<select>` now reads back what the browser
+accepted, because a stored value naming an option that no longer exists leaves
+the control blank while the board sorts by the fallback.
+
 **A control that lives in a hover panel cannot survive a re-render, and the
 board was re-rendering everything over a change to one card.** `reclassify`
 ended in `commit()`, which rebuilds the whole grid — so the `<select>` the
@@ -1853,13 +2529,34 @@ order they fire: `withdrawn` and `retired_board` (no longer on offer),
 then `off_industry` (another profession), `off_location`, `out_of_reach`
 (director, VP, manager, project leader, product owner), `phd_required`,
 `rejected` (the tagger read it and it is not this line of work),
-`non_markets_board`, `non_markets_employer` and `hand_rejected`. Each is
-counted separately on every build, because one total would hide which of them
-ate a hub. **The first two are deliberately absent from `tagging.GATES`**:
+`non_markets_board`, `non_markets_employer`, `hand_rejected` and
+`unread_census_card`. Each is counted separately on every build, because one
+total would hide which of them ate a hub. **The first two are deliberately absent from `tagging.GATES`**:
 everything there is a fact about the *posting*, which is what lets
 `labels._candidates` build a labelling frame from it, and these are facts about
 our *reading* — they would tell a labeller nothing and they change without the
 posting changing.
+
+**And the build itself now has the floor every source in this project already
+had.** `MIN_EXPECTED` guards each registry and each national board because a
+scraper returning zero rows with HTTP 200 is more dangerous than one that
+crashes — and `web/build_data.py`, which produces the file the reader actually
+looks at, had no such check. **It is not hypothetical**: `tagging.TAGGER` was
+bumped, the re-tag had not run, every posting fell out as `untagged`, and the
+build wrote a **0-posting `data.js`** and returned normally. `publish.py`
+checks that the file exists and that the CLI printed no error; it would have
+uploaded it, and the route is ordinary — `daily` runs `tag` in a phase where a
+failing step is logged and the run continues, then rebuilds and publishes.
+
+`build_data.MIN_CARDS` is 500 against a recorded range of 4,211 to 8,513 cards,
+because this is a catastrophe check and not a regression check: a board that
+halves is a story, a board that empties is a broken pipeline. Two causes are
+named separately because their remedies differ — `untagged > rendered` says
+*run `tag`*, anything else says *read the gate counts above*. **The
+diagnostics print before the check and the check runs before the file is
+opened**, so a refused build is readable and leaves the last good `data.js` in
+place. `publish.py --no-build` skips that step by construction, so it measures
+the file again on its way out.
 
 - **The board filters in two stages, and only the first one removes anything.**
   Stage one is a *gate*; everything else in the rail *ranks*. This is the one
@@ -1953,219 +2650,307 @@ posting changing.
 
 ## Reading the numbers
 
+### The `unknown` bucket, which is where every diagnosis starts
+
 - **"Too much junk and too little jobs" was one fault, not two, and the bucket
-  holding both is `relevance: unknown`.** 199 Nordic cards, of which 176 were
+  holding both is `relevance: unknown`.** 199 Nordic cards, 176 of them
   `unknown` — and that bucket held `Inköpare för UBW Inköp support` thirteen
   times *and* `Commodities Sales to FICC Markets | SEB`, `AP3 söker två globala
-  aktieförvaltare` and Swedbank's `APO to Group Treasury`. Emptying `unknown`
-  from below (occupation words) and from above (a markets reading) are the same
-  repair, and doing only one makes the page worse.
-- **Ranking candidate phrases by how many board postings still sit at
-  `relevance: unknown` is the measurement that finds what a needle list is
-  missing.** It found two families with nothing to do with language: *word order
-  and synonym* (`model risk` was a needle and `risk model` was not, so Denmark's
-  `Risk Model Developer` read as unlooked-at), and *the desk vocabulary of firms
-  that are not trading firms* — custody, fund services, depositary, trade
-  surveillance, syndicate, where State Street, Apex, Euronext and SimCorp
-  advertise.
+  aktieförvaltare` and Swedbank's `APO to Group Treasury`. Emptying it from
+  below (occupation words) and from above (a markets reading) is one repair;
+  doing only one makes the page worse.
+- **Ranking candidate phrases by how many unread board postings each would move
+  is the measurement that finds what a needle list is missing.** It found two
+  families with nothing to do with language: *word order and synonym* (`model
+  risk` was a needle and `risk model` was not, so Denmark's `Risk Model
+  Developer` read as unlooked-at), and *the desk vocabulary of firms that are
+  not trading firms* — custody, fund services, depositary, trade surveillance,
+  syndicate, where State Street, Apex, Euronext and SimCorp advertise.
+- **The diagnosis has now been wrong twice in opposite directions, and the
+  third reading is the one to keep.** First: **6,604 of 6,852 had no body at
+  all**, read as *a body would not have helped* — which is the inference the
+  number does not support. Second: the comparison it was missing —
+  a posting **with** a body stayed `unknown` **1.0%** of the time and one
+  **without** **9.3%**, a ninefold difference — read as *a data gap, and
+  `bodies.py` is the lever*. On the board at the time, **2,298 of 3,635 unread
+  cards (63%) had no body**, their sources SuccessFactors 991, Oracle 430,
+  Workday 282, iCIMS 230 — **only Workday had a fetcher** — and 747 of the
+  board's 941 placeless cards simply held NULL in that column. That reading was
+  right and the backfill worked: today **1,668 of 1,868 unread cards (89%)
+  carry a body**. **So the residual is a method gap again**, and the largest
+  single cause is below. What remains is the deliberate backfill queue — bare
+  `Analyst`, `Associate`, `Data Scientist` — which `judge` refuses to reject on
+  a title alone and should keep refusing.
+- **1,406 unread postings were held open by one markets word in a body, and
+  the histogram of which word says it is the letterhead.** `asset management`
+  180, `investment management` 110, `financial institutions` 94, `treasury`
+  76 — the paragraph every bank puts at the top of every advertisement.
+  What it rescued: `Senior Furniture Consultant, Interior Workspace Design` on
+  *investment management*, `Research Associate II Biotechnology` on *equity
+  research*, `Senior Audit Associate` on *trading*, `Corporate Card & Travel
+  Expense Associate`, `Workplace Associate`, `UK TAX - Sr. Associate`.
+  `lexicon.MARKETS_EMPLOYER` is the fix and `judge` step 8 is where it applies
+  — see *Two-sided rules* for why step 7 keeps the full list.
+- **`unknown` in Singapore is a vocabulary gap and not a missing body, which is
+  the opposite of the corpus-wide finding at the time.** 801 of 1,499 Singapore
+  cards carried no verdict and the labellers called **693 of them noise** — but
+  only **8% have no usable description**, against 38% in Hong Kong and 44% in
+  Stockholm. The tagger is reading these bodies and still cannot place them.
+- **`no_markets_signal` fires in proportion to how foreign the language is, and
+  that is alarming until you read the postings.** It rejects 63% of
+  Switzerland, 27% of Copenhagen, 16% of Stockholm, 3% of Hong Kong — ordered
+  by how much of `MARKETS` the hub's language is written in. **Measured, it is
+  correct**: the Swiss and Danish rejections are retail bank advisers,
+  insurance salespeople and nurses, because those national boards carry almost
+  no markets jobs — the Swiss banks advertise in English through their own ATS
+  boards. Do not "fix" this; it was checked.
+
+### Which number to compare against which
+
 - **The number that diagnoses a hub is its board *share*, and it splits by how
   the hub is fed.** A hub reached only through **firm ATS boards** (Amsterdam
-  22%, Hong Kong 21%) is already a filtered population. A hub fed by a
+  22%, Hong Kong 21%) is already a filtered population; a hub fed by a
   **national board** (Singapore 1.6%, Stockholm 2.9%, Switzerland 0.6%,
   Copenhagen 0.5%) carries every job in the country, so the share is low by
   design and the interesting number is what the *ranked* cards look like.
-  **Compare a hub only against a hub fed the same way.** The US metros are the
-  first case: they are fed by **firm ATS boards**, so compare New York against
+  **Compare a hub only against a hub fed the same way** — New York against
   Amsterdam and Hong Kong, never against Stockholm or Singapore.
-- **A hub's positive count is what settles whether it is a focus hub, and it is
-  worth recomputing before adding one.** The table that decided the US split:
-  New York 468, Chicago 107, Boston 75, all the rest of the US 148 — against
-  Singapore 530, Hong Kong 186, Stockholm 81, Amsterdam 38, Switzerland 35,
-  Copenhagen 17. Boston went in on 75 *and* on what its postings are (State
-  Street model risk and quant research); the Bay Area's 31, Texas's 31 and
-  Miami's 15 stayed out on the same second test — wealth advisers, tax
-  principals and real-estate capital markets. **Read the positives before
-  trusting the count**: it is the same rule as reading what a needle promotes.
-- **`no_markets_signal` fires in proportion to how foreign the language is, and
-  that is alarming until you read the postings.** It rejects 63% of
-  Switzerland, 27% of Copenhagen, 16% of Stockholm, 3% of Hong Kong — exactly
-  ordered by how much of `MARKETS` the hub's language is written in. **Measured,
-  it is correct**: the Swiss and Danish rejections are retail bank advisers,
-  insurance salespeople and nurses, because the national boards carry almost no
-  markets jobs at all — the Swiss banks advertise through their own ATS boards,
-  in English. Do not "fix" this; it was checked.
-- **The `unknown` bucket is a vocabulary gap, not a broken rule, and only volume
-  showed it.** **6,604 of 6,852 had no body at all**, so it was never going to
-  be fixed by reading descriptions better; it needed occupation words. The
-  residual is mostly the deliberate backfill queue — bare `Analyst`,
-  `Associate`, `Data Scientist` — which `judge` refuses to reject on a title
-  alone and should keep refusing.
-- **A fifth of the board came off and the shortlist did not move, which is what
-  a good tightening looks like from outside.** Stages 35 and 36 together: 8,513
-  cards → 6,666, 1,515 firms → 1,137, and **"worth reading" unchanged at 224**.
-  The hand sheet's relevance agreement went **71.7% → 83.6% with zero false
-  rejections in it at either end**. When a change removes volume, the number to
-  read is the one that should *not* have moved — a shortlist that shrinks with
-  the junk means the needle was too wide, and no aggregate count says so.
-- **The reader's reclassify clicks measure the direction the labelling sheet
-  cannot, and they are worth re-reading whenever a batch accumulates.** `sample`
-  draws from a frame built to find false *rejections* — the failure this project
-  calls expensive — and by that measure the tagger is clean: **zero false
-  rejections in 152 hand-labelled rows**. The clicks measure the opposite
-  failure and found plenty: of 137 postings marked `rejected`, **97 were already
-  gated and 40 were still on the board**. Read them as four families, because
-  only two are bugs — a body-markets escape (19), an inflection gap (2), the
-  reader's own standing "`discretionary_investing` ranks rather than rejects"
-  call (9), and a markets word in the *title* of a back-office seat (5). **Check
-  which family a row is in before writing a needle for it**; two of the four are
-  working as instructed.
-- **A list of rejected ids is not a classifier, and the difference is the whole
-  point of labelling.** Gating on the model sheets by *row* removed 1,105 named
-  cards and took Singapore from 1,499 to 439 — and it was taken back out at the
-  reader's word. It does nothing for the posting that arrives tomorrow, it grows
-  without bound, and it makes the board depend on which cards a labeller was
-  shown. **The labels are evidence to mine; the mined rules are what ships.**
-- **Mining the same labels twice pays much less the second time, and that is
-  the shape to expect.** The first pass took the high-frequency phrases: three
-  categories, 51 needles. A second pass at a lower floor over the same 2,335
-  labels found 30 more needles worth **62 cards**. Title-phrase mining
-  saturates; when it does, the next lever is a different *unit*, not a longer
-  list.
-- **That unit was the employer, and it is where a national board hides its
-  noise.** `board_profile` is keyed on `(ats, token)`, which is right for a
-  firm's own board and blind for a portal: all ~95,000 MyCareersFuture postings
-  share one token, so the profile describes the portal rather than anyone
-  hiring. Profiled on `jobs.employer` instead, **3,234 employers come out
-  `non_markets`** — `RECRUIT EXPRESS`, `THE SUPREME HR ADVISORY`, `ANRADUS`,
-  agencies publishing thousands of advertisements of which the tagger reads
-  none as markets work. `non_markets_employer` is its own counted gate and
-  fires on the same double evidence as the board version: the employer has
-  shown us `MIN_BOARD` postings and none read as markets, **and** this posting
-  is one the tagger could not place. `RECRUIT EXPRESS` has nine rated
-  positively and all nine survive.
-- **Measured across all three passes: Singapore 1,499 → 1,014 cards, and the
-  shortlist never moved from 216.** Stockholm 133 → 97, the whole board
-  6,086 → 5,521. Every rule generalises — it applies to postings no labeller
-  saw, including tomorrow's.
-- **An agency signal read off the employer's *name* was measured and refused.**
-  Names containing `recruit`, `staffing`, `personnel`, `search` and the rest are
-  86% noise — and the 14% is `Quantitative Researcher` at Qube Research &
-  Technologies, a `C++ Quantitative Developer – Pricing` and an `FX Dealer`.
-  (`search` matching inside `research` is its own warning.) The employer
-  *profile* gets the same firms without the collateral, because it reads what
-  the board published rather than what the firm is called.
+- **A hub's positive count is what settles whether it is a focus hub.** The
+  table that decided the US split: New York 468, Chicago 107, Boston 75, all
+  the rest of the US 148 — against Singapore 530, Hong Kong 186, Stockholm 81,
+  Amsterdam 38, Switzerland 35, Copenhagen 17. Boston went in on 75 *and* on
+  what its postings are (State Street model risk and quant research); the Bay
+  Area's 31, Texas's 31 and Miami's 15 stayed out on that second test — wealth
+  advisers, tax principals, real-estate capital markets. **Read the positives
+  before trusting the count.**
+- **Pick the frame before believing a yield, in the mining direction as well as
+  the fingerprinting one.** Mining German trade vocabulary looked obviously
+  right — `Spülkraft`, `Vorarbeiter Logistik`, `Lastwagenmechaniker` were all
+  on the page — and the compound heads dry-run clean at scale: `-installateur`
+  3,517 live titles, `-mechaniker` 1,234, `-monteur` 855, `-techniker` 678,
+  none touching a positively-rated posting. **Their board impact is 1, 4, 3 and
+  1 cards**: the other 3,500 are already rejected on evidence somewhere else,
+  so the whole German trade family is worth about ten cards. **`-arbeiter` is
+  the one to keep out** — `sachbearbeiter` and `mitarbeiter`, the `-arbetare`
+  mistake in a third language.
+- **The source's own taxonomy is a drop list and cannot be a keep list, and the
+  number is not close.** Over 215,263 categorised live postings the best
+  category in the corpus is MyCareersFuture's `Banking and Finance` at **7.7%
+  positively rated** (2,690 postings), then `Banking and Finance, Information
+  Technology` at 9.1% on 383; everything else is under 5%. Promoting on that
+  would add ~2,500 cards to buy ~200 — and it is unnecessary, since `Banking
+  and Finance` holds only 95 `unknown` rows out of 2,690. The drop direction,
+  `_MCF_OFF_INDUSTRY`, works for the reason this does not: an off-industry
+  label is the whole answer and a finance label is not.
+- **And the mirror question was measured too: does an unambiguous quant *title*
+  deserve to outrank the source's own field?** Of 116,425 postings gated by a
+  source's occupation field, exactly **four** carry a `_QUANT_CORE` word in the
+  title — two are the Swedish industrial-maintenance firm literally named
+  *Quant* (the title trade heads reject them anyway), one is a `Head of Legal
+  Counsel` that `out_of_reach` takes, and one is `(Senior) Quantitative Risk
+  Analyst, Credit Risk Model Analysis` in Stockholm, filed by JobStream under
+  *Säkerhet och bevakning* and deleted on that basis. A real false rejection,
+  and it is one, against a rule that is deliberate and pinned by a test.
+  **A documented decision is not overturned by n=1**; the measurement is
+  recorded so it does not have to be found again.
+
+### What the labels say, and what they cannot
+
+- **`lexicon.judge`'s `keep` verdict is discarded, and it was measured twice
+  before being left alone.** `tag_posting` consumes only `reject`; a keep falls
+  through to the markets-title branch and then to `unknown` — **267 postings**,
+  half of them boilerplate, where `Network Engineer + low latency trading` and
+  `Trade Documentation Associate + financial engineering` are a firm's own
+  self-description rescuing a title `_SOFTWARE_SPECIALTY` had just rejected.
+- **The sharper version settles it, and is also why the employer rule needs
+  `not has_body`.** On the 77 quant boards — where a firm-level rescue is
+  *most* defensible — 393 postings still read `unknown` and **every one has a
+  real body**. Judge keeps 25 of the first 45, and they are `HR Analyst`,
+  `Fund Reporting Associate`, `Identity & Privileged Governance Analyst`,
+  `Network Security Engineer`, `Storage and Backup Engineer`, `Database
+  Support Engineer` — every one rescued by the two words *systematic investing*
+  in Point72's description of itself. A body naming markets is the employer
+  talking; a body naming markets *activity* is the branch `quant_body`
+  already covers.
 - **Reading the *board* is a different exercise from reading a *sample*, and it
   is the one that finds noise.** 24 labellers marked all 1,885 cards in
-  Singapore, Hong Kong and Stockholm `noise` or `keep` with a reason from a
-  fixed vocabulary: **1,318 noise to 548 keep — Singapore 73%, Stockholm 74%,
-  Hong Kong 53%.** The reason histogram is the useful part, because it says
-  what kind of noise rather than which postings: `enterprise_it` 250,
-  `ops_support` 224, `other_industry` 205, `consulting` 133,
-  `corporate_function` 131, `sales_relationship` 115, `generic_software` 114,
-  `wealth_retail` 94. Saved as `board_triage.csv`.
-- **Mine the needles from the labels, then dry-run them; do not take the rules
-  the labellers propose.** Asked for generalisable rules, they returned
-  confident lists that included *firm is HKMA* — which would delete the Market
-  Risk and Fixed Income seats that hub had just gained — plus bare `consultant`,
-  bare `intern`, `credit analyst`, `C++ developer` and `low latency`, the last
-  two being postings this project deliberately keeps. **The counts they
-  produced are evidence; the rules they wrote are not.** Every needle shipped
-  was taken from a noise title, required to appear in no keep title, and then
-  dry-run over all 382,220 live postings.
-- **The dry-run is what makes the difference, and it killed nine of the
-  obvious candidates.** Dropped for reaching a posting rated `relevant` or
-  `less_relevant`: `mortgage` (`Quantitative Strategist, Mortgage-Backed
-  Securities`), `calypso` (`Quantitative Analyst, Front Office (Calypso)`),
-  `murex` (nine, including `Murex Credit Risk System Analyst`),
-  `business analyst` (`Product Developer / Business Analyst`), `system analyst`
-  (`System Analyst - Quantitative Pricing`), `support analyst` (`Options Quant
-  Support Analyst`), `application developer` (`Low Latency Trading Application
-  Developer`), `business development` (`Trader - Fixed Income Business
-  Development`), `banking industry` (`Credit Analyst (Banking Industry)`).
-  Three more went after checking the survivors against the labels:
-  `control analyst` took `Valuation Control Analyst at Swedbank`,
-  `systems analyst` took `Systems Analyst - Equities Trading Systems`,
-  `application support` took `Senior Trading Application Support Engineer`.
-  **`business analyst` was the single largest candidate at 52 hits in the
-  unknown bucket and it still had to go** -- volume is not the test.
-- **`unknown` in Singapore is a vocabulary gap and not a missing body, which
-  is the opposite of the corpus-wide finding.** 801 of 1,499 Singapore cards
-  carry no relevance verdict and the labellers called **693 of them noise** --
-  but only **8% have no usable description**, against 38% in Hong Kong and 44%
-  in Stockholm. The tagger is reading these bodies and still cannot place them.
-  Do not reach for `bodies` here; reach for occupation vocabulary.
-- **Opening the board on `fit: Worth reading` looks like the answer and is not:
-  measured, it hides more than it removes.** It would take Singapore from
-  1,499 cards to 371 -- close to the 403 the labellers kept, which is what
-  makes it tempting -- but the *sets* disagree. Against the reading it shows
-  324 cards of which 146 are noise and **hides 225 the labellers would have
-  kept: 44% recall.** The cause is that `fit: unknown` is excluded from
-  `WORTH` and the labellers kept 100 of that bucket, so the preset gates on
-  the absence of a verdict, which is the one thing the board's gates never do.
-- **Twelve model labellers were run over 471 postings and the finding was that
-  the classifier is right, which is a result and not a failure.** Scored
-  separately: the **hand sheet is 83.6% on relevance with zero false
-  rejections**, and seniority containment is **14/14 leadership kept off the
-  board, 0 openings lost to the rank gate**. Of 469 model labels only **nine**
-  disagreed in the expensive direction, and reading them, seven are the model
-  being wrong or the tagger being defensibly right.
-- **Model labels must not go in `labels.csv`, and that is what the two sheets
-  are for.** They were written there once and it was wrong: `labels.csv` is the
-  *hand* sheet and `auto_labels.csv`'s own comment says a machine sheet becomes
-  evidence only after **the user has read and confirmed it** -- "the step that
-  turns it from an echo into evidence". Unreviewed model labels live in
-  `agent_labels.csv` and gate nothing.
+  Singapore, Hong Kong and Stockholm `noise` or `keep` with a fixed vocabulary:
+  **1,318 noise to 548 keep — Singapore 73%, Stockholm 74%, Hong Kong 53%.**
+  The reason histogram is the useful part: `enterprise_it` 250, `ops_support`
+  224, `other_industry` 205, `consulting` 133, `corporate_function` 131,
+  `sales_relationship` 115, `generic_software` 114, `wealth_retail` 94. Saved
+  as `board_triage.csv`.
+- **Mine the needles from the labels; do not take the rules the labellers
+  propose.** Asked for generalisable rules they returned confident lists
+  including *firm is HKMA* — which would delete the Market Risk and Fixed
+  Income seats that hub had just gained — plus bare `consultant`, bare
+  `intern`, `credit analyst`, `C++ developer` and `low latency`, the last two
+  being postings this project deliberately keeps. **The counts they produced
+  are evidence; the rules they wrote are not.** Every needle shipped came from
+  a noise title, appeared in no keep title, and was dry-run over all 382,220
+  live postings.
+- **The dry-run killed nine of the obvious candidates.** Dropped for reaching a
+  posting rated `relevant` or `less_relevant`: `mortgage` (`Quantitative
+  Strategist, Mortgage-Backed Securities`), `calypso` (`Quantitative Analyst,
+  Front Office (Calypso)`), `murex` (nine, including `Murex Credit Risk System
+  Analyst`), `business analyst` (`Product Developer / Business Analyst`),
+  `system analyst` (`System Analyst - Quantitative Pricing`), `support analyst`
+  (`Options Quant Support Analyst`), `application developer` (`Low Latency
+  Trading Application Developer`), `business development` (`Trader - Fixed
+  Income Business Development`), `banking industry` (`Credit Analyst (Banking
+  Industry)`). Three more went after checking survivors against the labels:
+  `control analyst` (`Valuation Control Analyst at Swedbank`), `systems
+  analyst` (`Systems Analyst - Equities Trading Systems`), `application
+  support` (`Senior Trading Application Support Engineer`). **`business
+  analyst` was the largest candidate at 52 hits and still had to go** — volume
+  is not the test.
 - **A model labeller told to prefer `adjacent` when torn will label almost
   anything `adjacent`.** The instruction was *"when genuinely torn between
-  `rejected` and `adjacent`, choose `adjacent`"* -- sound on its own and it
+  `rejected` and `adjacent`, choose `adjacent`"* — sound on its own, and it
   produced `adjacent` for `Slack Administrator`, `IT Support Engineer`,
-  `Network Security Engineer`, `AI Marketing Technologist Lead` and
-  `Account Management Lead - SMB`. The same run labelled
-  `Junior Quantitative Analyst (Credit & FI)` **rejected**. **Read what a
-  labeller promotes before treating its disagreements as bugs** -- it is the
-  needle dry-run rule applied to the grader instead of the lexicon.
-- **The two rules the model sheet flagged loudest are both correct, and the
-  measurement is what settles it.** `desk support` removes **9,072** live
-  postings and a hand-read of thirty in focus hubs is `CLEANING OPERATIONS
-  MANAGER`, `EV Battery Operations Supervisor`, `Rental Operations Agent`,
-  `HR Operations Lead` -- bare `operations` and `compliance` in
-  `_DESK_ADJACENT` are doing the work, and the *verdict* is right even where
-  "desk support" is the wrong *reason*. `crypto_web3` removes **686**, of which
-  637 never say crypto in the title -- and they are Kraken (`payward.com`, 40),
-  Galaxy, BitGo, Blockchain Capital, Castle Island. **Softening either would
-  cost hundreds of correct rejections to rescue about twenty postings.**
-- **A count threshold does not separate a crypto firm from crypto boilerplate.**
-  The obvious fix for the ~20 mainstream managers caught by `crypto_web3`
-  (State Street, T. Rowe Price, LSEG, ProFunds) is to demand two mentions.
-  Measured, the distributions are identical: **445 of 617 correct crypto-firm
-  rejections also mention it exactly once**, against 16 of 20 false ones. The
-  discriminator is the *board*, not the posting -- `lexicon.board_profile`
-  again, which is also the answer for a small quant shop whose
-  `Machine learning researcher` reads `unknown`.
-- **The body-level markets anchor is 96% precise and does not need fixing.**
-  102 postings are kept by a single body quant phrase plus a body markets word;
-  **`trading` alone does 68 of them and they are XTX and Squarepoint
-  engineers**, correctly kept. The bad ones are three: a neuroscience
-  `Principal Research Scientist` anchored on *asset management*, an insurance
-  `Catastrophe Risk Modeler` on *risk analytics*, and the `Computational
-  Chemist` on **`reference data`** -- the same posting `_markets`'s own
-  docstring names as the failure it was written to stop. One posting each;
-  `reference data` stays in `MARKETS` because it is a real markets title on the
-  other 38.
+  `Network Security Engineer`, `AI Marketing Technologist Lead` and `Account
+  Management Lead - SMB`, while the same run labelled `Junior Quantitative
+  Analyst (Credit & FI)` **rejected**. **Read what a labeller promotes before
+  treating its disagreements as bugs** — the needle dry-run rule applied to the
+  grader.
+- **Model labels must not go in `labels.csv`.** They were written there once
+  and it was wrong: `labels.csv` is the *hand* sheet, and a machine sheet
+  becomes evidence only after the user has read and confirmed it — "the step
+  that turns it from an echo into evidence". `agent_labels.csv` has since had
+  that reading and is scored beside the other two.
+- **Scoring a third sheet made the exit criterion unreadable, and naming the
+  sheet is the fix.** *No false rejection* went from **0 to 78** the moment
+  `agent_labels.csv` joined `labels.SHEETS` — not because the tagger moved but
+  because the grader is worse. Every disagreement now carries the file it came
+  from and the block leads with the tally, which keeps "the hand sheet still
+  has zero" visible instead of buried. **The blended number is the one to
+  distrust**: three sheets of unequal quality averaged together measure the
+  labellers, not the lexicon.
+- **Score the sheets by re-tagging live, not by reading `job_tags`, when the
+  question is whether a change helped.** `labels.score` reads stored tags,
+  which are whatever the last `tag` run wrote — so a comparison across a
+  lexicon edit silently compares the new sheet against the old classifier.
+  Measured that way in one process against both: the hand sheet is **67.7%
+  before and 68.4% after** the `MARKETS_EMPLOYER` split with zero false
+  rejections at both ends, `auto_labels.csv` **77.9% → 79.2%** and
+  `agent_labels.csv` **45.0%** unmoved. **The 84.9% recorded here previously is
+  stale**, as is the 71.7% → 83.6% progression beside it; both were true of a
+  lexicon several versions back and the file kept quoting them.
+- **The reader's reclassify clicks measure the direction the labelling sheet
+  cannot, and are worth re-reading whenever a batch accumulates.** `sample`
+  draws from a frame built to find false *rejections* — the failure this
+  project calls expensive — and by that measure the tagger is clean: **zero
+  false rejections in 152 hand-labelled rows**. The clicks measure the opposite
+  failure and found plenty: of 137 postings marked `rejected`, **97 were
+  already gated and 40 were still on the board**. Read them as four families,
+  because only two are bugs — a body-markets escape (19), an inflection gap
+  (2), the reader's own standing "`discretionary_investing` ranks rather than
+  rejects" call (9), and a markets word in the *title* of a back-office seat
+  (5). **Check which family a row is in before writing a needle for it**; two
+  of the four are working as instructed.
 - **A labelled disagreement and a labelled non-answer are different facts, and
   one number hid it.** `labels` prints both: `wrong` is what a lexicon fix can
   move, `unanswered` is not, and only the first is evidence of a bug.
 - **Seniority is scored by what it is for, not by agreement on a rung.**
   `labels.containment` asks the two questions with consequences — how much
-  labelled leadership the board withholds, and how many wanted postings the rank
-  gate removed — and reports them separately, because netting them off would
-  hide both.
+  labelled leadership the board withholds, and how many wanted postings the
+  rank gate removed — and reports them separately, because netting them off
+  would hide both.
 - **A fixture drawn from the top of the shortlist can only find false
   positives**, while the exit criterion is *no false rejection*. **But
-  stratifying over the whole corpus is the opposite mistake**: 30% `out_of_scope`
-  is housekeepers and van drivers, and the notes came back *"nothing to do with
-  finance"*. **A false rejection can only hide among postings that could
-  plausibly be in scope.** `labels._candidates` draws from a frame of ~2,000.
+  stratifying over the whole corpus is the opposite mistake**: 30%
+  `out_of_scope` is housekeepers and van drivers, and the notes came back
+  *"nothing to do with finance"*. **A false rejection can only hide among
+  postings that could plausibly be in scope** — `labels._candidates` draws from
+  a frame of ~2,000.
+
+### Rules the measurements defended
+
+- **The two the model sheet flagged loudest are both correct.** `desk support`
+  removes **9,072** live postings and a hand-read of thirty in focus hubs is
+  `CLEANING OPERATIONS MANAGER`, `EV Battery Operations Supervisor`, `Rental
+  Operations Agent`, `HR Operations Lead` — bare `operations` and `compliance`
+  in `_DESK_ADJACENT` are doing the work, and the *verdict* is right even where
+  "desk support" is the wrong *reason*. `crypto_web3` removes **686**, of which
+  637 never say crypto in the title — Kraken (`payward.com`, 40), Galaxy,
+  BitGo, Blockchain Capital, Castle Island. **Softening either would cost
+  hundreds of correct rejections to rescue about twenty postings.**
+- **A count threshold does not separate a crypto firm from crypto
+  boilerplate.** The obvious fix for the ~20 mainstream managers caught by
+  `crypto_web3` (State Street, T. Rowe Price, LSEG, ProFunds) is to demand two
+  mentions; measured, the distributions are identical — **445 of 617 correct
+  crypto-firm rejections also mention it exactly once**, against 16 of 20 false
+  ones. The discriminator is the *board*, not the posting —
+  `lexicon.board_profile` again, which is also the answer for a small quant
+  shop whose `Machine learning researcher` reads `unknown`.
+- **The body-level markets anchor is 96% precise and does not need fixing.**
+  102 postings are kept by a single body quant phrase plus a body markets word;
+  **`trading` alone does 68 of them and they are XTX and Squarepoint
+  engineers**, correctly kept. The bad ones are three: a neuroscience
+  `Principal Research Scientist` on *asset management*, an insurance
+  `Catastrophe Risk Modeler` on *risk analytics*, and the `Computational
+  Chemist` on **`reference data`** — the posting `_markets`'s own docstring
+  names as the failure it was written to stop. One each; `reference data` stays
+  in `MARKETS` because it is a real markets title on the other 38.
+- **An agency signal read off the employer's *name* was measured and refused.**
+  Names containing `recruit`, `staffing`, `personnel`, `search` and the rest
+  are 86% noise — and the 14% is `Quantitative Researcher` at Qube Research &
+  Technologies, a `C++ Quantitative Developer – Pricing` and an `FX Dealer`.
+  (`search` matching inside `research` is its own warning.) The employer
+  *profile* gets the same firms without the collateral, because it reads what
+  the board published rather than what the firm is called.
+- **Opening the board on `fit: Worth reading` looks like the answer and is
+  not.** It would take Singapore from 1,499 cards to 371 — close to the 403 the
+  labellers kept, which is what makes it tempting — but the *sets* disagree: it
+  shows 324 cards of which 146 are noise and **hides 225 the labellers would
+  have kept, 44% recall**. `fit: unknown` is excluded from `WORTH` and the
+  labellers kept 100 of that bucket, so the preset gates on the absence of a
+  verdict, which is the one thing the board's gates never do.
+
+### What a good change looks like from outside
+
+- **A list of rejected ids is not a classifier, and the difference is the whole
+  point of labelling.** Gating on the model sheets by *row* removed 1,105 named
+  cards and took Singapore from 1,499 to 439 — taken back out at the reader's
+  word. It does nothing for the posting that arrives tomorrow, grows without
+  bound, and makes the board depend on which cards a labeller was shown. **The
+  labels are evidence to mine; the mined rules are what ships.**
+- **Mining the same labels twice pays much less the second time.** The first
+  pass took the high-frequency phrases: three categories, 51 needles. A second
+  pass at a lower floor over the same 2,335 labels found 30 more worth **62
+  cards**. Title-phrase mining saturates; when it does, the next lever is a
+  different *unit*, not a longer list.
+- **That unit was the employer, and it is where a national board hides its
+  noise.** `board_profile` is keyed on `(ats, token)`, which is right for a
+  firm's own board and blind for a portal: ~95,000 MyCareersFuture postings
+  share one token, so the profile describes the portal rather than anyone
+  hiring. Profiled on `jobs.employer` instead, **3,234 employers come out
+  `non_markets`** — `RECRUIT EXPRESS`, `THE SUPREME HR ADVISORY`, `ANRADUS`.
+  `non_markets_employer` fires on the same double evidence as the board
+  version: `MIN_BOARD` postings and none reading as markets, **and** a posting
+  the tagger could not place. `RECRUIT EXPRESS` has nine rated positively and
+  all nine survive.
+- **The number to read after a tightening is the one that should *not* have
+  moved.** Three shapes of the same result, and the shortlist is the constant
+  in all three: Singapore 1,499 → 1,014 cards with the shortlist unmoved at
+  216 and the whole board 6,086 → 5,521; stages 35–36 together took 8,513
+  cards → 6,666 and 1,515 firms → 1,137 with "worth reading" unchanged at 224;
+  the `MARKETS_EMPLOYER` split took 4,565 → 4,365, unread cards 41% → 38%, and
+  the shortlist 201 → 202. **A shortlist that shrinks with
+  the junk means the needle was too wide, and no aggregate count says so.**
+- **When it does move, every card has to be attributable.** A quarter of the
+  board came off in one stage — 6,120 → 4,459 cards, `unknown` 3,635 → 1,843,
+  placeless cards 941 → 251 — and of the 216 cards that were `apply_now` or
+  `strong`, **194 stayed and every one of the 22 that left has a named rule**:
+  eight PhD-required seats gated, six `Experienced Trader` postings and two
+  recruiters demoted, two caught by the department fix, one gated once its
+  location arrived. *No unexplained loss* is the claim to make.
+- **Twelve model labellers over 471 postings found that the classifier is
+  right, which is a result and not a failure.** Seniority containment was
+  **14/14 leadership kept off the board, 0 openings lost to the rank gate**; of
+  469 model labels only **nine** disagreed in the expensive direction, and
+  reading them, seven are the model being wrong or the tagger being defensibly
+  right.
 
 ## Tagger versioning
 
@@ -2173,6 +2958,21 @@ posting changing.
   current.** `tag` only visits postings with no row at the *current* version, so
   after an unbumped edit it reports `tagged 0 postings` and every summary keeps
   serving the old answers.
+- **That had happened, and nothing detected it.** 53 postings in this database
+  carried a verdict at version 58 that version 58's own code no longer
+  produced. `tagging.fingerprint` hashes every needle list both modules hold,
+  `tag` stamps it into `tagger_state` on every run — including a run with
+  nothing to do, which is the *normal* shape of this failure — and
+  `alerts.check` reports a `lexicon` alert when the stored hash and the current
+  one part company. It hashes the needles rather than the source, so a comment
+  or a refactor is free.
+- **A fingerprint over module state has to be ordered, and the first version
+  was not.** `_STOPWORD_LANGUAGES` is built by walking `frozenset`s, and set
+  order follows string hashing, which Python randomises per process — so the
+  hash differed on every run and the alert fired on a database that had *just*
+  been re-tagged. **An alert that always fires is worse than no alert**;
+  `tests/test_alerts` pins it against a second interpreter rather than a second
+  call.
 - **`job_tags` does not keep retired lexicon versions.** The primary key omits
   `tagger`, so `INSERT OR REPLACE` overwrites the previous version's row
   whenever a posting keeps the same value — only rows whose value *changed*
@@ -2195,11 +2995,171 @@ posting changing.
 # What is actually slow, measured rather than assumed
 
 **Matching is half of a re-tag, and the fix is an index rather than a shorter
-list.** A needle can only match if its first word is a token of the text, so
-`lexicon._index` skips most of a 600-needle list on a set lookup. With one
-translate pass in `fold`, each field folded once and composed rather than
-re-folded, and an inverted stopword index in `posting_language`, a 17,417-posting
-sample went **52.7s → 13.8s (3.8x)** with byte-identical output.
+list.** A needle can only match if its words are tokens of the text, so
+`lexicon._index` files each phrase under one of them and only the intersection
+of that key set with the text's tokens is ever looked at. With one translate
+pass in `fold`, each field folded once and composed rather than re-folded, and
+an inverted stopword index in `posting_language`, a 17,417-posting sample went
+**52.7s → 13.8s (3.8x)** with byte-identical output.
+
+**Then a further 1.6x, and the three changes are worth separating because only
+one of them is an algorithm.**
+
+- **Take the smaller side.** `set & set` iterates whichever side is shorter, in
+  C, and which side that is genuinely varies: a folded title is six tokens
+  against a list of hundreds, a folded body is thousands of tokens against a
+  list of thirty. Measured over 5,000 real postings: 404,763 matches, 74.6% of
+  them against a text holding fewer tokens than the list holds phrases, and
+  13.7M phrase tests against 2.9M for taking the smaller side each time. It
+  also *removed* a branch — one loop replaced two.
+- **File a phrase under its rarest word, not its first.** Any word of the
+  phrase is correct — it cannot match unless all of them are present, and the
+  padded substring test settles it either way — so the only question is which
+  key is most selective. `_SPOKEN_REQUIRED` is 1,386 phrases built from 35
+  frames crossed with 12 languages, where *fluent* keys hundreds and
+  *portuguese* keys 35.
+- **Match a ladder as one index.** `tagging` holds eleven dicts of needle
+  lists, the widest fifteen rungs deep, and asking them rung by rung walked the
+  same tokens once per rung. Flattened, a rung's position in the
+  concatenation *is* its priority, so the lowest matching position is the first
+  rung that hits and no ordering has to be reconstructed. 677,000 list walks
+  become 180,000.
+
+Two smaller ones beside them: `fold` skips its markup pass when there is no
+`<` and its transliteration when the text `isascii()` (both exact, and four
+fifths of the corpus takes them), and `lexicon.normalize` is `lru_cache`d
+because `judge` and every `tagging._markets` branch normalize the same body.
+Measured with both variants alternating **in one process**, so frequency
+scaling hits both: **8.44s → 5.17s of CPU per 5,000 postings, 1.6x, output
+identical tag for tag**. A full re-tag of 509,561 postings is 10m22s wall.
+
+**Benchmark two variants in the same process or not at all.** The first
+measurements of this ran them in separate interpreters and came back anywhere
+between 0.9x and 3.0x, because the machine's clock scaling moves more than the
+change does. Alternating them inside one process, and alternating the *order*
+between rounds so neither always runs on the colder heap, is what made the
+number stable.
+
+**The national boards were run one after another against six different
+hosts.** `runs` records every Layer 4 poll's start, so consecutive starts are
+step durations, and they said: Denmark 33.6 min, Sweden 4.3, Switzerland 0.8,
+Singapore ~70, Hong Kong ~50 -- about **160 minutes of sum where the longest
+is 70**. `daily` gathers them concurrently now.
+
+**The politeness question is the only one that matters here, and it is
+arithmetic rather than judgement.** `http._throttle` books per *host* under a
+lock, so this changes how many hosts are in flight and nothing about the rate
+any one sees. Measured three ways: 4 slots × 3 hosts go 9.0s → 3.0s
+synthetically and 3.53s → 1.22s live, while **12 concurrent callers to a
+single host still take 11 seconds** -- identical to one caller making twelve
+requests. That last measurement is the one pinned as a test.
+
+**Threads, never subprocesses.** Separate processes each keep their own
+`http._last_hit`, so two steps sharing a host -- `jobs` and `pages` both reach
+firm domains -- would each grant themselves the full rate and silently double
+it.
+
+**And the report has to survive concurrency.** `redirect_stdout` swaps a
+process-global, so six steps would each capture the other five;
+`cli._ThreadStream` routes by thread instead. That works *only because every
+`print` in this project lives in `cli.py`* -- a debug line added inside
+`extract` or `pages` would run on a worker thread, escape the capture and
+shred the report, visibly only under concurrency. There is a test that walks
+the package for stray prints, and it was verified by planting one.
+
+**More workers is the obvious next idea and it is measured wrong.** The
+`bodies` queue is 4,015 rows over **178 hosts** against 12 workers, which
+looks worker-bound -- and 1,963 of those rows are one host at four seconds, so
+the pass is bounded at 2.2 hours by the throttle while eleven workers sit
+idle. The tell is **one established TCP connection and flat CPU**. Check what
+the pass is actually waiting on before adding threads to it.
+
+**And the sentence above names the whole of `daily --full`, which was the next
+thing measured.** A `--full` run was watched live: **3h50m of wall clock for 16
+minutes of CPU**, one established connection, and that connection was Hong
+Kong. Every one of the six Layer 4 sources had already recorded `ok=1` -- the
+gather phase was finished inside 70 minutes and the run was still in `bodies`
+three hours later. **95% of a full run is waiting, and about 75% of the waiting
+is one host.** Before reaching for threads anywhere in this project, get the
+per-host request count: it is the only number that moves a pass bounded by
+`http._throttle`, and no arrangement of workers changes it.
+
+**Hong Kong's bodies cost two requests each and now cost about one.** The card
+is addressed by a `?order=` token that expires, so `bodies.iesjobs_body` mints
+one per posting with a POST search and then fetches the card -- 8 seconds a
+posting at this host's four, single file. **The portal's own list prints a
+freshly minted card link beside every row it renders, twenty to a page**, which
+`iesjobs._job` was already capturing and deliberately throwing away (correctly:
+`jobs.url` must not hold a token that dies in hours). `iesjobs.card_links`
+returns it to a caller that spends it inside the minute, and
+`bodies._iesjobs_pass` walks the job-type slices minting in bulk. Measured on a
+live queue of 864 postings: **1,085 requests against 1,728, 72 minutes against
+115.**
+
+- **The rate is untouched and that was the reader's explicit call.** Four
+  seconds a request stands, because it is what this project offers in exchange
+  for reading a board whose `robots.txt` says no. The lever was the request
+  *count*, which is the same distinction the 429 note draws one file over:
+  slowing down is compliance, and asking for less is engineering.
+- **Batching the search was tried first and the portal refuses it.** A
+  space-separated list of order numbers matches nothing, a comma-separated one
+  matches nothing, and so does a prefix -- all three measured. The token itself
+  decodes to 32 bytes of ciphertext, so it cannot be minted locally either.
+- **Harvesting is not always cheaper, and a slice that does not pay must be
+  abandoned.** For a slice holding W wanted postings the search costs 2W and
+  paging costs P + W, so paging wins exactly when **P < W** -- which turns on
+  how thinly the wanted postings are spread and is not knowable in advance.
+  `Others` wants 331 and reaches them in 80 pages (411 against 662);
+  `Management / Administration` wants 23 spread over 41 pages and would cost 64
+  against 46. So the loop keeps paging only while the pages spent stay below
+  the postings found. **An optimisation with no bail-out is a pessimisation on
+  the inputs it was not measured against.**
+- **The fallback is the old path in full, so trying costs nothing that matters.**
+  A posting no page yields -- withdrawn since the walk, a renamed facet, a
+  failed page -- goes to the search unchanged.
+- **The expiry check and the identity check are one line, and it fails closed.**
+  A stale token answers **HTTP 200** with the vacancy-search page and no card;
+  a search that matched the wrong posting answers with somebody else's card.
+  Both are the same absent-or-wrong `data-ordno`, both yield nothing, and the
+  posting stays in the queue. That is what makes a harvested token safe to
+  attempt rather than something to reason about.
+- **The split is counted and printed**, because falling back is otherwise
+  silent: if the list markup moves, every slice is abandoned on page one, every
+  posting takes the slow route, and the only symptom is that Hong Kong is slow
+  again. `cli._bodies` prints `harvested` against `searched`.
+
+**`bodies` now runs two strategies at once, and the writer stays in one
+thread.** Hong Kong is one host, so `_spread` can do nothing with it and twelve
+workers are eleven workers waiting; it is walked sequentially while every other
+source goes through the pool, the two feeding a queue that the calling thread
+drains. `db.connect` hands out a connection bound to the thread that made it,
+which is why the writing did not move. **An exception in a producer is carried
+across the thread boundary and re-raised** rather than swallowed -- it no
+longer propagates out of `pool.map` on its own, and a fetcher meeting a shape
+it does not expect must still end the pass loudly or a schema change reads as a
+zero-filled run.
+
+**Classification is the one genuinely CPU-bound stage and it was single
+threaded.** 2.99 ms a posting, so a full 509,561-posting re-tag is ~25 minutes
+of one core with seven idle. `tagging.run` maps it over a **process** pool --
+the only pool in this project that is not threads, because unlike `bodies`,
+`jobs`, `pages` and `_gather` it never waits on a socket and so never releases
+the GIL. Measured over 40,000 real postings: **36.8s -> 9.4s, 3.9x, with
+byte-identical output.**
+
+- **The output being identical is the assertion, not the row count.** A pool
+  that classified *differently* writes the same number of rows into the same
+  columns and every summary stays plausible; only the verdicts move.
+  `tests/test_tagging.ParallelTaggingAgreesTest` pins the tuples.
+- **`_QUANT_BOARDS` is module state and a spawned worker inherits none of it.**
+  Left unset it does not fail -- it switches both employer branches of
+  `tag_posting` off for every posting the pool touches, which is a different
+  classifier reporting success. It is measured once in the parent and shipped
+  through the pool's `initializer`.
+- **There is a floor at 20,000 postings and it is not decoration.** Windows
+  spawns rather than forks, so each worker re-imports `tagging` and `lexicon`
+  at about a second apiece. A `daily` run tagging a few thousand new postings
+  would spend more starting the pool than doing the work.
 
 **`postings()` needed an index nobody had noticed was missing.** It asks "is
 this posting tagged at the current version" as a correlated `NOT EXISTS` on
@@ -2232,6 +3192,16 @@ changed: `targets` still picks the newest rows, `_spread` only decides which to
 fetch first among them. **12 minutes is the floor** — the largest tenant has 723
 rows and the throttle allows one a second, so a pass is never shorter than its
 biggest board. That is the number to check before suspecting `_spread`.
+
+**A fixture that caches a column the database owns is the expensive kind of
+big.** The three labelling sheets were 4.3 MB and **3.6 MB of it was
+`jobs.description`, copied verbatim** — in git, rewritten whole on every
+redraw. The instinct is to reach for a binary format; measured, every one of
+them loses to not storing the column: **SQLite as a table is 4.9 MB — larger**,
+CSV+gzip 1.4 MB, CSV+xz 0.9 MB, against **604 KB** for dropping it, and Parquet
+would sit with the compressors while costing the stdlib-only rule, the git
+diff, the Excel edit and `serve.py`'s write path. **Ask what a file is
+duplicating before asking what format it is in.**
 
 **Writes are ~2 minutes per full re-tag and WAL plus `synchronous=NORMAL` is
 worth only 1.1x on them** — it is in `db.connect` for the concurrency, not the

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import sqlite3
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from quantscraper import db, jobstream
 
@@ -20,7 +20,6 @@ def _memory(test: unittest.TestCase) -> sqlite3.Connection:
     test.addCleanup(connection.close)
     connection.row_factory = sqlite3.Row
     connection.executescript(db.SCHEMA)
-    connection.executescript(jobstream.SCHEMA)
     return connection
 
 

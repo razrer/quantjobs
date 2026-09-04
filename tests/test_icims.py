@@ -624,3 +624,45 @@ class HomerunTest(unittest.TestCase):
         empty = b'<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"/>'
         with mock.patch.object(extract.http, "get", return_value=empty):
             self.assertEqual(extract.homerun("acme"), [])
+
+
+class JobviteTwoLayoutsTest(unittest.TestCase):
+    """**A vendor ships two list layouts and a firm may run either** -- the
+    SuccessFactors lesson one vendor over. Jobvite's *table* labels the cell
+    that contains the anchor; its *card list* puts the anchor first and the
+    name and location in `<div>`s inside it. They agree on the class names and
+    on nothing else, so the table pattern read zero on a card board while the
+    board advertised `1-3 of 3`.
+    """
+
+    CARD = (
+        '<span>1-2 of 2</span>'
+        '<ul class="jv-job-list list-unstyled">'
+        '<li><a href="/acme/job/oZQuAfwD" class="jv-button jv-button-primary">'
+        '<div class="jv-job-list-name">Quantitative Researcher</div>'
+        '<div class="jv-job-list-location ml-auto">Regina, Saskatchewan</div>'
+        '<div class="arrow"></div></a></li>'
+        '<li><a href="/acme/job/oHKtAfwe" class="jv-button">'
+        '<div class="jv-job-list-name">Trader</div>'
+        '<div class="jv-job-list-location ml-auto">London</div></a></li></ul>'
+    )
+
+    def test_the_card_layout_is_read(self):
+        found = extract._JOBVITE_CARD.findall(self.CARD)
+        self.assertEqual([(i, " ".join(t.split())) for i, t, _ in found],
+                         [("oZQuAfwD", "Quantitative Researcher"), ("oHKtAfwe", "Trader")])
+
+    def test_the_location_class_may_carry_other_classes(self):
+        """`class="jv-job-list-location ml-auto"` cost every location on the
+        boards that write it, because the pattern wanted a quote where the
+        markup has a space."""
+        places = [" ".join(p.split()) for _, _, p in extract._JOBVITE_CARD.findall(self.CARD)]
+        self.assertEqual(places, ["Regina, Saskatchewan", "London"])
+
+    def test_the_table_layout_still_wins_where_it_matches(self):
+        """Not unioned: the two are alternative renderings of one list, so a
+        board answering to both would be one board counted twice."""
+        table = ('<td class="jv-job-list-name"><a href="/acme/job/aaaa">Quant Trader</a></td>'
+                 '<td class="jv-job-list-location">Chicago</td>')
+        self.assertEqual(extract._JOBVITE_NAME.findall(table),
+                         [("aaaa", "Quant Trader")])

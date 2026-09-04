@@ -33,6 +33,7 @@ after the first run is approximately never. A publish is two uploads.
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -51,6 +52,21 @@ SITE = "https://quantjobs.spawned.app"
 # one, and a search engine indexing this would re-publish other sites' listings
 # under ours.
 FILES = ("index.html", "data.js", "robots.txt")
+
+
+def _check(path: Path, floor: int) -> None:
+    """Refuse to publish a board that is not one. See `main` for why."""
+    if not path.exists():
+        raise SystemExit(f"{path} is missing -- run `python web/build_data.py` first")
+    text = path.read_text(encoding="utf-8")
+    payload = json.loads(text[text.index("=") + 1:].rstrip().rstrip(";"))
+    cards = len(payload.get("jobs", ()))
+    if cards < floor:
+        raise SystemExit(
+            f"REFUSED: {path.name} holds {cards:,d} postings, under the floor of"
+            f" {floor:,d}. Rebuild before publishing; nothing was uploaded."
+        )
+    print(f"  {path.name:<11} {cards:,d} postings, tagger {payload.get('tagger')}")
 
 
 def _upload(name: str) -> None:
@@ -95,11 +111,21 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    if not args.no_build:
-        sys.path.insert(0, str(WEB))
-        import build_data
+    sys.path.insert(0, str(WEB))
+    import build_data
 
+    if not args.no_build:
         build_data.main()
+
+    # **`--no-build` skips the only thing that checks the board is a board.**
+    # `build_data` refuses to write a `data.js` under `MIN_CARDS` -- the floor
+    # every registry and national board here already has -- and this flag
+    # exists precisely to publish a file that step did not just produce. So the
+    # file is measured again on the way out, cheaply: the count is in the
+    # payload and reading it costs one parse of a 3 MB file. A publish that
+    # ships an empty board is the failure this project is least able to notice,
+    # because the page still loads.
+    _check(WEB / "data.js", build_data.MIN_CARDS)
 
     for name in FILES:
         _upload(name)

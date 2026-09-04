@@ -33,7 +33,7 @@ import urllib.parse
 import xml.etree.ElementTree as ElementTree
 from collections.abc import Callable
 
-from . import db, http
+from . import db, http, parsing
 from .models import Job
 
 # Workday rejects anything larger, and on some tenants does so silently.
@@ -48,22 +48,9 @@ _WORKDAY_PAGES = 1_000
 _TAGS = re.compile(r"<[^>]+>")
 
 
-def _text(value: str | None) -> str | None:
-    """Readable text from a fragment of markup.
-
-    **Entities are decoded, and they were not.** The formats that hand over
-    HTML rather than JSON hand over its escaping too, so Coeli's
-    `Operativ chef för Business &amp; Risk Operations` arrived with the `&amp;`
-    intact and folded to the token `amp` -- a word in no lexicon, sitting in
-    the middle of a title, and `tagging.py` reads the title before anything
-    else. Swedish is worse than the ampersand: this markup spells `ä` as
-    `&#xE4;`, so a title could fold to something no needle matches at all,
-    which is the same shape as the `fold` bug that silently disabled every
-    Swedish rule in the file.
-    """
-    if not value:
-        return None
-    return " ".join(html.unescape(_TAGS.sub(" ", value)).split()) or None
+# One definition, in `parsing`, which owns reading markup. Kept under the old
+# name here because `sites.py` and a dozen readers below call it by that name.
+_text = parsing.text
 
 
 def _json(url: str, **kwargs) -> object:
@@ -293,6 +280,75 @@ def breezy(token: str) -> list[Job]:
 
 
 def personio(token: str) -> list[Job]:
+    """Personio, from the XML feed rather than `search.json`.
+
+    **`search.json` publishes `"description": ""` on every posting**, which is
+    how this source sat at **0% in `bodies.coverage`** with 149 postings and no
+    fetcher -- a board answering 200 with a field that is present and empty,
+    which reads as "this employer wrote nothing" rather than as a gap.
+
+    The XML feed is the same board, **the same ids** (26 of 26 overlap, checked
+    against `search.json` before this was switched, because a new id space
+    would have orphaned every stored row) and carries what the JSON does not:
+    the prose, split across named sections, plus `createdAt`,
+    `yearsOfExperience` and `occupationCategory` -- Personio's own occupation
+    taxonomy, which is the field `Job.category` exists for.
+
+    One request per board either way, so this costs nothing.
+
+    **The feed is a fallback and not a replacement, which was measured rather
+    than assumed.** Of the 25 boards held here, **four answer HTTP 404 on
+    `/xml` while serving `search.json` normally** -- `7orca`, `cflox-gmbh`,
+    `real-garant-versicherung-ag` and `rudolf`, 22 postings between them. A
+    tenant can switch the feed off. Reading only the XML would have taken those
+    boards silently to zero, which is "this vendor is closed" written as a
+    reader instead of as a note.
+    """
+    try:
+        body = http.get_text(
+            f"https://{token}.jobs.personio.de/xml", timeout=25, retries=2
+        )
+        root = ElementTree.fromstring(body)
+    except (urllib.error.HTTPError, ElementTree.ParseError):
+        return _personio_json(token)
+
+    jobs: list[Job] = []
+    for position in root.iter("position"):
+        job_id = (position.findtext("id") or "").strip()
+        if not job_id:
+            continue
+        # Sections joined rather than picked: `Your Responsibilities` is where
+        # the years figure and the degree requirement live, and the first
+        # section is usually the firm describing itself.
+        prose = " ".join(
+            value.text or ""
+            for value in position.iterfind("jobDescriptions/jobDescription/value")
+        )
+        jobs.append(
+            Job(
+                ats="personio",
+                token=token,
+                job_id=job_id,
+                title=_text(position.findtext("name")) or "",
+                url=f"https://{token}.jobs.personio.de/job/{job_id}",
+                location=_text(position.findtext("office")),
+                department=_text(position.findtext("department")),
+                category=_text(position.findtext("occupationCategory")),
+                posted_at=(position.findtext("createdAt") or "").strip() or None,
+                description=_text(prose),
+            )
+        )
+    return jobs or _personio_json(token)
+
+
+def _personio_json(token: str) -> list[Job]:
+    """The list `search.json` publishes, for a tenant with no XML feed.
+
+    Every field the XML has except the one that matters: `description` is
+    present on every row and empty on every row. Kept because a posting with
+    no body is still a posting, and `bodies` has nowhere to fetch one from
+    here -- the job page is a client-side app.
+    """
     payload = _json(f"https://{token}.jobs.personio.de/search.json")
     return [
         Job(
@@ -458,6 +514,28 @@ _JOBVITE_NAME = re.compile(
 _JOBVITE_PLACE = re.compile(
     r'jv-job-list-location["\'][^>]{0,80}>([\s\S]{0,300}?)</td>', re.I
 )
+# **The second layout, and it is the SuccessFactors lesson one vendor over.**
+# Jobvite ships two: a *table*, where `jv-job-list-name` labels the cell that
+# contains the anchor (above), and a *card list*, where the anchor comes first
+# and the name and location are `<div>`s inside it. They agree on the class
+# names and on nothing else, so the table pattern finds zero on a card board --
+# a board answering HTTP 200 and coming back empty, which is the failure this
+# project is least able to see. `addendacapital` advertised `1-3 of 3` and
+# `mercycorps` 32, and both read as nought.
+#
+# One pattern rather than the two passes the table needs, because here the two
+# fields are inside the same anchor and the span between them is short and
+# bounded -- 200 characters, which is the rule the stalled `ats` runs left.
+_JOBVITE_CARD = re.compile(
+    r'/job/([A-Za-z0-9]{1,24})["\'][^>]{0,200}>[\s\S]{0,200}?'
+    # `[^>]{0,80}` rather than a quote straight after the class name: the
+    # class attribute carries layout classes beside it on some boards --
+    # `class="jv-job-list-location ml-auto"` -- and requiring the quote read
+    # the title and dropped every location.
+    r'jv-job-list-name[^>]{0,80}>([\s\S]{0,200}?)</div>'
+    r'(?:[\s\S]{0,200}?jv-job-list-location[^>]{0,80}>([\s\S]{0,300}?)</div>)?',
+    re.I,
+)
 # "1-50 of 73". The board states its own size, which is the cheapest possible
 # check that paging reached the end.
 _JOBVITE_TOTAL = re.compile(r"\d{1,6}\s*-\s*\d{1,6}\s+of\s+(\d{1,6})", re.I)
@@ -511,9 +589,18 @@ def jobvite(token: str) -> list[Job]:
         # which deletes a posting rather than mis-ranking it.
         if len(places) != len(names):
             places = [None] * len(names)
+        entries = [(i, t, p) for (i, t), p in zip(names, places)]
+        # The card layout, tried when the table found nothing. Not unioned:
+        # the two are alternative renderings of one list, so a board that
+        # answered to both would be one board counted twice.
+        if not entries:
+            entries = [
+                (job_id, title, " ".join(_TAGS.sub(" ", place).split()) or None)
+                for job_id, title, place in _JOBVITE_CARD.findall(body)
+            ]
 
         fresh = 0
-        for (job_id, title), place in zip(names, places):
+        for job_id, title, place in entries:
             if job_id in seen:
                 continue
             seen.add(job_id)

@@ -26,17 +26,23 @@ with its padding, the same trick `domains.py` uses on firm names.
 
 from __future__ import annotations
 
+import hashlib
+import os
 import re
 import sqlite3
+import sys
 from collections import Counter
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 
 from . import db, lexicon
 
 # Bump on every lexicon change: the diff between two versions over the same
 # corpus is a free regression test, and it is the only way to tell "the
-# classifier improved" from "the market moved".
-TAGGER = 55
+# classifier improved" from "the market moved". **Forgetting is now loud** --
+# see `fingerprint`, which records what wrote each version's tags so that
+# `alerts` can say when the two have parted company.
+TAGGER = 62
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS job_tags (
@@ -59,6 +65,15 @@ CREATE INDEX IF NOT EXISTS job_tags_by_value ON job_tags (dimension, value);
 -- posting -- one per dimension per version still in the table -- to test
 -- `tagger`. Measured: 18 seconds to return 50,529 rows, against a seek.
 CREATE INDEX IF NOT EXISTS job_tags_by_tagger ON job_tags (ats, token, job_id, tagger);
+
+-- Which lexicon wrote each version's tags. One row per `TAGGER`, so a version
+-- edited without being bumped is a fact rather than a surprise. See
+-- `fingerprint`.
+CREATE TABLE IF NOT EXISTS tagger_state (
+    tagger     INTEGER PRIMARY KEY,
+    lexicon    TEXT NOT NULL,
+    stamped_at TEXT NOT NULL
+);
 """
 
 _TAGS = re.compile(r"<[^>]+>")
@@ -155,9 +170,20 @@ _STRIP = re.compile(r"[^a-z0-9+#]+")
 
 
 def fold(*parts: str | None) -> str:
-    """Everything folded to lowercase ASCII tokens, padded so needles can be too."""
+    """Everything folded to lowercase ASCII tokens, padded so needles can be too.
+
+    Both guards are exact rather than approximate, which is what makes them
+    safe on the hot path of every re-tag: markup cannot be stripped from text
+    holding no `<`, and every key of `_ASCII` is outside ASCII, so a string
+    that already is ASCII is its own transliteration. Four fifths of this
+    corpus takes both shortcuts.
+    """
     text = " ".join(part for part in parts if part)
-    text = _TAGS.sub(" ", text).casefold().translate(_ASCII)
+    if "<" in text:
+        text = _TAGS.sub(" ", text)
+    text = text.casefold()
+    if not text.isascii():
+        text = text.translate(_ASCII)
     for symbol, replacement in _SYMBOLS:
         text = text.replace(symbol, replacement)
     return " " + " ".join(_STRIP.sub(" ", text).split()) + " "
@@ -233,8 +259,22 @@ _QUANT_CORE_BODY = tuple(
 # `research analyst` is deliberately absent -- it is sell-side equity research
 # at one firm and quant work at the next, so it is a weak positive that a body
 # can rescue rather than a title that decides alone.
+# **Bare `strat` came off this list and `strats` stayed**, which is the same
+# reading-what-a-needle-promotes test every gate needle is held to, applied to
+# a *promoting* needle for once. Dry-run over 502,782 live postings: singular
+# `strat` reaches **12 titles and nine of them are false** -- six copies of an
+# advertising agency's `Solutions Architect - Strat Media` and two of
+# `Multi-Strat and Investment AI Specialist`, where the word names a *strategy
+# type* rather than Goldman's job family. Of the three genuine ones, two carry
+# `quantitative` or `quant` and keep their reading without it, and the third is
+# a `Principal`, which is out of reach. `strats` is clean on all four of its
+# live titles -- `Rates Strats VP`, `Macro Sales Strats`, `Analyst Rates
+# Compression (Strats)`, `Portfolio Pricing and Valuations Strats Analyst`.
+#
+# A five-letter abbreviation is the `AQR` and `tbe` shape one list over: it
+# will find something, and what it finds cannot be checked by eye.
 _QUANT_CORE_TITLE = (
-    "trader", "trading strategist", "strat", "strats",
+    "trader", "trading strategist", "strats",
     "market risk", "credit risk", "derivatives pricing",
     "portfolio construction", "handelaar", "handlare", "systematisk",
     # Title-only, and the body is why: in a title these are the
@@ -292,7 +332,7 @@ _MANAGEMENT = _terms(
     "manager", "senior manager", "associate manager", "project manager",
     "project leader", "project lead", "team leader", "team lead",
     "scrum master", "agile coach", "chapter lead", "tribe lead",
-    "vice president", "vp", "avp", "svp", "president",
+    "vice president", "vp", "avp", "president",
     "supervisor", "foreman", "principal consultant",
     # **The English plural, which a token-matched needle cannot see.** `Delivery
     # Managers - Tieto Banktech` escaped `delivery manager` and reached the
@@ -369,35 +409,32 @@ _NOT_A_TRADE_HEAD = (
 # the next definite form nobody has seen is caught as well: `-n` singular,
 # `-na` and `-rna` plural. Worth seven postings, none rated positively -- the
 # argument is that it is a rule rather than a list.
-_TRADE_HEADS_INFLECTED = _TRADE_HEADS + tuple(
-    head + suffix for head in _TRADE_HEADS for suffix in ("n", "na", "rna")
-)
-
-# A one-character prefix is a coincidence rather than a compound, so a match
-# needs two, and the whole token has to be long enough to be one: `elsaljare`
-# is exactly nine and is the shortest real example in the corpus.
-_MIN_COMPOUND = 9
-
+#
+# De-duplicated because two heads can inflect onto the same form -- Danish has
+# both `sygeplejerske` and its plural `sygeplejersker` on the list, and
+# `-rna` on the first meets `-na` on the second at `sygeplejerskerna`. Inert
+# against `_compound`, which stops at the first match, and not inert against a
+# reader that counts.
+_TRADE_HEADS_INFLECTED = tuple(dict.fromkeys(
+    _TRADE_HEADS + tuple(
+        head + suffix for head in _TRADE_HEADS for suffix in ("n", "na", "rna")
+    )
+))
 
 def _compound(title: str, heads: tuple[str, ...]) -> str | None:
     """The first token of a title that ends in one of `heads` as a compound.
 
     Swedish builds an occupation by compounding and token matching cannot see
     inside one, so the occupational *head* -- the last element, the part that
-    names the job -- is matched as a suffix. `lexicon.compound` does the same
-    thing one module over, for the same reason.
+    names the job -- is matched as a suffix. One implementation, in `lexicon`,
+    which owns matching; the two callers differ only in how much of the token
+    has to be left in front of the head.
 
     Wrong in English, where a compound is two tokens and a suffix test would
     fire on any word with the same ending. Safe here because the heads are long
     and Swedish is agglutinative.
     """
-    for token in title.split():
-        if len(token) < _MIN_COMPOUND:
-            continue
-        for head in heads:
-            if len(token) >= len(head) + 2 and token.endswith(head):
-                return token
-    return None
+    return lexicon.compound(title, heads, margin=2)
 
 
 def _compound_manager(title: str) -> str | None:
@@ -444,6 +481,18 @@ _SOFTWARE_SPECIALTY = _terms(
     "staff engineer", "software architect", "solution architect",
     "security engineer", "cyber security", "cybersecurity",
     "information security", "penetration testing",
+    # **The rest of the security desk, at the reader's instruction** ("cybersec
+    # roles"). The list named the engineer and the discipline and stopped
+    # before the analyst seats those teams actually advertise, so `Senior Cyber
+    # Threat Analyst` reached `judge` step 8 as an `analyst`. Dry-run over
+    # 502,782 live postings: every one of these is clean of a positively-rated
+    # posting. **Bare `iam` was measured and left out** -- 206 hits, all clean,
+    # and a three-letter token is the `AQR` shape whatever today's numbers say;
+    # `identity and access` says the same thing and cannot collide.
+    "cyber threat", "threat analyst", "threat intelligence", "security analyst",
+    "security operations", "soc analyst", "identity and access",
+    "security architect", "security specialist", "vulnerability management",
+    "incident response",
     "qa engineer", "quality engineer", "test engineer", "automation engineer",
     "release engineer", "build engineer",
     # `qe` is two characters and earns its place by measurement rather than
@@ -630,7 +679,21 @@ _SENIORITY = {
         "nyutexaminerad", "nyuddannet",
     ),
     "junior_0_2": _terms("junior", "associate", "entry level"),
-    "mid_3_5": _terms("mid level", "experienced hire"),
+    # **`experienced` and `lateral`, which the Swedish half of this table has
+    # graded since it was written and the English half never did.** `erfaren`
+    # and `erfarne` are on the rung above and reach 1,463 titles; bare
+    # `experienced` reaches 478 and 225 of them came back `unknown` -- so
+    # `Experienced Options Trader` at Akuna and `Experienced Trader` at Gelber
+    # sat at `apply_now`, the top of the board, for a reader with under a year.
+    # The one-word-two-lists trap `CLAUDE.md` names, in the one language the
+    # list is written in.
+    #
+    # `mid_3_5` rather than `senior_6_10`, on two grounds: `experienced hire`
+    # was already graded that way and putting the bare form on a different rung
+    # would make the pair disagree, and a prop shop's "experienced" means
+    # *has traded before*, not ten years. It moves those cards `apply_now` ->
+    # `strong`, which is the honest bucket rather than a removal.
+    "mid_3_5": _terms("mid level", "experienced hire", "experienced", "lateral"),
 }
 
 # Titles where `director` is not an officer grade, and bare `director` needs
@@ -821,6 +884,47 @@ _PHD_NOT_REQUIRED = _terms(
     "phd is not a requirement", "without a phd", "phd or equivalent experience",
 )
 
+# **A doctorate named in the *title*, with no lesser degree named beside it.**
+#
+# The note above is right that bare `phd` cannot gate a *document*: a body
+# writes "PhD preferred" on every quantitative posting on earth. A **title** is
+# a different claim. `Quantitative Researcher (Ph.D.)`, `Quantitative
+# Researcher Phd Graduate Asia` and `PhD Degree Required - Quantitative
+# Analyst/Programmer` are not naming an audience, they are naming the seat --
+# six words, and one of them is the requirement.
+#
+# Measured over every live title: **437 carry `phd` and 71 are rated
+# positively. Sixty-nine of those 71 name a doctorate and nothing else** -- and
+# every one is a seat this reader cannot hold, including two at `apply_now` and
+# six at `strong`. The other two name an alternative and must not gate:
+# Schonfeld's `2026 BSc/MSc/PhD Quantitative Research/Strat Internship` and
+# ITG's `2027 Internship - Quantitative Researcher (Master or PhD)`. So the
+# rule is *sole*: a lesser degree, or a bare `or`, anywhere in the title turns
+# it off.
+#
+# It is a **gate, not a rejection**, which is the call the hand sheet already
+# made -- two rows read *"perfect fit, but has hard requirement of phd"*, and
+# *perfect fit* decides where it belongs. The relevance stays `relevant`, the
+# tag keeps its evidence, and one line in `GATES` puts all 437 back.
+_DOCTORATE = _terms("phd", "ph d", "doctorate", "doctoral", "dphil",
+                    "doktorsexamen", "doktorgrad")
+_LESSER_DEGREE = _terms(
+    "bsc", "msc", "ba", "bs", "ms", "mba", "meng", "beng", "mfe",
+    "master", "masters", "bachelor", "bachelors", "undergraduate",
+    # `or` is on the list as an alternation marker rather than a degree:
+    # `(Master or PhD)` is the shape, and no title in the corpus writes `or`
+    # beside a doctorate it actually requires.
+    "or",
+)
+
+
+def _doctorate_only(title: str) -> str | None:
+    """The doctorate a title demands, or None if it names an alternative."""
+    hit = _hit(title, _DOCTORATE)
+    if hit and not _hit(title, _LESSER_DEGREE):
+        return hit
+    return None
+
 # A soft filter, not a gate. English and Swedish are deliberately absent: the
 # reader has both, so demanding them is no obstacle -- the old gate flagged
 # "flytande svenska" on Stockholm postings, the hub that matters most.
@@ -921,6 +1025,38 @@ _CONTRACT = {
 # The exclude list, one tag each, so it is auditable by category. `crypto` and
 # `heavy_systems` down-rank; the rest reject.
 _EXCLUSION = {
+    # **Legal, and it has to be here as well as in `lexicon.CORPORATE`.** That
+    # list rejects at `judge` step 1 and `judge` runs *last*, so a legal title
+    # carrying an ordinary markets word had already reached `adjacent` on the
+    # branch above it: `Securities Trading Attorney` and `Legal Counsel
+    # (Equity Derivatives, Trading Documentation)` on bare `trading`, which is
+    # on `_QUANT_ADJACENT`. Same ordering argument as `lending` below -- an
+    # exclusion outranks a weak positive, and this is what makes it fire.
+    #
+    # At the reader's instruction: "there are a lot of legal and audit jobs
+    # that are incorrect... give it a pass". Dry-run over 502,782 live
+    # postings: not one of these needles reaches a posting rated `relevant` or
+    # `less_relevant`.
+    "legal": _terms(
+        "legal analyst", "legal associate", "legal officer", "legal specialist",
+        "legal manager", "legal advisor", "legal intern", "legal operations",
+        "legal counsel", "counsel", "attorney", "lawyer", "solicitor",
+        "paralegal", "litigation", "law clerk", "notary",
+        "legal structuring", "trading documentation",
+        "bolagsjurist", "advokat", "jurist", "juridisk",
+    ),
+    # **Audit and tax, for the same reason and by the same instruction.**
+    # `lexicon.NON_QUANT_FINANCE` carries these and rejects at `judge` step 6,
+    # which is also too late: `Senior Auditor - Capital Markets`, `Global
+    # Treasury Audit, Officer` and Jane Street's `Tax Structuring and Advisory
+    # Specialist` all reached the board on the markets word beside the
+    # occupation.
+    "audit_tax": _terms(
+        "audit", "auditor", "auditing", "assurance associate",
+        "assurance senior", "assurance manager",
+        "tax", "taxation", "indirect tax", "tax structuring",
+        "revisor", "revision", "skatt", "skatterådgivare",
+    ),
     "actuarial": ("actuary", "actuarial", "aktuarie", "actuaris", "aktuar"),
     "insurance_pricing": ("insurance pricing", "skadereglering"),
     # Its own category because it must be title-only. `insurance_pricing` is
@@ -1149,6 +1285,50 @@ _MCF_OFF_INDUSTRY = frozenset({
     "Purchasing / Merchandising", "Real Estate / Property Management",
     "Repair and Maintenance", "Sales / Retail", "Security and Investigation",
     "Social Services", "Travel / Tourism",
+})
+
+
+# Hong Kong's own taxonomy, and it is the strongest of the four because it is
+# the only one that is a **partition**. The portal files every posting under
+# exactly one of 29 job types -- their hitcounts sum to 14,287 against an
+# unfiltered total of 14,287, delta zero -- so this is an equality test rather
+# than the subset test the other three need, and one label is the advertiser's
+# whole answer about what the job is.
+#
+# It matters more here than the head count suggests, because Hong Kong is a
+# focus hub and the alternative was a word list. Measured over the first 2,380
+# postings swept, the English occupation needles already reject 62% and leave
+# **38% at `relevance: unknown`** -- `School Worker`, `General Office Clerk`,
+# `Storekeeper`, `Dish Washer`, `Labourer`, `Delivery Worker` -- every one of
+# them plainly not this line of work and every one of them a card on a focus
+# hub. Writing needles for those was the alternative and it is strictly worse:
+# the board publishes an enumeration the employer picked from, which is the
+# same argument `_OFF_INDUSTRY_FIELDS` and `_JOBINDEX_OFF_INDUSTRY` both make.
+#
+# **What stays out of the list is the interesting half.** `Others` (1,661) and
+# `Other Professional/Associate Professional` (297) are catch-alls, which is
+# where a posting nobody classified lands -- the opposite of evidence, and the
+# reason MyCareersFuture keeps its own `Others`. `Accounting`, `Clerk`,
+# `Computer and Information Technology`, `Engineering` and
+# `Management / Administration` all carry real work. `Marketing
+# Representative / Sales` (1,099) is the ambiguous one and it stays, on the
+# rule `_OFF_INDUSTRY_FIELDS` already settled: a commodity or sales trader
+# files under selling, and the read-time filters handle it.
+#
+# **Dry-run over the whole corpus, which is what every gate needle here is held
+# to.** The test is not the head count but whether a name touches a posting the
+# tagger already rates positively, and **not one of the twenty-one does**. One
+# name is shared with another source -- `Customer Service` is also a
+# MyCareersFuture category on 1,524 postings -- and that is inert: the MCF
+# branch runs first and already drops it, so the verdict and the reason string
+# are the same either way.
+_IES_OFF_INDUSTRY = frozenset({
+    "Cashier", "Cleaner", "Construction/Survey", "Cook / Waiter",
+    "Customer Service", "Delivery Worker", "Design / Draftsworker",
+    "Domestic Helper", "Driver", "Labourer", "Merchandiser",
+    "Office Assistant", "Production / Factory", "Receptionist",
+    "Security Guard", "Stockkeeper", "Secretary", "Teacher / Tutor",
+    "Technician", "Tour Guide", "Typist",
 })
 
 
@@ -1386,7 +1566,7 @@ _OFF_INDUSTRY = _terms(
     "butiksassistent", "butiksmedarbejder", "kosmetolog", "sikkerhedsvagt",
     "vaegter", "plejehjem", "hjemmeplejen", "sosu", "handvaerker",
     "elevassistenter", "stodassistenter", "behandlingsassistenter",
-    "ekonomiassistenter", "vardbitraden",
+    "vardbitraden",
     # ----------------------------------------------------------------------
     # **Read off the board itself, which is the frame that matters.** A fresh
     # Jobbsafari sweep put 585 Swedish postings in front of the reader and they
@@ -1522,7 +1702,7 @@ _OFF_INDUSTRY = _terms(
     # that is not a portfolio
     "fastighetsingenjor", "fastighetsforvaltare", "fastighetsforvaltning",
     "teknisk forvaltare", "fastighetschef", "driftstekniker",
-    "ejendomsadministrator", "ejendomsservice",
+    "ejendomsservice",
     # environment, logistics and the remaining Nordic field professions
     "miljokonsult", "miljosamordnare", "miljoingenjor",
     "logistikkoordinator", "transportledare", "speditor", "lagerchef",
@@ -1680,7 +1860,7 @@ _OFF_INDUSTRY = _terms(
     # plant, trades and the dealership service bay
     "controls engineer", "material handler", "machine operator", "millwright",
     "tool and die", "cnc machinist", "assembler", "production supervisor",
-    "welder", "service technician", "automotive technician",
+    "service technician", "automotive technician",
     "diesel technician", "warehouse associate", "quality inspector",
     "plant manager", "field technician", "police officer",
     # campus jobs and the university's own administration
@@ -2093,13 +2273,23 @@ _FOCUS_HUBS = frozenset(
 # over-claim is between two hubs the board both shows, where the Swedish one
 # was between a hub and the gate.
 #
-# `deprioritized` is deliberately absent: it spans four countries and is
-# nobody's complement, so a posting in Amsterdam and Frankfurt keeps both.
+# **`deprioritized` is here for one word only, and the rest of it is still
+# nobody's complement.** It spans four countries, so a posting in Amsterdam and
+# Frankfurt keeps both -- `frankfurt` is a town and the rule below only drops a
+# bucket whose every needle was the containing region's name. But one of those
+# countries *contains a focus hub*: `Hong Kong, SAR, China` is one place
+# matching two hubs, and 89 live postings say it -- `Hong Kong, China` and
+# `HK - Hong Kong, China` are the rest. It gates nothing, since the board shows
+# both, and it files a focus-hub card under *Deprioritized* as well, so the
+# group-by-place view shows it twice. `china` is the only deprioritized needle
+# that contains a focus hub; `Hong Kong; Shanghai` keeps both, because
+# `shanghai` is a town.
 _RESIDUAL_OF = {
     "sweden_other": frozenset({"stockholm"}),
     "denmark_other": frozenset({"copenhagen"}),
     "netherlands_other": frozenset({"amsterdam"}),
     "us_other": frozenset({"new_york", "chicago", "boston"}),
+    "deprioritized": frozenset({"hong_kong"}),
 }
 
 _COUNTRY_WORDS = {
@@ -2110,6 +2300,10 @@ _COUNTRY_WORDS = {
         "united states", "usa", "us remote", "remote us", "forenta staterna",
         "new york", "new jersey", "connecticut", "illinois", "massachusetts",
     }),
+    # Only the word that contains the hub. Every other deprioritized needle is
+    # a town or a country holding no focus hub, so it survives as a real second
+    # place.
+    "deprioritized": frozenset({"china"}),
 }
 
 
@@ -2224,10 +2418,17 @@ _STOPWORDS = {
 }
 
 # Inverted, so scoring is one pass over the tokens rather than one per language.
+#
+# **`sorted` is not decoration.** The values above are `frozenset`s, and set
+# iteration order follows string hashing, which Python randomises per process
+# -- so without it this dict comes out in a different key order every run. That
+# changes nothing about a lookup and it does change `repr`, which is what
+# `fingerprint` hashes: the guard against an unbumped lexicon fired on every
+# run of every version, which is the one thing an alert may not do.
 def _stopword_languages() -> dict[str, tuple[str, ...]]:
     index: dict[str, tuple[str, ...]] = {}
     for code, words in _STOPWORDS.items():
-        for word in words:
+        for word in sorted(words):
             index[word] = index.get(word, ()) + (code,)
     return index
 
@@ -2374,18 +2575,16 @@ def _first(mapping: dict[str, tuple[str, ...]], text: str) -> tuple[str, str] | 
     """First bucket whose lexicon hits, in the mapping's own order.
 
     Order is the priority: `head_or_md` before `junior_0_2`, `hardware` before
-    `systems`. A dict preserves it, so the lexicon reads as the ladder it is.
+    `systems`. A dict preserves it, so the lexicon reads as the ladder it is --
+    and `lexicon` matches the whole ladder as one index rather than one per
+    rung, which is where the order survives the flattening.
     """
-    for value, needles in mapping.items():
-        found = _hit(text, needles)
-        if found:
-            return value, found
-    return None
+    return lexicon.rung(text, mapping)
 
 
 def _every(mapping: dict[str, tuple[str, ...]], text: str) -> list[tuple[str, str]]:
     """Every bucket that hits -- for the dimensions that are multi-valued."""
-    return [(v, f) for v, needles in mapping.items() if (f := _hit(text, needles))]
+    return lexicon.every_rung(text, mapping)
 
 
 def _field(row, name: str):
@@ -2399,6 +2598,80 @@ def _field(row, name: str):
         return row[name]
     except (KeyError, IndexError):
         return None
+# --------------------------------------------------------------------------
+# Three families the reader has asked to see ranked last rather than read
+# --------------------------------------------------------------------------
+#
+# **These are buried, not rejected, and the difference is deliberate.** A
+# rejection is a claim that the posting is a different *occupation*; these are
+# the reader's own scope talking -- "heavily downgrade IB style jobs such as
+# equity research or similar... same for pure IT roles, or non quant
+# development roles, cybersec roles". The work is real finance or real
+# engineering and it is not what this reader wants, so the row keeps its
+# `relevance` verdict, keeps its evidence, stays filterable in the rail, and
+# `_fit` sends it to the bottom of the board. One line in `_fit` puts them back.
+#
+# **Both guards are what make the rule safe, and the dry-run is why there are
+# two.** A quant word in the title spares `Quantitative Technologist (DevOps)`
+# and `Credit Quantitative Research - Associate`; a *markets* word spares
+# `Full Stack Engineer - Equities Autocallables`, `Site Reliability Engineer -
+# Electronic Trading` and `Equity Research Associate - Large Cap Banks`.
+# Measured over 502,782 live postings, the three lists bury 259, 11,228 and
+# 6,580 postings and **not one of them is rated `relevant` or
+# `less_relevant`** -- and the overwhelming majority were already `rejected`
+# and off the board, so what actually moves is about 150 cards.
+
+# Sell-side and fundamental research: a coverage seat reading companies, which
+# is the analyst half of an investment bank rather than the quant half.
+_SELL_SIDE_RESEARCH = _terms(
+    "equity research", "credit research", "sell side research",
+    "equity research analyst", "equity analyst", "fundamental research",
+    "investment research", "macro research", "research associate",
+)
+
+# Development that is not quant development. `_SOFTWARE_SPECIALTY` above is the
+# other half of this and is read by the relevance ladder as well, because there
+# the specialty *is* the job; these are the generic seats, where only the
+# absent qualifier says so.
+_GENERIC_DEV = _terms(
+    "full stack", "fullstack", "frontend", "front end", "backend", "back end",
+    "web developer", "mobile developer", "ios developer", "android developer",
+    "qa engineer", "test engineer", "automation engineer", "ui developer",
+    "platform engineer", "integration engineer", "support engineer",
+    "application developer", "systems engineer", "network administrator",
+)
+
+
+def _buried(just_title: str, certain_in_title: str | None,
+            software: str | None) -> str | None:
+    """Which of the three families this title is in, or None.
+
+    Read from the title alone, like every other rule here that decides what a
+    posting *is*: a department called *Equity Research* is the desk's name.
+    """
+    if certain_in_title or _hit(just_title, _QUANT_CORE_TITLE):
+        return None
+    # **Sell-side research is checked before the markets guard, and it has to
+    # be.** `equity research` is itself on `MARKETS`, so a guard that spares
+    # any title carrying a markets word would spare every one of these -- it
+    # would read `Equity Research Associate - Large Cap Banks` as a desk seat
+    # on the strength of the words naming the thing being buried.
+    if hit := _hit(just_title, _SELL_SIDE_RESEARCH):
+        return f"sell-side research: {hit!r}"
+    # The two engineering families are the other way round: there the markets
+    # word is a *qualifier* somebody added, and it is what separates
+    # `Full Stack Engineer - Equities Autocallables` from `Full Stack
+    # Engineer`, or `Site Reliability Engineer - Electronic Trading` from
+    # `Site Reliability Engineer`.
+    if lexicon.first(lexicon.normalize(just_title), lexicon.MARKETS):
+        return None
+    if software:
+        return f"enterprise IT: {software!r}"
+    if hit := _hit(just_title, _GENERIC_DEV):
+        return f"non-quant development: {hit!r}"
+    return None
+
+
 
 
 def tag_posting(row: sqlite3.Row) -> list[Tag]:
@@ -2410,9 +2683,14 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
     body = row["description"] or ""
     # A body was read, so its tags are evidence. A title alone is a guess that
     # happens to be usually right, which is what `weak` has always meant here.
-    grade = "strong" if len(body) > 200 else "weak"
+    has_body = len(body) > 200
+    grade = "strong" if has_body else "weak"
 
     key = (row["ats"], row["token"], row["job_id"])
+    # **The employer, for the two branches where the posting says nothing.**
+    # Empty unless `load_quant_boards` has been called, so a unit test is a
+    # statement about the lexicon and not about the database -- see there.
+    quant_board = (row["ats"], row["token"]) in _QUANT_BOARDS
     tags: list[Tag] = []
 
     def add(dimension: str, value: str, evidence: str | None, confidence: str = "") -> None:
@@ -2437,10 +2715,31 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
     text = _joined(just_title, just_body, department)
     where = _joined(fold(row["location"]), just_title)
 
+    # Hoisted, because it is read in four places below and the computation is
+    # the same one. Title alone, for the reason it always is here: a
+    # department is the desk's name and not the job.
+    certain_in_title = _hit(just_title, _QUANT_CORE)
+
     # Stage one, before anything else looks at this posting. A hospital hiring
     # a statistician is still a hospital, so this outranks a quant title
     # rather than competing with it -- that is what makes it a gate and not
     # another exclusion.
+    #
+    # **Measured and deliberately left alone**, because the one case for
+    # softening it is a single posting and the rule it would overturn is
+    # written down and pinned by a test. Of 116,425 postings gated by a
+    # source's own occupation *field*, exactly four carry an unambiguous quant
+    # word in the title: two are the Swedish industrial-maintenance firm
+    # literally named *Quant* (the title trade heads reject them anyway), one
+    # is a `Head of Legal Counsel` that `out_of_reach` takes, and one is
+    # `(Senior) Quantitative Risk Analyst, Credit Risk Model Analysis` in
+    # Stockholm, which JobStream filed under *Säkerhet och bevakning* and
+    # which this gate therefore deletes. That is a real false rejection and it
+    # is one, against a rule -- "a hospital hiring a statistician is still a
+    # hospital" -- decided on purpose and covered by
+    # `tests/test_tagging.OffIndustryTest`. **A documented decision is not
+    # overturned by n=1**; the measurement is recorded so the next reader has
+    # it rather than having to find it again.
     category = _field(row, "category")
     trade = _hit(title, _OFF_INDUSTRY)
     if category in _OFF_INDUSTRY_FIELDS:
@@ -2449,6 +2748,10 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
         off_industry = mcf
     elif danish := _jobindex_off_industry(category):
         off_industry = danish
+    elif category in _IES_OFF_INDUSTRY:
+        # Equality rather than a subset test: Hong Kong's facet is a partition,
+        # so one label is the whole of what the employer said.
+        off_industry = f"field {category!r}"
     elif trade:
         off_industry = f"title {trade!r}"
     elif compounded_trade := _compound(just_title, _TRADE_HEADS_INFLECTED):
@@ -2519,11 +2822,38 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
     domain_only = _hit(title, _QUANT_CORE_TITLE)
     core = certain or domain_only
     adjacent = _hit(title, _QUANT_ADJACENT)
+    # **The same needle read from the title alone, for the branches that ask
+    # whether a quant word *outranks a title-level rejection*.** `desk`,
+    # `management`, `software` and `corporate` are all read from `just_title`,
+    # deliberately -- a department is nothing but the desk's name. Comparing
+    # them against a `certain` that includes the department is the mismatch
+    # `CLAUDE.md` names three times over, and this is the fourth: a department
+    # called *Quantitative Research & Trading* or *Quantitative Strategies*
+    # switched the rejection off entirely.
+    #
+    # Measured over every live posting carrying a department: **thirteen have a
+    # quant word in the department and none in the title beside a title-level
+    # rejection**, and four of them were in the board's top two buckets --
+    # Vatic's `Trading Operations Specialist` at `apply_now`, D. E. Shaw's
+    # `Product Manager - AI Vendor Tools`, `Technical Product Manager - Macro`
+    # and `Systems: Cloud Engineer` at `strong`. Point72's three `Cubist
+    # Portfolio Manager` postings are the rest of the pattern.
+    #
+    # `core` deliberately keeps the department, because it asks a different
+    # question -- *is there any quant signal at all* -- and `trading_style`
+    # keeps it too: a `Trader` in a quantitative trading department is a quant
+    # trader.
     # **From the job title alone, never the department.** `Senior Trading
     # Associate` sits in a department called *Trading Operations* and was
     # rejected as desk support -- the first false rejection the hand sheet
     # found. A department is nothing but the desk's name.
     desk = _hit(just_title, _DESK_ADJACENT)
+    # The corporate functions, read from the title for the same reason `desk`
+    # is, and kept apart from it because they behave differently beside a quant
+    # word -- see the `corporate` branch in the relevance ladder below. HR,
+    # marketing and payroll are functions every firm has, a trading firm
+    # included; they are not seats near the desk.
+    corporate = _hit(just_title, _EXCLUSION["support_function"])
 
     # A management title outranks a weak positive, the way an exclusion does:
     # `Director of Trading` and `Product Manager - B2C Credit` reached
@@ -2619,14 +2949,51 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
         # "Trading Operations Engineer" is not a trading role, and neither is
         # "Campus Recruiter" filed under a Trading department.
         add("relevance", "rejected", f"desk support: {desk!r}")
-    elif desk and not certain:
+    elif desk and not certain_in_title:
         # A desk word beside a domain word demotes, it does not reject. A
         # missed posting is the expensive failure here, so `Algorithmic Sales
         # Trader` stays readable at a lower rank rather than disappearing.
         add("relevance", "adjacent", f"{domain_only!r} qualified by {desk!r}")
-    elif management and not certain:
+    elif corporate and certain_in_title:
+        # **A corporate function outranks a quant word; a desk does not.** The
+        # rule one line up is that an unambiguous quant word wins over a desk
+        # word, and it is right -- `Quantitative Researcher, Trading
+        # Operations` is a researcher embedded in the ops org, and only a
+        # *body* describing reconciliations should demote it. But it was
+        # applied to `recruiter` too, and a recruiter does not live next to a
+        # trading desk. A recruiter lives in HR.
+        #
+        # So `Quantitative Campus Recruiter` at SIG, `Campus Recruiter, Machine
+        # Learning and Quantitative Research` at Jane Street, `Senior
+        # Recruiter, Quantitative Research` at Voleon and `Experienced
+        # Quantitative Investing Recruiter` at Two Sigma all read `relevant`
+        # and reached the top of the board -- every one of them hiring the
+        # reader's colleagues rather than the reader. Measured over every live
+        # posting, **eleven titles carry a corporate function and an
+        # unambiguous quant word, ten are recruiters and the eleventh is
+        # Northern Trust's `Director Quantitative & Index Product Marketing`.**
+        # Unanimous, which is what makes this a rule rather than a patch.
+        #
+        # `adjacent` rather than `rejected`, following `lexicon.judge` step 1,
+        # which meets the same collision and deliberately downgrades the
+        # rejection **to a read**: a quantitative word in the title means the
+        # title is doing something else, and `Lead Technical Recruiter (Quant
+        # Engineering)` is the example the module already names.
+        #
+        # **`and certain_in_title` is load-bearing and is not a tautology.**
+        # Without it this branch runs ahead of `rejecting` and *promotes* every
+        # ordinary corporate title -- `HR-ansvarig`, `Marknadskoordinator`,
+        # `Lönekonsult` -- from rejected to adjacent. This exists to stop a
+        # quant word from lifting a corporate title, never to lift one itself.
+        # And the word has to be in the *title*, for the reason
+        # `certain_in_title` exists: a department is not the job.
+        add("relevance", "adjacent",
+            f"{certain_in_title!r} qualified by {corporate!r}")
+    elif management and not certain_in_title:
         add("relevance", "rejected", f"management title: {management!r}")
-    elif software and not certain and not _hit(just_body, lexicon.QUANT_MARKETS_BODY):
+    elif software and not certain_in_title and not _hit(
+        just_body, lexicon.QUANT_MARKETS_BODY
+    ):
         # The specialty is the job. `Senior DevOps Engineer - Trading
         # Platforms` and `Cloud Engineer` both reached the board on a markets
         # word that belongs to the platform, and both were rejected by hand.
@@ -2691,7 +3058,37 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
         # It runs **last on purpose**: it can only convert an `unknown`, never
         # overturn a positive, so it cannot manufacture a false rejection in
         # the rows that matter.
-        add("relevance", "rejected", f"{call.reason}: {call.evidence or 'no signal'}")
+        if call.reason == "pure_engineering" and quant_board and not has_body:
+            # **The one rejection the reader's own scope calls a down-rank.**
+            # "Roles that are primarily heavy systems engineering -- down-rank
+            # rather than hard-drop, many quant-dev roles list C++ as secondary
+            # and still fit." `judge` step 7 is three-sided and every side is a
+            # markets word *in the posting*, so a firm that publishes no
+            # descriptions has no side to land on: DRW's `Software Developer
+            # (Research)`, `Senior Software Engineer, C++ (Algo)` and `Software
+            # Engineer, Research - Cumberland Systematic` were all removed
+            # outright, and 94% of the engineering rejections at pure quant
+            # shops have no body at all.
+            #
+            # **`has_body` is the whole safety argument.** A body that names
+            # markets nowhere is evidence measured over a document, and it is
+            # right: Jane Street's `MacOS Software Engineer` and `Enterprise
+            # Mobility Platform Engineer` have real descriptions with no
+            # markets word in them and stay rejected. Absence of evidence in a
+            # stub is not evidence of absence -- the rule `lexicon.MIN_BODY`
+            # already states one module over.
+            #
+            # `_SOFTWARE_SPECIALTY` has run above and is untouched, which is
+            # what keeps this narrow: measured on the same 51 boards, the 124
+            # postings it rejects are cybersecurity, network, SRE, systems
+            # administration and Salesforce work, and every one should stay
+            # rejected. That list is the proper subset where the specialty *is*
+            # the job, and this is the ambiguous remainder.
+            add("relevance", "adjacent",
+                f"{call.evidence}, at a board publishing quant work", "weak")
+        else:
+            add("relevance", "rejected",
+                f"{call.reason}: {call.evidence or 'no signal'}")
     elif desk_named := (
         lexicon.first(
             lexicon.normalize(f"{row['title'] or ''} {_field(row, 'department') or ''}"),
@@ -2722,6 +3119,24 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
         # `plausible`. Title and department only; a body naming markets is the
         # employer describing itself.
         add("relevance", "adjacent", f"markets title {desk_named!r}", "weak")
+    elif quant_board and not has_body:
+        # **The mirror of `non_markets_board`, and until now the mirror did not
+        # exist.** That gate removes a posting nothing could read on a board
+        # that publishes no markets work; this keeps one on a board that
+        # publishes plenty. The evidence is the same shape and the same
+        # strength, and it fires on the same double condition -- the board has
+        # proved itself *and* the tagger had nothing to go on.
+        #
+        # `not has_body` for the reason the engineering branch needs it: a
+        # posting with a real description that still reads `unknown` has been
+        # looked at, and this rule has nothing to add to that. Without the
+        # guard it would promote Point72's `Access and Identity Management -
+        # Business Analyst` on the strength of its neighbours.
+        #
+        # **`_fit` notches this down a bucket**, because a relevance read off
+        # the employer is the weakest evidence in the module -- weaker than
+        # "body only", which is at least the posting's own text.
+        add("relevance", "adjacent", "at a board publishing quant work", "weak")
     else:
         add("relevance", "unknown", None)
 
@@ -2743,6 +3158,15 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
     gates: set[str] = set()
     for dimension, mapping in (("horizon", _HORIZON), ("hard_gates", _HARD_GATES)):
         found = _every(mapping, text)
+        if dimension == "hard_gates":
+            # **A doctorate in the title, with no lesser degree beside it.**
+            # `_HARD_GATES` reads phrases over the whole text and cannot say
+            # this: in a body `phd` names an audience, in a six-word title it
+            # names the seat. See `_doctorate_only` for the measurement.
+            if (sole := _doctorate_only(just_title)) and not any(
+                value == "phd_required" for value, _ in found
+            ):
+                found = [*found, ("phd_required", f"title {sole!r}")]
         if dimension == "hard_gates" and _hit(text, _PHD_NOT_REQUIRED):
             # " no phd required " contains " phd required ", so a posting
             # saying the opposite of the gate would otherwise trip it.
@@ -2853,6 +3277,14 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
         # than ranking, each recorded with the evidence that decided it --
         # `list --exclude off_industry` is how you audit what a gate ate.
         add("exclusion_reason", "off_industry", off_industry)
+
+    # **The one exclusion reason that neither gates nor ranks -- it buries.**
+    # See `_buried`: the posting is real work in a field this reader has said
+    # to rank last, so the relevance verdict above stands untouched and `_fit`
+    # sends the card to the bottom of the board. It is an `exclusion_reason`
+    # so that `list --exclude different_field` audits it like any other.
+    if reason := _buried(just_title, certain_in_title, software):
+        add("exclusion_reason", "different_field", reason)
 
     # **A rank nobody reaches from under a year of experience.** Title only,
     # like `seniority`, and gated on a *positive* reading: a title carrying no
@@ -2967,6 +3399,16 @@ def _fit(tags: list[Tag]) -> Tag:
     if any(tag.dimension == "relevance" and (tag.evidence or "").startswith("body only")
            for tag in tags):
         notches.append("title said nothing")
+    # **Weaker still: a relevance read off the employer rather than the
+    # posting.** The two branches that confer it fire only when there was no
+    # body at all, so the claim is "this firm publishes quant work" and nothing
+    # about this seat. It must rank below a posting read on its own text, or
+    # Point72's `Database Support Engineer` sits level with its `Fixed Income
+    # Research Analyst`.
+    if any(tag.dimension == "relevance"
+           and (tag.evidence or "").endswith("at a board publishing quant work")
+           for tag in tags):
+        notches.append("read from the firm, not the posting")
     # A core quant role in São Paulo keeps its row but should not outrank one
     # in Amsterdam -- Santander's global board once filled the shortlist from
     # `hub: other` while Stockholm showed one entry. One focus hub among
@@ -2994,6 +3436,17 @@ def _fit(tags: list[Tag]) -> Tag:
         return make("out_of_scope", "requires a future graduation date")
     if relevance == "rejected":
         return make("out_of_scope", f"excluded: {'/'.join(sorted(gates)) or 'no quant signal'}")
+    # **Below every reading and above nothing.** The card stays on the board,
+    # keeps its relevance verdict and stays filterable; it simply sorts last,
+    # under `unknown`, because "read, and it is a different line of work" is a
+    # stronger reason to leave a card alone than "nothing decided". Checked
+    # after the two above so a student posting or a rejection keeps the reason
+    # that actually removes it.
+    if "different_field" in gates:
+        return make("background", next(
+            (tag.evidence for tag in tags
+             if tag.dimension == "exclusion_reason" and tag.value == "different_field"),
+            "a different line of work"))
     # A senior posting is a stretch however well the subject matter fits.
     #
     # **But a rank the reader cannot reach caps a posting they would otherwise
@@ -3024,6 +3477,128 @@ def _fit(tags: list[Tag]) -> Tag:
     return make("unknown", "nothing in the text decided it")
 
 
+# --------------------------------------------------------------------------
+# The employer as evidence, in the direction nothing read it
+# --------------------------------------------------------------------------
+#
+# **`lexicon.board_profile` was measured, wired to a gate, and only ever
+# allowed to say no.** `web/build_data.py` reads its `non_markets` verdict to
+# remove a posting; its `markets` verdict is computed on every build and
+# consumed by nothing. So a board this project has read hundreds of times and
+# found quant work on cannot lend any of that to the posting beside it -- and
+# that is exactly the posting that needs it, because the boards which publish
+# no description are disproportionately the ones worth reading.
+#
+# Measured on the live corpus: **94% of the postings rejected as
+# `pure_engineering` at a pure quant shop have no body at all.** Citadel
+# Securities' `Machine Learning Researcher`, `Deep Learning ML Researcher` and
+# `Research Engineer` read `relevance: unknown`; DRW's `Software Developer
+# (Research)` and `Software Engineer, Research - Cumberland Systematic` read
+# `rejected: pure_engineering`. Neither verdict is a lexicon failure. There is
+# nothing in either posting to read.
+#
+# **The evidence is a quant title, counted over the board**, and that choice is
+# what keeps this from being circular. A profile derived from `job_tags` would
+# feed the tagger its own output; a profile derived from `lexicon.judge` would
+# depend on which bodies happened to be fetched. A title matching `_QUANT_CORE`
+# or `_QUANT_CORE_TITLE` is a pure function of `jobs.title` -- no tags, no
+# bodies, no ordering -- so the loop is broken by construction and the
+# measurement is the same on a cold database as on a warm one.
+#
+# **Both lists, and the second is the one a *board* may use where a posting may
+# not.** `_QUANT_CORE_TITLE` names a domain rather than the work, which is why
+# a single posting needs a qualifier before it counts -- `Credit Risk Quant` is
+# quant work and `Credit Risk Operations (Debt Collections)` is a collections
+# job. Over a whole board that ambiguity averages out: a firm advertising
+# sixteen `Trader` seats is a trading firm whatever each individual seat turns
+# out to be. Measured, it is the difference between recognising a firm and not:
+# **Gelber Group is 16 quant-domain titles in 19 and zero `_QUANT_CORE`**, and
+# OTC Flow, Mako, Eagle Seven, Valkyrie, Simplex, Nomura/Instinet, CLSA, Marex
+# and CMC Markets are all in the same position. It widens 61 boards to 77 and
+# every added one is a markets firm on inspection.
+_QUANT_BOARD_FLOOR = 2      # one is an accident on any board
+_QUANT_BOARD_SHARE = 0.05   # and a big employer's handful is one too
+
+# Measured over all 419,475 live postings, `floor=2, share=5%` selects 77
+# boards and the list reads as a directory of quant firms rather than as a
+# threshold: Point72, SIG, Jane Street, Tower Research, Citadel, Citadel
+# Securities, DRW, Jump, Squarepoint, Two Sigma, Man Group, Schonfeld,
+# D. E. Shaw, Old Mission, Virtu, Millennium, Flow Traders, Akuna, AQR,
+# Voleon, Gelber, OTC Flow, Maven, Radix, GTS, Chicago Trading, TransMarket,
+# Five Rings, Belvedere, Da Vinci, Pinely, Winton, Vatic, Aquatic, Arrowstreet,
+# Quantbot, Webb, Acadian, Xantium, Wolverine, Geneva Trading, Tudor, Mako,
+# Eagle Seven, Valkyrie, Simplex, Nomura, CLSA, PIMCO.
+#
+# **The share is what keeps the banks out and it is the half that matters.**
+# An absolute floor alone admits Citi (126 quant titles in 3,724 postings,
+# 3.4%), Barclays (2.8%), LSEG (2.1%), RBC (2.0%), State Street (1.9%), BNY
+# (1.3%), Santander (1.1%), US Bank (1.0%), DBS (1.0%) and TD (0.9%) -- boards
+# that are 98% retail banking and would put thousands of unread cards on the
+# page. It is the mirror of the argument `lexicon.board_profile` makes for
+# `non_markets`, where the *absolute* floor is the protection: there the risk
+# is judging a large board by a small share, here it is judging a small share
+# as though it were a board.
+#
+# **The floor is 2 rather than 3 because the ten boards between them were read
+# and every one is a quant firm**: Wolverine, Mesirow, Geneva Trading, Kepler
+# Cheuvreux, Headlands, ABC Arbitrage, Tudor, swissQuant, Numerix Quant,
+# Midpoint Markets. None is larger than twenty postings, which is the point --
+# the share had already done the protecting, and the floor was only costing
+# small boutiques. It stays at 2 rather than 1 because a single quant title is
+# an accident at any size, and Pandtong (1 in 13) is the board that shows what
+# that costs: a real Hong Kong quant shop, excluded, and correctly, because one
+# title cannot tell it apart from an insurer advertising one modelling seat.
+
+
+def quant_boards(connection: sqlite3.Connection) -> frozenset[tuple[str, str]]:
+    """`(ats, token)` for every board that has shown us real quant work.
+
+    Reads titles only, which is what makes it cheap enough to run at the top
+    of every `tag`: 419,475 folds in about 17 seconds against a re-tag
+    measured in minutes.
+
+    The national feeds are excluded by `lexicon.NOT_A_BOARD` for the reason
+    that list exists -- one token carrying every job in a country is not an
+    employer, and Sweden's feed would clear any floor on volume alone.
+    """
+    counts: dict[tuple[str, str], list[int]] = {}
+    for ats, token, title, department in connection.execute(
+        "SELECT ats, token, title, department FROM jobs WHERE removed_at IS NULL"
+    ):
+        if ats in lexicon.NOT_A_BOARD:
+            continue
+        bucket = counts.setdefault((ats, token), [0, 0])
+        bucket[1] += 1
+        folded = _joined(fold(title), fold(department))
+        if _hit(folded, _QUANT_CORE) or _hit(folded, _QUANT_CORE_TITLE):
+            bucket[0] += 1
+    return frozenset(
+        board
+        for board, (core, total) in counts.items()
+        if core >= _QUANT_BOARD_FLOOR and core / total >= _QUANT_BOARD_SHARE
+    )
+
+
+# **Module state, and deliberately, because every consumer must see the same
+# answer.** `labels.containment` is handed `tag_posting` as a bare callable and
+# `web/build_data.py` reads the tags it wrote; a profile passed as an argument
+# would be visible to `run` and invisible to the labelling sheet, which is the
+# drift `tagging.GATES` exists as one definition to prevent -- the sheet went
+# on offering VP roles in Kiruna after the board had stopped showing them.
+#
+# It defaults to empty, so a caller that never loads it gets exactly today's
+# behaviour. That is what keeps the unit tests a statement about the lexicon
+# rather than about whatever is in the database.
+_QUANT_BOARDS: frozenset[tuple[str, str]] = frozenset()
+
+
+def load_quant_boards(connection: sqlite3.Connection) -> frozenset[tuple[str, str]]:
+    """Measure the quant boards and install them for this process."""
+    global _QUANT_BOARDS
+    _QUANT_BOARDS = quant_boards(connection)
+    return _QUANT_BOARDS
+
+
 def postings(connection: sqlite3.Connection, limit: int) -> list[sqlite3.Row]:
     """Postings with no tag from the current lexicon version."""
     return connection.execute(
@@ -3042,37 +3617,216 @@ def postings(connection: sqlite3.Connection, limit: int) -> list[sqlite3.Row]:
     ).fetchall()
 
 
-def record(connection: sqlite3.Connection, tags: list[Tag]) -> None:
+def _record_rows(connection: sqlite3.Connection, rows: list[tuple]) -> None:
+    """Write already-unpacked tag tuples -- the one statement that writes tags.
+
+    The serial and parallel halves of `run` differ in what they hold: `Tag`
+    objects on one side and plain tuples on the other, because `sqlite3.Row`
+    does not pickle and the pool ships tuples. They were two copies of this
+    statement, which is two places to forget a column.
+    """
+    if not rows:
+        return
     timestamp = db.now()
     with connection:
         connection.executemany(
             "INSERT OR REPLACE INTO job_tags"
             " (ats, token, job_id, dimension, value, confidence, evidence,"
             "  tagger, tagged_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [
-                (t.ats, t.token, t.job_id, t.dimension, t.value, t.confidence,
-                 t.evidence, TAGGER, timestamp)
-                for t in tags
-            ],
+            [(*row, TAGGER, timestamp) for row in rows],
         )
 
 
-def run(connection: sqlite3.Connection, limit: int) -> tuple[int, int]:
-    """Tag up to `limit` postings. Returns (postings, tags)."""
-    connection.executescript(SCHEMA)
-    rows = postings(connection, limit)
+def record(connection: sqlite3.Connection, tags: list[Tag]) -> None:
+    """Write `Tag` objects. See `_record_rows` for the statement."""
+    _record_rows(connection, [
+        (t.ats, t.token, t.job_id, t.dimension, t.value, t.confidence, t.evidence)
+        for t in tags
+    ])
 
-    written = 0
-    batch: list[Tag] = []
+
+# **Classification is pure CPU and it is the only part of a re-tag that is.**
+# Measured on this corpus: 2.99 ms a posting, so a full 509,561-posting re-tag
+# is about 25 minutes of one core while the other seven idle. Writes are about
+# two minutes of that and are *not* parallelised -- one connection, one writer,
+# which is what `db.connect`'s WAL note assumes.
+#
+# **A process pool rather than threads, because the GIL is the thing in the
+# way.** Every other pool in this project (`bodies`, `jobs`, `pages`, `_gather`)
+# is threads, and correctly so: those wait on sockets and release the GIL while
+# they do. This one does not wait for anything.
+_PARALLEL_FLOOR = 20_000
+"""Below this, tag serially.
+
+Windows spawns rather than forks, so each worker re-imports this module and
+`lexicon` -- about a second apiece, plus the cost of shipping the rows. A
+`daily` run that tags a few thousand new postings would spend more on starting
+the pool than on the work, and `tests` tag a handful. Measured: the pool wins
+from roughly twenty thousand postings up.
+"""
+
+
+def _init_worker(boards: frozenset[tuple[str, str]]) -> None:
+    """Install the board profile in a freshly spawned worker.
+
+    `_QUANT_BOARDS` is module state set by `load_quant_boards`, and a spawned
+    process inherits none of it -- it re-imports this module, where the default
+    is the empty frozenset. Leaving it empty would not fail: it would quietly
+    switch off both employer branches of `tag_posting` for every posting the
+    pool touched, which is a different classifier reporting success. The
+    measurement is done once in the parent and shipped, so every worker reads
+    the same profile the serial path would have.
+    """
+    global _QUANT_BOARDS
+    _QUANT_BOARDS = boards
+
+
+def _tag_chunk(rows: list[dict]) -> list[tuple]:
+    """Tag a chunk of postings, as plain tuples.
+
+    Returns tuples rather than `Tag`s deliberately: they are what `record`
+    unpacks anyway, they pickle to a fraction of the size, and it keeps the
+    wire format independent of a dataclass that is free to grow a field.
+    """
+    out: list[tuple] = []
     for row in rows:
         tags = tag_posting(row)
         tags.append(_fit(tags))
-        batch.extend(tags)
-        written += len(tags)
-        if len(batch) >= 2_000:
-            record(connection, batch)
-            batch.clear()
-    record(connection, batch)
+        out.extend(
+            (t.ats, t.token, t.job_id, t.dimension, t.value, t.confidence,
+             t.evidence)
+            for t in tags
+        )
+    return out
+
+
+def fingerprint() -> str:
+    """A hash of every needle this tagger reads. Changes when the lexicon does.
+
+    **`TAGGER` is bumped by hand and the guard for forgetting is this.**
+    `CLAUDE.md` has warned since the beginning that "changing the lexicon
+    without bumping `TAGGER` leaves stale tags that look current" -- `tag`
+    visits only postings with no row at the *current* version, so after an
+    unbumped edit it reports `tagged 0 postings` and every summary keeps
+    serving the old answers. Nothing detected it, and it had happened: 53
+    postings in this database carry a verdict at version 58 that version 58's
+    own code no longer produces.
+
+    So the version is recorded with a fingerprint of what it was, and the two
+    disagreeing is a fact something can report -- see `drifted` and
+    `alerts.check`. It hashes the *needles*, not the source, so a comment or a
+    refactor is free and a word list is not.
+    """
+    digest = hashlib.blake2b(digest_size=16)
+    for module in (lexicon, sys.modules[__name__]):
+        for name in sorted(vars(module)):
+            value = getattr(module, name)
+            if isinstance(value, dict):
+                items = [(k, v) for k, v in value.items()
+                         if isinstance(k, str) and isinstance(v, tuple)]
+                if not items:
+                    continue
+                digest.update(f"{module.__name__}.{name}={items!r}".encode())
+            elif isinstance(value, (tuple, frozenset)) and value and all(
+                isinstance(item, str) for item in value
+            ):
+                ordered = value if isinstance(value, tuple) else sorted(value)
+                digest.update(f"{module.__name__}.{name}={ordered!r}".encode())
+    return digest.hexdigest()
+
+
+def drifted(connection: sqlite3.Connection) -> str | None:
+    """The stored fingerprint if it disagrees with the current one, else None.
+
+    Read by `alerts`, and recorded by `record`: whichever pass writes tags
+    stamps what wrote them, so the first run after an unbumped edit is the one
+    that says so rather than the tenth.
+    """
+    connection.executescript(SCHEMA)
+    row = connection.execute(
+        "SELECT lexicon FROM tagger_state WHERE tagger = ?", (TAGGER,)
+    ).fetchone()
+    if row is None or row["lexicon"] == fingerprint():
+        return None
+    return row["lexicon"]
+
+
+def _stamp(connection: sqlite3.Connection) -> None:
+    """Record which lexicon wrote this version's tags. Idempotent."""
+    with connection:
+        connection.execute(
+            "INSERT INTO tagger_state (tagger, lexicon, stamped_at) VALUES (?, ?, ?)"
+            " ON CONFLICT (tagger) DO UPDATE SET"
+            "   lexicon = excluded.lexicon, stamped_at = excluded.stamped_at",
+            (TAGGER, fingerprint(), db.now()),
+        )
+
+
+def run(
+    connection: sqlite3.Connection, limit: int, workers: int | None = None
+) -> tuple[int, int]:
+    """Tag up to `limit` postings. Returns (postings, tags).
+
+    **The board profile is measured before the first posting is read**, over
+    the whole of `jobs` rather than over this run's slice. That is the
+    constraint `web/build_data.py` records for `board_profiles` -- a profile
+    taken from whichever postings arrived this morning describes the morning --
+    and it is met here by reading `jobs` directly instead of `job_tags`, which
+    also keeps the measurement out of its own input. See `quant_boards`.
+
+    **The classification is spread over the cores and the writing is not.**
+    `tests/test_tagging.ParallelTaggingAgreesTest` pins the two paths against
+    each other row for row, because a pool that classified *differently* would
+    show up as nothing at all -- the counts would be identical and only the
+    verdicts would move.
+    """
+    connection.executescript(SCHEMA)
+    boards = load_quant_boards(connection)
+    rows = postings(connection, limit)
+    # Stamped whether or not there is anything to do. A run that tags nothing
+    # is the *normal* shape of the failure this guards -- after an unbumped
+    # edit `postings` returns an empty list, because every posting already has
+    # a row at this version -- so returning early without stamping would leave
+    # the one case it exists for unrecorded.
+    _stamp(connection)
+    if not rows:
+        return 0, 0
+
+    if workers is None:
+        workers = min(8, os.cpu_count() or 1)
+    if workers <= 1 or len(rows) < _PARALLEL_FLOOR:
+        written = 0
+        batch: list[Tag] = []
+        for row in rows:
+            tags = tag_posting(row)
+            tags.append(_fit(tags))
+            batch.extend(tags)
+            written += len(tags)
+            if len(batch) >= 2_000:
+                record(connection, batch)
+                batch.clear()
+        record(connection, batch)
+        return len(rows), written
+
+    # Chunked rather than mapped one posting at a time: a per-posting round
+    # trip costs more in pickling than the 3 ms it saves. `sqlite3.Row` does
+    # not pickle, and a `dict` is what `tag_posting`'s `row["field"]` access
+    # already expects, so the conversion is free of meaning.
+    chunk = max(500, len(rows) // (workers * 8))
+    chunks = [
+        [dict(row) for row in rows[i:i + chunk]]
+        for i in range(0, len(rows), chunk)
+    ]
+    written = 0
+    with ProcessPoolExecutor(
+        max_workers=workers, initializer=_init_worker, initargs=(boards,)
+    ) as pool:
+        # Written as each chunk lands rather than at the end, for the reason
+        # every long pass here batches: a crash costs the last chunk, not the
+        # whole run.
+        for tags in pool.map(_tag_chunk, chunks):
+            _record_rows(connection, tags)
+            written += len(tags)
     return len(rows), written
 
 

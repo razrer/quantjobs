@@ -71,7 +71,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import date
 
 from . import db, http
 from .models import Job
@@ -81,16 +81,6 @@ NAME = "jobroom"
 TOKEN = "switzerland"  # one national portal, so the board identifier is constant
 
 URL = "https://www.job-room.ch/jobadservice/api/jobAdvertisements/_search"
-
-# Shared with `jobstream`, which creates the same table. Both are national feeds
-# holding one cursor each, keyed by feed name.
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS feed_state (
-    feed       TEXT PRIMARY KEY,
-    cursor     TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-"""
 
 # `page * size` may not reach this. Asserted against rather than merely used:
 # the boundary was measured at three different page sizes and is exactly 10,000
@@ -230,24 +220,15 @@ def cursor(connection: sqlite3.Connection) -> int:
     gap since then plus an overlap, and re-reading a day costs an idempotent
     upsert while missing one costs a posting.
     """
-    connection.executescript(SCHEMA)
-    row = connection.execute(
-        "SELECT cursor FROM feed_state WHERE feed = ?", (NAME,)
-    ).fetchone()
-    if not row:
+    stored = db.cursor(connection, NAME)
+    if stored is None:
         return OVERLAP_DAYS + 1  # cold start: as far back as one walk reaches
-    gap = (date.today() - date.fromisoformat(row["cursor"])).days
+    gap = (date.today() - date.fromisoformat(stored)).days
     return max(1, min(gap + OVERLAP_DAYS, MAX_ONLINE_SINCE))
 
 
 def save_cursor(connection: sqlite3.Connection, when: date | None = None) -> None:
-    with connection:
-        connection.execute(
-            "INSERT INTO feed_state (feed, cursor, updated_at) VALUES (?, ?, ?)"
-            " ON CONFLICT (feed) DO UPDATE SET cursor = excluded.cursor,"
-            " updated_at = excluded.updated_at",
-            (NAME, (when or date.today()).isoformat(), db.now()),
-        )
+    db.save_cursor(connection, NAME, (when or date.today()).isoformat())
 
 
 def _description(content: dict) -> tuple[str, str | None]:
@@ -346,7 +327,6 @@ def run(connection: sqlite3.Connection, days: int | None = None) -> Sweep:
     way `jobstream --since` does. Replay is safe: every write is an idempotent
     upsert and the cursor only ever moves forward to today.
     """
-    connection.executescript(SCHEMA)
     days = days or cursor(connection)
     rows, pages, advertised = walk(days)
 

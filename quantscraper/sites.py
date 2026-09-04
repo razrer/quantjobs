@@ -40,14 +40,11 @@ import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from . import db, http
+from . import db, http, parsing
 from .models import Job
 
 
-def _text(value: str | None) -> str | None:
-    from .extract import _text as shared  # one definition, in the module that owns it
-
-    return shared(value)
+_text = parsing.text  # one definition, in `parsing`
 
 
 class SiteChanged(ValueError):
@@ -367,15 +364,15 @@ def captor() -> list[Job]:
     return _prose_board("captor", "https://captor.se/om-oss/karriar/", "Stockholm, Sweden")
 
 
-def norron() -> list[Job]:
-    """Norron Asset Management. No board -- applications go to the CEO.
-
-    Same shape as Captor. The roster notes Norron's fund business is being sold
-    to Simplicity AB, so this one may become stale rather than merely quiet;
-    the reader will keep saying "nothing" either way, and the distinction is
-    the roster's job rather than this module's.
-    """
-    return _prose_board("norron", "https://norron.com/sv/karriar/", "Stockholm, Sweden")
+# **Norron's reader was here and the firm is gone.** `/sv/karriar/` answered
+# 404 and the homepage carried the word *Simplicity* -- the sale this reader's
+# own docstring predicted, in as many words. The 404 was the `sites.py` rule
+# working rather than breaking: a reader that raises is what keeps "this firm
+# advertises nothing" and "this page no longer exists" distinguishable, and
+# Norron simply moved from the first state to the second. It is `stale` in
+# `roster.csv` now, so a miss there reads as correct rather than as a bug.
+# Simplicity AB is a different employer and wants its own roster line, not a
+# redirect on this one.
 
 
 # --------------------------------------------------------------------------
@@ -931,7 +928,6 @@ SITES: tuple[Site, ...] = (
     Site("ap7", "ap7.se", "AP7", ap7),
     Site("brummer", "brummer.se", "Brummer & Partners", brummer),
     Site("captor", "captor.se", "Captor", captor),
-    Site("norron", "norron.com", "Norron", norron),
     # No reader: Workday already reads this board. Only the *fingerprint* was
     # missing, because `nasdaq.com` never answers us and the careers walk
     # starts there. `curl` with a browser user agent reaches it, which is how
@@ -1129,6 +1125,41 @@ SITES: tuple[Site, ...] = (
         None,
         ats="icims_cs",
     ),
+    # ---- SuccessFactors RMK, where the fingerprint caught the pod ----------
+    #
+    # **Twenty-four rows sat tier A with a NULL token and every one of them
+    # named a `careerN.successfactors.*` host.** That is the vendor's shared
+    # pod, not a tenant -- the `careers-analytics.recruitee.com` shape one
+    # vendor over -- so `_NOT_A_TOKEN` refused it and correctly left the row
+    # tokenless, which is the state `CLAUDE.md` calls "a firm that reads as
+    # resolved everywhere and yields nothing forever". The board is on the
+    # firm's own hostname, as it is for every RMK tenant this project already
+    # reads: `careers.nomura.com`, `jobs.scania.com`, `careers.fitch.group`.
+    #
+    # Found by walking each of the 24 domains for a `jobs.`/`careers.` host and
+    # running the reader against it. Seven answered; the rest either resolve
+    # to a board already polled under a sibling domain (`scania.com` ->
+    # `jobs.scania.com`, held under `traton.com`, which is the GSA duplicate
+    # shape) or publish no reachable board at all.
+    #
+    # **GIC is the one that matters.** Singapore's sovereign fund, 171
+    # postings, 133 of them in a focus hub, carrying `Portfolio Manager,
+    # Securities Finance` and `Associate - VP, External Managers, Macro/Fixed
+    # Income`. Its careers host answers on no path the walk tries -- `gic.com.sg`
+    # does not resolve at all, only `www.gic.com.sg` does -- so nothing but a
+    # hand-verified row was ever going to reach it.
+    Site("careers.gic.com.sg", "gic.com.sg", "GIC", None, ats="successfactors"),
+    Site("careers.quintet.com", "quintet.com", "Quintet", None, ats="successfactors"),
+    Site("careers.partnerre.com", "partnerre.com", "PartnerRe", None, ats="successfactors"),
+    Site("jobs.grace.com", "grace.com", "W. R. Grace", None, ats="successfactors"),
+    Site("jobs.popular.com", "popular.com", "Popular", None, ats="successfactors"),
+    Site("jobs.valentino.com", "valentino.com", "Valentino", None, ats="successfactors"),
+    # Summit Electric Supply is a Sonepar company and the board is the group's.
+    # Read once against the postings before recording it, which is the
+    # `acadian.com` guard: 929 rows of warehouse and counter-sales work across
+    # Sonepar's own metros, which is Summit's business and not somebody else's.
+    Site("career.sonepar.com", "summit.com", "Summit Electric Supply", None,
+         ats="successfactors"),
 )
 
 BY_TOKEN = {site.token: site for site in SITES}
