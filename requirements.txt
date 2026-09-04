@@ -11,3 +11,26 @@ certifi==2025.8.3
 # the daily/weekly pipeline imports pyarrow; it is only needed to reopen that
 # one file by hand.
 pyarrow==21.0.0
+
+# beautifulsoup4: the HTML list readers in quantscraper/extract.py,
+# quantscraper/sites.py and quantscraper/bodies.py. Each of those used to be a
+# small stack of bounded regexes over fetched markup, and the failures that
+# stack produced are catalogued in CLAUDE.md one at a time: a vendor writing
+# `class="jv-job-list-location ml-auto"` cost every Jobvite location because
+# the pattern wanted a quote where the markup has a space; SuccessFactors ships
+# two list layouts and a firm may run either, so the table pattern read a card
+# board as empty; the same reader's `href` capture stored `&amp;` verbatim into
+# 849 live URLs. A parser is immune to all three by construction -- a class is
+# a member of a list, a selector matches both layouts, an attribute is decoded
+# on the way out. `parsing.soup` is the one entry point; `html.parser` is the
+# backend, so this stays pure Python and adds no build step to weekly.ps1.
+#
+# Verified rather than assumed: old and new were run against live markup from
+# ten real boards (both Jobvite layouts, two SuccessFactors tenants, the 869 KB
+# D. E. Shaw page, Hailey, the HKMA table, a SuccessFactors detail page) and
+# produce identical postings everywhere except the `&amp;` URLs, where the
+# parser is right and the regex was wrong. Parse cost measured on the same
+# pages: 8 MB/s, ~20 ms for a typical board page against a 1-4 s throttled
+# fetch for it.
+beautifulsoup4==4.14.3
+soupsieve==2.8.1

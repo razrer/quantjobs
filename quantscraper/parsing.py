@@ -5,9 +5,23 @@ from __future__ import annotations
 import html
 import io
 import re
+import warnings
 import xml.etree.ElementTree as ElementTree
 import zipfile
 from html.parser import HTMLParser
+
+import bs4
+
+# **A fetched page is never a locator, and saying so once is cheaper than
+# reading the warning at 3am.** BeautifulSoup warns when the string it is
+# given looks like a URL or a filename, on the theory that the caller meant
+# to fetch it -- twelve lines of advice per occurrence. Every caller of
+# `soup` below passes a body `http.get_text` already returned, so the
+# premise cannot hold here; what it actually fires on is a broken host
+# answering 200 with a bare redirect URL, which the readers handle by
+# finding no postings. Filtered by class rather than globally, so a
+# different warning from this library still reaches the transcript.
+warnings.filterwarnings("ignore", category=bs4.MarkupResemblesLocatorWarning)
 
 _CELL_TAGS = ("td", "th")
 
@@ -39,6 +53,68 @@ def text(value: str | None, *, limit: int | None = None) -> str | None:
         return None
     cleaned = " ".join(html.unescape(_TAGS.sub(" ", value)).split())
     return (cleaned[:limit] if limit else cleaned) or None
+
+
+# How much fetched markup a reader will parse. A hostile or broken host can
+# serve a gigabyte with an HTML content type, and building a tree from it would
+# exhaust memory on a worker thread. Generous against what real boards serve --
+# the largest here is the D. E. Shaw group's whole board on one page, at 869 KB.
+#
+# **Over the bound this raises rather than truncating**, which is the opposite
+# of what `ats.py` and `pages.py` do with theirs, and the difference is what
+# the caller does next. Those two are looking for a *signal* in a page and a
+# clipped page can only cost them the signal; a reader here is enumerating a
+# board, and a clipped page costs it postings it will then report as absent --
+# principle 2 exactly, a scraper that breaks and returns fewer rows with
+# HTTP 200. `extract._poll` turns this into a printed failure and writes
+# nothing, so the board keeps the postings it already has.
+MAX_MARKUP = 4_000_000
+
+
+class MarkupTooLarge(ValueError):
+    """The response is too large to parse. See `MAX_MARKUP` for why it raises."""
+
+
+def soup(markup: str) -> bs4.BeautifulSoup:
+    """Parse fetched markup once, the same way for every reader.
+
+    **Why there is a parser here at all**, when this project's rule is that a
+    library must replace something a hand-rolled block does worse. The board
+    readers used to match markup with small stacks of bounded regexes, and
+    `CLAUDE.md` records what that cost, one incident at a time:
+
+      * `class="jv-job-list-location ml-auto"` -- a second class beside the one
+        the pattern wanted, and every Jobvite location was lost, because the
+        pattern required a quote where the markup has a space;
+      * SuccessFactors and Jobvite each ship **two** list layouts, so each
+        needed a second pattern written after a board answered HTTP 200 and
+        read as empty -- the failure this project is least able to see;
+      * SuccessFactors' `href` was captured verbatim and stored `&amp;` into
+        849 live URLs, because a regex reads an attribute as bytes and a
+        browser reads it as a decoded string.
+
+    None of the three is reachable through a parser: a class is a member of a
+    list, one selector matches both layouts, and an attribute is unescaped on
+    the way out. That is the test the dependency rule asks for -- not that the
+    library is shorter, though it is, but that it is *right* about the specific
+    things the hand-rolled version was wrong about.
+
+    `html.parser` rather than `lxml`: pure Python, so `weekly.ps1` keeps
+    working after a bare `pip install -r requirements.txt` with no compiler in
+    sight, and it is lenient about the malformed markup real boards serve.
+    Measured over the ten captured board pages it is 8 MB/s -- about 20 ms for
+    a typical page, against the 1-4 second throttled fetch that produced it, so
+    the cost does not appear in any wall clock this project keeps.
+
+    **`parsing.text` is still the way to read a node's prose**, not
+    `get_text()`: the two agree on tags and entities and differ on the
+    whitespace collapse, and one definition of that is the point of `text`.
+    """
+    if len(markup) > MAX_MARKUP:
+        raise MarkupTooLarge(
+            f"{len(markup):,d} bytes of markup, over the {MAX_MARKUP:,d} cap"
+        )
+    return bs4.BeautifulSoup(markup, "html.parser")
 
 
 class _TableRowParser(HTMLParser):

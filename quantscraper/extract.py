@@ -51,6 +51,7 @@ _TAGS = re.compile(r"<[^>]+>")
 # One definition, in `parsing`, which owns reading markup. Kept under the old
 # name here because `sites.py` and a dozen readers below call it by that name.
 _text = parsing.text
+_soup = parsing.soup
 
 
 def _json(url: str, **kwargs) -> object:
@@ -497,47 +498,65 @@ def icims(token: str) -> list[Job]:
 
 
 # Jobvite publishes no feed either -- `?format=rss` serves the careersite HTML
-# and the v2 API wants a key -- but its careersite is a plain table, which is
-# more than iCIMS gives. One row is a name cell and a location cell:
+# and the v2 API wants a key -- but its careersite carries the whole list in
+# the markup, which is more than iCIMS gives.
+#
+# **It ships two layouts and a firm may run either**, which is the
+# SuccessFactors lesson one vendor over. A *table*, where `jv-job-list-name`
+# labels the cell containing the anchor:
 #
 #   <td class="jv-job-list-name"><a href="/{token}/job/{id}">Title</a></td>
 #   <td class="jv-job-list-location"> London, England </td>
 #
-# Parsed as two passes rather than one regex spanning both cells: a single
-# pattern reaching from the anchor across to the location has to cross
-# unbounded markup, which is the shape that stalled this project twice.
-_JOBVITE_NAME = re.compile(
-    r'jv-job-list-name["\'>][\s\S]{0,300}?/job/([A-Za-z0-9]{1,24})["\'][^>]{0,120}>'
-    r'([^<]{1,200})</a>',
-    re.I,
-)
-_JOBVITE_PLACE = re.compile(
-    r'jv-job-list-location["\'][^>]{0,80}>([\s\S]{0,300}?)</td>', re.I
-)
-# **The second layout, and it is the SuccessFactors lesson one vendor over.**
-# Jobvite ships two: a *table*, where `jv-job-list-name` labels the cell that
-# contains the anchor (above), and a *card list*, where the anchor comes first
-# and the name and location are `<div>`s inside it. They agree on the class
-# names and on nothing else, so the table pattern finds zero on a card board --
-# a board answering HTTP 200 and coming back empty, which is the failure this
-# project is least able to see. `addendacapital` advertised `1-3 of 3` and
-# `mercycorps` 32, and both read as nought.
+# and a *card list*, where the anchor comes first and the two fields are
+# `<div>`s inside it. They agree on the class names and on nothing else, so
+# each layout needed its own pattern -- and the table pattern read a card board
+# as **nought** until the second was written: `addendacapital` advertised
+# `1-3 of 3` and `mercycorps` 32, and both came back empty.
 #
-# One pattern rather than the two passes the table needs, because here the two
-# fields are inside the same anchor and the span between them is short and
-# bounded -- 200 characters, which is the rule the stalled `ats` runs left.
-_JOBVITE_CARD = re.compile(
-    r'/job/([A-Za-z0-9]{1,24})["\'][^>]{0,200}>[\s\S]{0,200}?'
-    # `[^>]{0,80}` rather than a quote straight after the class name: the
-    # class attribute carries layout classes beside it on some boards --
-    # `class="jv-job-list-location ml-auto"` -- and requiring the quote read
-    # the title and dropped every location.
-    r'jv-job-list-name[^>]{0,80}>([\s\S]{0,200}?)</div>'
-    r'(?:[\s\S]{0,200}?jv-job-list-location[^>]{0,80}>([\s\S]{0,300}?)</div>)?',
-    re.I,
-)
-# "1-50 of 73". The board states its own size, which is the cheapest possible
-# check that paging reached the end.
+# One selector reads both, because to a parser the difference is only where the
+# anchor sits relative to the name, and `find_parent` answers that in either
+# direction. **And `class="jv-job-list-location ml-auto"` cannot cost the
+# location again**: a second class beside the one being matched is a fact about
+# a list here, not a character the pattern was not expecting -- that spelling
+# cost every location on the boards that use it, because the pattern wanted a
+# quote where the markup has a space.
+_JOBVITE_NAME = ".jv-job-list-name"
+_JOBVITE_PLACE = ".jv-job-list-location"
+
+
+def _jobvite_rows(body: str) -> list[tuple[str, str, str | None]]:
+    """`(job_id, title, location)` for every posting on one careersite page.
+
+    The row is the nearest `<tr>` where there is one and the anchor itself
+    otherwise, which is exactly the difference between the two layouts.
+    """
+    rows: list[tuple[str, str, str | None]] = []
+    for name in _soup(body).select(_JOBVITE_NAME):
+        link = name if name.name == "a" else name.find("a", href=True)
+        if link is None:
+            link = name.find_parent("a", href=True)
+        href = link["href"].split("?")[0]
+        if "/job/" not in href:
+            continue
+        # The segment straight after `/job/`, not the last one: the old pattern
+        # anchored on `/job/([A-Za-z0-9]{1,24})` and a board linking
+        # `/job/{id}/apply` would otherwise hand back `apply` as the id.
+        job_id = href.split("/job/", 1)[1].split("/")[0]
+        if not job_id:
+            continue
+        row = name.find_parent("tr") or link
+        place = row.select_one(_JOBVITE_PLACE)
+        rows.append(
+            (
+                job_id,
+                " ".join(name.get_text(" ").split()),
+                " ".join(place.get_text(" ").split()) or None if place else None,
+            )
+        )
+    return rows
+
+
 _JOBVITE_TOTAL = re.compile(r"\d{1,6}\s*-\s*\d{1,6}\s+of\s+(\d{1,6})", re.I)
 
 # A backstop against a careersite that never runs out, not a limit on board
@@ -579,25 +598,14 @@ def jobvite(token: str) -> list[Job]:
             total = _JOBVITE_TOTAL.search(body)
             advertised = int(total.group(1)) if total else 0
 
-        names = _JOBVITE_NAME.findall(body)
-        places = [
-            " ".join(_TAGS.sub(" ", p).split()) for p in _JOBVITE_PLACE.findall(body)
-        ]
-        # Zipped only when the table is well formed. A mismatch means the
-        # markup is not the shape assumed here, and a location silently paired
-        # with the wrong posting sends the geography gate the wrong answer --
-        # which deletes a posting rather than mis-ranking it.
-        if len(places) != len(names):
-            places = [None] * len(names)
-        entries = [(i, t, p) for (i, t), p in zip(names, places)]
-        # The card layout, tried when the table found nothing. Not unioned:
-        # the two are alternative renderings of one list, so a board that
-        # answered to both would be one board counted twice.
-        if not entries:
-            entries = [
-                (job_id, title, " ".join(_TAGS.sub(" ", place).split()) or None)
-                for job_id, title, place in _JOBVITE_CARD.findall(body)
-            ]
+        # One pass over both layouts. This used to be two findall passes zipped
+        # by position, with a length check to throw every location away when
+        # they disagreed -- because pairing a location with the wrong posting
+        # sends the geography *gate* an answer about somewhere else, which
+        # deletes a posting rather than mis-ranking it. Reading each row's own
+        # location out of the row makes the pairing structural, so there is
+        # nothing left to check.
+        entries = _jobvite_rows(body)
 
         fresh = 0
         for job_id, title, place in entries:
@@ -610,7 +618,7 @@ def jobvite(token: str) -> list[Job]:
                     ats="jobvite",
                     token=token,
                     job_id=job_id,
-                    title=" ".join(title.split()),
+                    title=title,
                     url=f"https://jobs.jobvite.com/{token}/job/{job_id}",
                     location=place or None,
                 )
@@ -716,18 +724,19 @@ def homerun(token: str) -> list[Job]:
 # The href is `/{lang}/job/{company}/{job}/{posting}`, three UUIDs. All three
 # are needed to address the posting, and the middle one alone is the job -- a
 # posting is a job published to one board, so the same job can appear twice.
-_HAILEY_CARD = re.compile(
-    r'<a href="(/[a-z]{2}-[A-Z]{2}/job/[0-9a-f-]{36}/[0-9a-f-]{36}/[0-9a-f-]{36})"'
-    r"([\s\S]{0,4000}?)</a>",
-    re.I,
+# **The href shape is the anchor, and it stays a pattern for that reason.**
+# The card markup carries no ids and the classes are Tailwind, so the URL is
+# the part the vendor cannot change without breaking its own links -- three
+# UUIDs, company/job/posting, of which the middle one is the job.
+_HAILEY_HREF = re.compile(
+    r"^/[a-z]{2}-[A-Z]{2}/job/[0-9a-f-]{36}/[0-9a-f-]{36}/[0-9a-f-]{36}$", re.I
 )
-_HAILEY_TITLE = re.compile(r"<h3[^>]{0,200}>([^<]{2,200})</h3>", re.I)
-# The location chip. Hailey calls it a "workplace" and it is the only text in
-# this exact wrapper, which is why the class is matched rather than a position.
-_HAILEY_PLACE = re.compile(
-    r'<div class="flex items-center justify-between gap-1">([^<]{1,120})</div>', re.I
-)
-_HAILEY_SUMMARY = re.compile(r"<p[^>]{0,300}>([^<]{2,600})</p>", re.I)
+# Read *inside* the card the href identifies, so a heading or a chip cannot be
+# taken from the card next door. The location chip is Hailey's "workplace",
+# and it is the only text in this wrapper.
+_HAILEY_TITLE = "h3"
+_HAILEY_PLACE = "div.flex.items-center.justify-between.gap-1"
+_HAILEY_SUMMARY = "p"
 
 
 def hailey(token: str) -> list[Job]:
@@ -751,28 +760,28 @@ def hailey(token: str) -> list[Job]:
     body = http.get_text(f"https://{token}.careers.haileyhr.app/", timeout=25, retries=2)
     jobs: list[Job] = []
     seen: set[str] = set()
-    for match in _HAILEY_CARD.finditer(body):
-        href, card = match.group(1), match.group(2)
-        title = _HAILEY_TITLE.search(card)
-        if not title:
+    for card in _soup(body).find_all("a", href=_HAILEY_HREF):
+        title = card.select_one(_HAILEY_TITLE)
+        if title is None:
             # No heading means this is not a job card -- Hailey uses the same
             # anchor shape for the "read more" tile at the foot of the board.
             continue
+        href = card["href"]
         job_id = href.split("/")[4]
         if job_id in seen:
             continue
         seen.add(job_id)
-        place = _HAILEY_PLACE.search(card)
-        summary = _HAILEY_SUMMARY.search(card)
+        place = card.select_one(_HAILEY_PLACE)
+        summary = card.select_one(_HAILEY_SUMMARY)
         jobs.append(
             Job(
                 ats="hailey",
                 token=token,
                 job_id=job_id,
-                title=_text(title.group(1)) or "",
+                title=_text(title.decode_contents()) or "",
                 url=f"https://{token}.careers.haileyhr.app{href}",
-                location=_text(place.group(1)) if place else None,
-                description=_text(summary.group(1)) if summary else None,
+                location=_text(place.decode_contents()) if place else None,
+                description=_text(summary.decode_contents()) if summary else None,
             )
         )
     return jobs
@@ -1544,29 +1553,43 @@ def jobylon(token: str) -> list[Job]:
 # else, so the row split and the place take one alternation each. Reading only
 # the table found 81 postings at one firm and none at the other, which is what
 # a layout gap looks like from outside: a board that answers 200 and is empty.
-_SF_ROW = re.compile(r'<(?:tr\s[^>]*class="[^"]*data-row|li\s[^>]*class="[^"]*job-tile)', re.I)
-# The path may carry a prefix -- Clarksons serves its board under `/Clarksons`
-# -- so one optional segment sits in front of `/job/`. Reading only the bare
-# form found 0 of the 33 postings that page advertises, which the total check
-# turned into a failure rather than an empty board.
-_SF_JOB_PATH = r'((?:/[A-Za-z0-9_.-]+)?/job/[^"]*?/(\d+)/)'
-_SF_LINK = re.compile(
-    rf'class="jobTitle-link[^"]*"[^>]*href="{_SF_JOB_PATH}"[^>]*>(.*?)</a>'
-    rf'|href="{_SF_JOB_PATH}"[^>]*class="jobTitle-link"[^>]*>(.*?)</a>',
-    re.I | re.S,
-)
-_SF_PLACE = re.compile(
-    r'<span class="jobLocation">(.*?)</span>'
-    r'|id="job-\d+-desktop-section-city-value"[^>]*>(.*?)</div>',
-    re.I | re.S,
-)
-_SF_DEPARTMENT = re.compile(r'<span class="jobDepartment">(.*?)</span>', re.I | re.S)
+# **One row selector for both layouts**, where there used to be an alternation
+# written after a card board read as empty: RMK ships a table of
+# `<tr class="data-row">`, which Janus Henderson and Nomura serve, and a list of
+# `<li class="job-tile job-id-N">`, which Carnegie and Scania serve. To a
+# pattern those agree on nothing; to a selector they are two names for a row.
+_SF_ROW = "tr.data-row, li.job-tile"
+# The anchor, which both layouts do agree on. Three things the pattern this
+# replaced had to spell out and a selector gets for nothing: the class may
+# carry a second name beside it (`jobTitle-link fontcolor70e5...` at Scania),
+# the attribute order varies between tenants and so needed the whole pattern
+# written twice, and the `href` arrives **decoded** -- Nomura publishes
+# `Risk-&amp;-Control-Specialist` and the regex stored the escape verbatim into
+# 849 live URLs.
+_SF_LINK = "a.jobTitle-link[href]"
+# The place. Tenants render it two ways and repeat it for responsive layouts --
+# `jobLocation`, `jobLocation sort`, `jobLocation visible-phone`, all three
+# carrying the same string on every one of Nomura's 100 rows, measured. The
+# old pattern wanted `<span class="jobLocation">` exactly and so read only the
+# middle one; a class is a member of a list here.
+_SF_PLACE = '.jobLocation, [id$="-desktop-section-city-value"]'
+_SF_DEPARTMENT = "span.jobDepartment"
 # The page states its own size, and the two layouts word it differently --
-# `Results 1 - 25 of <b>81</b>` and `Showing 1 to 7 of 7 Jobs`. This is the
+# `Results 1 - 25 of <b>81</b>` and `Showing 1 to 15 of 764 Jobs`. This is the
 # check every reader here is held to, and the one that caught Jobvite's slash.
+#
+# **Read off the page's text rather than its markup, because on one layout the
+# markup interrupts the sentence.** The pattern this replaced required the
+# words and the number to be separated by whitespace only, and Nomura splits
+# them across three elements -- `Results </span>1 &#8211; 100<span> ... of
+# <b>513</b>` -- so it matched nothing, `advertised` stayed None, and **a
+# 513-posting board ran with no shortfall guard at all**. That is the shape of
+# silence this project is least able to see: not a failure, an absent check.
+# Stripping tags first makes both layouts one sentence and one pattern, which
+# is the same "strip tags, then read" rule `parsing.text` exists for.
 _SF_TOTAL = re.compile(
-    r"Results?\s*\d+\s*(?:to|&#8211;|–|-)\s*\d+\s*of\s*<b>(\d+)</b>"
-    r"|Showing\s+\d+\s+to\s+\d+\s+of\s+(\d+)\s+Jobs",
+    r"(?:Results?|Showing)\s+[\d,]+\s*(?:to|through|[–—-])\s*[\d,]+"
+    r"\s+of\s+([\d,]+)",
     re.I,
 )
 # **The stride is what the server returned, not a number we chose.** RMK's page
@@ -1580,12 +1603,24 @@ _SF_PAGE = 25
 _SF_PAGES = 400
 
 
-def _sf_first(pattern: re.Pattern[str], block: str) -> str | None:
-    """The first non-empty group of the first match, across an alternation."""
-    found = pattern.search(block)
-    if not found:
+def _sf_field(block, selector: str) -> str | None:
+    """The text of the first node in `block` matching `selector`, or None."""
+    found = block.select_one(selector)
+    return _text(found.decode_contents()) if found is not None else None
+
+
+def _sf_job_id(href: str) -> str | None:
+    """The requisition id out of a posting path, or None if it is not one.
+
+    `/job/{slug}/{id}/`, optionally under a tenant prefix -- Clarksons serves
+    its board from `/Clarksons/job/...`, and reading only the bare form found 0
+    of the 33 postings that page advertises. The id is the last numeric segment
+    rather than a position, so a prefix cannot shift it.
+    """
+    if "/job/" not in href:
         return None
-    return next((_text(g) for g in found.groups() if g), None)
+    digits = [part for part in href.split("?")[0].split("/") if part.isdigit()]
+    return digits[-1] if digits else None
 
 
 def successfactors(token: str) -> list[Job]:
@@ -1605,22 +1640,17 @@ def successfactors(token: str) -> list[Job]:
             f"https://{token}/search/?q=&startrow={startrow}", timeout=25, retries=2
         )
         if advertised is None:
-            total = _SF_TOTAL.search(body)
-            advertised = (
-                int(next(g for g in total.groups() if g)) if total else None
-            )
+            total = _SF_TOTAL.search(_text(body) or "")
+            advertised = int(total.group(1).replace(",", "")) if total else None
         fresh = 0
-        blocks = _SF_ROW.split(body)[1:]
+        blocks = _soup(body).select(_SF_ROW)
         startrow += len(blocks) or _SF_PAGE
         for block in blocks:
-            link = _SF_LINK.search(block)
-            if not link:
+            link = block.select_one(_SF_LINK)
+            if link is None:
                 continue
-            groups = [g for g in link.groups() if g is not None]
-            if len(groups) < 3:
-                continue
-            path, job_id, title = groups[:3]
-            if job_id in seen:
+            job_id = _sf_job_id(link["href"])
+            if job_id is None or job_id in seen:
                 continue
             seen.add(job_id)
             fresh += 1
@@ -1629,10 +1659,10 @@ def successfactors(token: str) -> list[Job]:
                     ats="successfactors",
                     token=token,
                     job_id=job_id,
-                    title=_text(title) or "",
-                    url=f"https://{token}{path}",
-                    location=_sf_first(_SF_PLACE, block),
-                    department=_sf_first(_SF_DEPARTMENT, block),
+                    title=_text(link.decode_contents()) or "",
+                    url=f"https://{token}{link['href']}",
+                    location=_sf_field(block, _SF_PLACE),
+                    department=_sf_field(block, _SF_DEPARTMENT),
                 )
             )
         if not fresh:

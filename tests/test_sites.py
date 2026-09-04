@@ -12,10 +12,14 @@ Run with: python -m unittest discover -s tests
 from __future__ import annotations
 
 import json
+import pathlib
+import sys
 import unittest
 from unittest import mock
 
-from quantscraper import ats, db, extract, sites
+from quantscraper import ats, db, extract, parsing, sites
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
 def _nordea_page(count, *rows):
@@ -311,3 +315,135 @@ class ProseBoardTest(unittest.TestCase):
         page = self._page(("Quant", "https://r.example/a/"), ("Quant", "https://r.example/a/"))
         with mock.patch.object(sites.http, "get_text", return_value=page):
             self.assertEqual(len(sites.ap7()), 1)
+
+
+class MarkupSizeTest(unittest.TestCase):
+    """`parsing.soup` raises over its cap rather than clipping, and that is
+    the opposite of what `ats.py` and `pages.py` do with theirs.
+
+    Those two hunt for a *signal* in a page, so a clipped page can only cost
+    them the signal. A reader here is enumerating a board, so a clipped page
+    costs it postings and it then reports them as absent -- principle 2, a
+    scraper that breaks and returns fewer rows with HTTP 200.
+    """
+
+    def test_markup_under_the_cap_parses(self):
+        self.assertEqual(parsing.soup("<b>ok</b>").get_text(), "ok")
+
+    def test_markup_over_the_cap_raises_rather_than_truncating(self):
+        with self.assertRaises(parsing.MarkupTooLarge):
+            parsing.soup("<p>x</p>" * parsing.MAX_MARKUP)
+
+    def test_a_body_that_looks_like_a_url_does_not_warn(self):
+        """A broken host answering 200 with a bare redirect URL would otherwise
+        put twelve lines of BeautifulSoup advice into `logs/weekly-<date>.log`
+        -- advice about a mistake this module cannot make, since every caller
+        passes a body `http.get_text` already returned.
+
+        Checked in a second interpreter under `-W error`, the way
+        `test_alerts` pins the tagger fingerprint: a warning filter is
+        process-global state, so `catch_warnings` here would reset the very
+        filter under test and prove nothing.
+        """
+        import subprocess
+
+        done = subprocess.run(
+            [sys.executable, "-W", "error", "-c",
+             "from quantscraper import parsing;"
+             " print(len(parsing.soup('https://careers.example.com/jobs')"
+             ".find_all(True)), len(parsing.soup('board.html').find_all(True)))"],
+            capture_output=True, text=True, cwd=str(ROOT),
+        )
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(done.stdout.strip(), "0 0")
+
+
+class DeshawTest(unittest.TestCase):
+    """The board is one server-rendered page of ~86 cards, ~900 KB of it.
+
+    The fields used to be read by splitting the page on the id attribute and
+    running four more patterns over each piece -- split rather than spanned,
+    because one pattern reaching from the id across the nested SVG to the
+    title is where a regex over a page this size turns quadratic. The point of
+    these tests is that the containment the split was imitating is now real:
+    a card's fields come from that card.
+    """
+
+    CARDS = (
+        '<div class="job" data-job-id="11">'
+        '<a href="/careers/11-quantitative-analyst">'
+        '<span class="job-display-name">Quantitative Analyst</span></a>'
+        '<svg viewBox="0 0 4 4"><path d="M0 0"/></svg>'
+        '<span class="location">New York</span>'
+        '<p class="category">Systematic Trading</p></div>'
+        '<div class="job" data-job-id="12">'
+        '<a href="/careers/12-software-developer">'
+        '<span class="job-display-name">Software Developer</span></a></div>'
+    )
+
+    def test_each_card_keeps_its_own_fields(self):
+        with mock.patch.object(sites.http, "get_text", return_value=self.CARDS):
+            first, second = sites.deshaw()
+        self.assertEqual(first.job_id, "11")
+        self.assertEqual(first.location, "New York")
+        self.assertEqual(first.department, "Systematic Trading")
+        # The card next door published neither, and must not borrow them.
+        self.assertEqual(second.job_id, "12")
+        self.assertIsNone(second.location)
+        self.assertIsNone(second.department)
+
+    def test_a_page_with_no_cards_is_loud(self):
+        with mock.patch.object(sites.http, "get_text", return_value="<p>hello</p>"):
+            with self.assertRaises(sites.SiteChanged):
+                sites.deshaw()
+
+    def test_a_card_with_no_title_is_skipped_rather_than_named_empty(self):
+        page = self.CARDS + '<div class="job" data-job-id="13"></div>'
+        with mock.patch.object(sites.http, "get_text", return_value=page):
+            self.assertEqual([j.job_id for j in sites.deshaw()], ["11", "12"])
+
+
+class HkmaTest(unittest.TestCase):
+    """The vacancies table, read as a table.
+
+    The pattern this replaced spanned two cells and so had to assert the
+    whitespace between `</a>`, `</td>` and the next `<td>` -- a re-indent of
+    the template would have taken the board to zero while the `recruit-` guard
+    above it still passed, which is the quiet direction.
+    """
+
+    # The whitespace between the second row's cells is the point: the
+    # pattern this replaced asserted what sits between `</a>`, `</td>`
+    # and the next `<td>`, so a re-indent of the template would have taken
+    # the board to zero while the `recruit-` guard above it still passed.
+    ROWS = """<table><tr><th>Post</th><th>Closing Date(s)</th></tr>
+<tr><td><a href="/eng/about-us/join-us/current-vacancies/recruit-20260220-3/">Analyst (Research &amp; Statistics)</a></td><td>3 October 2026</td></tr>
+
+<tr>   <td>  <a href="/eng/about-us/join-us/current-vacancies/recruit-20260114-1/">Manager</a>  </td>
+   <td>  -  </td>   </tr></table>"""
+
+    def _read(self):
+        with mock.patch.object(sites.http, "get_text", return_value=self.ROWS):
+            return sites.hkma()
+
+    def test_the_reference_title_and_stated_deadline_are_read(self):
+        first, second = self._read()
+        self.assertEqual(first.job_id, "20260220-3")
+        self.assertEqual(first.title, "Analyst (Research & Statistics)")
+        self.assertEqual(first.deadline, "2026-10-03")
+        self.assertEqual(first.location, "Hong Kong")
+
+    def test_a_dash_is_not_a_deadline(self):
+        """Half the rows print `-`, and a guessed deadline pins the wrong card
+        to the top of a board that orders on deadlines."""
+        self.assertIsNone(self._read()[1].deadline)
+
+    def test_whitespace_between_the_cells_does_not_matter(self):
+        """The second row above is written with the spacing the pattern this
+        replaced would have refused."""
+        self.assertEqual(self._read()[1].job_id, "20260114-1")
+
+    def test_a_page_with_no_recruit_links_is_loud(self):
+        with mock.patch.object(sites.http, "get_text", return_value="<table></table>"):
+            with self.assertRaises(sites.SiteChanged):
+                sites.hkma()

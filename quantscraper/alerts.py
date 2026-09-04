@@ -43,6 +43,7 @@ a deliberate subset.
 from __future__ import annotations
 
 import sqlite3
+import statistics
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -71,11 +72,10 @@ class Alert:
 
 
 def _median(values: list[int]) -> float:
-    ordered = sorted(values)
-    middle = len(ordered) // 2
-    if len(ordered) % 2:
-        return float(ordered[middle])
-    return (ordered[middle - 1] + ordered[middle]) / 2
+    """`statistics.median`, kept behind a name because the *choice* is the
+    point. See the module docstring: a mean lets one broken run pull the
+    baseline down, so this is a median and must stay one."""
+    return float(statistics.median(values))
 
 
 def _parse(moment: str | None) -> datetime | None:

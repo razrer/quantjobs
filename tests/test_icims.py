@@ -284,6 +284,74 @@ class SuccessFactorsTest(unittest.TestCase):
             self.assertEqual(extract.successfactors("x"), [])
         self.assertEqual(fetch.call_count, 1)
 
+    def test_an_entity_in_the_href_arrives_decoded(self):
+        """A browser reads `&amp;` in an attribute as `&`; the pattern this
+        replaced read it as five characters and stored them.
+
+        Measured before the change: **849 live postings carried a URL with a
+        literal `&amp;` in its path**, all SuccessFactors, all from tenants
+        whose slugs contain an ampersand -- Nomura's `Principal Risk &
+        Control Specialist`, AkzoNobel's `Digital Marketing & eCommerce
+        Manager`. The card on the board is what the reader clicks, so this is
+        the `url=None` rule one step along: a wrong link is worse than none.
+        """
+        row = (
+            '<tr class="data-row"><td><a class="jobTitle-link"'
+            ' href="/job/Mumbai-Risk-&amp;-Control/1406644800/">'
+            'Risk &amp; Control Specialist</a></td></tr>'
+        )
+        pages = [self._page(row, 1), self._page("", 1)]
+        with mock.patch.object(extract.http, "get_text", side_effect=pages):
+            job = extract.successfactors("careers.nomura.com")[0]
+        self.assertEqual(job.title, "Risk & Control Specialist")
+        self.assertEqual(
+            job.url,
+            "https://careers.nomura.com/job/Mumbai-Risk-&-Control/1406644800/",
+        )
+
+    def test_the_anchor_may_carry_a_second_class(self):
+        """Scania writes `class="jobTitle-link fontcolor70e5..."`. A class is a
+        member of a list, so this needs no `[^"]*` anywhere."""
+        row = (
+            '<tr class="data-row"><td><a class="jobTitle-link fontcolor70e5"'
+            ' href="/job/Mora-Tekniker/1367656733/">Tekniker</a></td></tr>'
+        )
+        pages = [self._page(row, 1), self._page("", 1)]
+        with mock.patch.object(extract.http, "get_text", side_effect=pages):
+            self.assertEqual(extract.successfactors("jobs.scania.com")[0].title,
+                             "Tekniker")
+
+    def test_the_total_is_found_when_markup_interrupts_the_sentence(self):
+        """**A 513-posting board ran with no shortfall guard at all.**
+
+        Nomura splits its own count across three elements -- `Results
+        </span>1 &#8211; 100<span> ... of <b>513</b>` -- and the pattern this
+        replaced required whitespace only between the words and the numbers,
+        so it matched nothing, `advertised` stayed None, and the check every
+        board here is held to was simply absent. Not a failure: an absent
+        check, which is the shape this project is least able to see.
+        """
+        split_up = (
+            '<span class="paginationLabel">Results </span>'
+            '<span>1 &#8211; 100</span> of <b>513</b>'
+        )
+        with mock.patch.object(
+            extract.http, "get_text", return_value=split_up + self.TABLE
+        ):
+            with self.assertRaises(ValueError) as caught:
+                extract.successfactors("careers.nomura.com")
+        self.assertIn("advertises 513", str(caught.exception))
+
+    def test_a_thousands_separator_in_the_total_is_read(self):
+        with mock.patch.object(
+            extract.http,
+            "get_text",
+            return_value="<span>Showing 1 to 25 of 1,508 Jobs</span>" + self.TABLE,
+        ):
+            with self.assertRaises(ValueError) as caught:
+                extract.successfactors("x")
+        self.assertIn("advertises 1508", str(caught.exception))
+
 
 class IcimsCareerSiteTest(unittest.TestCase):
     """iCIMS' newer product, served from the firm's own hostname.
@@ -647,22 +715,54 @@ class JobviteTwoLayoutsTest(unittest.TestCase):
         '<div class="jv-job-list-location ml-auto">London</div></a></li></ul>'
     )
 
+    TABLE = (
+        '<span>1-2 of 2</span><table><tbody>'
+        '<tr><td class="jv-job-list-name"><a href="/acme/job/aaaa">Quant Trader</a></td>'
+        '<td class="jv-job-list-location">Chicago</td></tr>'
+        '<tr><td class="jv-job-list-name"><a href="/acme/job/bbbb">Quant Researcher</a></td>'
+        '<td class="jv-job-list-location">New York</td></tr>'
+        '</tbody></table>'
+    )
+
     def test_the_card_layout_is_read(self):
-        found = extract._JOBVITE_CARD.findall(self.CARD)
-        self.assertEqual([(i, " ".join(t.split())) for i, t, _ in found],
-                         [("oZQuAfwD", "Quantitative Researcher"), ("oHKtAfwe", "Trader")])
+        self.assertEqual(
+            [(i, t) for i, t, _ in extract._jobvite_rows(self.CARD)],
+            [("oZQuAfwD", "Quantitative Researcher"), ("oHKtAfwe", "Trader")],
+        )
+
+    def test_the_table_layout_is_read(self):
+        self.assertEqual(
+            [(i, t) for i, t, _ in extract._jobvite_rows(self.TABLE)],
+            [("aaaa", "Quant Trader"), ("bbbb", "Quant Researcher")],
+        )
 
     def test_the_location_class_may_carry_other_classes(self):
         """`class="jv-job-list-location ml-auto"` cost every location on the
         boards that write it, because the pattern wanted a quote where the
-        markup has a space."""
-        places = [" ".join(p.split()) for _, _, p in extract._JOBVITE_CARD.findall(self.CARD)]
-        self.assertEqual(places, ["Regina, Saskatchewan", "London"])
+        markup has a space. A parser reads a class as a member of a list, so
+        this is now true by construction rather than by a spelling."""
+        self.assertEqual(
+            [p for _, _, p in extract._jobvite_rows(self.CARD)],
+            ["Regina, Saskatchewan", "London"],
+        )
 
-    def test_the_table_layout_still_wins_where_it_matches(self):
-        """Not unioned: the two are alternative renderings of one list, so a
-        board answering to both would be one board counted twice."""
-        table = ('<td class="jv-job-list-name"><a href="/acme/job/aaaa">Quant Trader</a></td>'
-                 '<td class="jv-job-list-location">Chicago</td>')
-        self.assertEqual(extract._JOBVITE_NAME.findall(table),
-                         [("aaaa", "Quant Trader")])
+    def test_a_location_belongs_to_its_own_row(self):
+        """The pairing used to be positional -- two `findall` passes zipped --
+        and a mismatch threw every location away, because a location on the
+        wrong posting sends the geography *gate* an answer about somewhere
+        else. Reading each row's location out of the row makes it structural.
+        """
+        for markup in (self.CARD, self.TABLE):
+            rows = extract._jobvite_rows(markup)
+            self.assertEqual(len(rows), 2)
+            self.assertTrue(all(place for _, _, place in rows))
+
+    def test_a_row_is_read_once_whichever_layout_it_is_in(self):
+        """The two used to be alternatives, with the card pattern tried only
+        when the table pattern found nothing, so that a board answering to both
+        was not counted twice. One pass over the name cells has no such
+        question to answer -- but a board carrying both must still yield each
+        posting once."""
+        found = extract._jobvite_rows(self.CARD + self.TABLE)
+        self.assertEqual([i for i, _, _ in found],
+                         ["oZQuAfwD", "oHKtAfwe", "aaaa", "bbbb"])

@@ -260,26 +260,24 @@ def jobbsafari_body(row) -> Fetched:
 # SuccessFactors RMK renders the description server-side into a microdata span
 # on the detail page. There is no JSON island and no API: the span is the
 # whole surface, and it closes at the `</div>` that ends the `job` block.
-_SF_DESCRIPTION = re.compile(
-    r'<span[^>]*itemprop="description"[^>]*>(.*?)</span>\s*</div>', re.S | re.I
-)
-
-# The same page carries schema.org *microdata* for the place, as a run of
-# `<meta itemprop=...>` inside one `jobLocation` span. Tenants disagree about
-# which fields they fill -- AkzoNobel and Scania write a single
-# `streetAddress` ("Groningen, NL, 9723 BW"), DekaBank and NordLB write
-# `addressLocality` + `addressRegion` + `addressCountry` -- so the block is
-# found first and the fields read out of it in a fixed order.
-_SF_LOCATION = re.compile(
-    r'itemprop="jobLocation".{0,600}?</span>\s*</span>', re.S | re.I
-)
-_SF_FIELD = re.compile(
-    r'itemprop="(streetAddress|addressLocality|addressRegion|addressCountry)"'
-    r'[^>]*content="([^"]*)"', re.I
-)
+# The detail page is schema.org **microdata**, so both fields are read by the
+# attribute the standard names rather than by the markup the tenant wrapped it
+# in. That is the whole reason these are selectors: the description pattern
+# had to assert the `</span></div>` closing the block, and the location
+# pattern had to bound its own search to 600 characters, because a `.{0,600}?`
+# over an unbounded page is the shape that stalled this project twice. A
+# parser has neither problem -- the block is a node, and what is inside it is
+# inside it.
+_SF_DESCRIPTION = '[itemprop="description"]'
+# Tenants disagree about which address fields they fill -- AkzoNobel and
+# Scania write a single `streetAddress` ("Mora, SE, 792 50"), DekaBank and
+# NordLB write `addressLocality` + `addressRegion` + `addressCountry` -- so
+# the block is found first and the fields are read out of it in a fixed order.
+_SF_LOCATION = '[itemprop="jobLocation"]'
+_SF_ADDRESS = ("streetAddress", "addressLocality", "addressRegion", "addressCountry")
 
 
-def _sf_place(page: str) -> str | None:
+def _sf_place(page) -> str | None:
     """The posting's place from the SuccessFactors microdata, or None.
 
     Seven boards -- Scania, DekaBank, NordLB, BayernLB and three others --
@@ -288,15 +286,19 @@ def _sf_place(page: str) -> str | None:
     right, and unrankable, which is not. The detail page has known it all
     along.
     """
-    block = _SF_LOCATION.search(page)
+    block = page.select_one(_SF_LOCATION)
     if block is None:
         return None
-    fields = dict(_SF_FIELD.findall(block.group(0)))
+    fields = {
+        node["itemprop"]: node.get("content", "")
+        for node in block.select("[itemprop][content]")
+        if node["itemprop"] in _SF_ADDRESS
+    }
     if street := (fields.get("streetAddress") or "").strip():
         return street
     parts = [
         value.strip()
-        for key in ("addressLocality", "addressRegion", "addressCountry")
+        for key in _SF_ADDRESS[1:]
         if (value := fields.get(key, "")).strip()
     ]
     return ", ".join(parts) or None
@@ -325,16 +327,17 @@ def successfactors_body(row) -> Fetched:
         page = http.get_text(url, timeout=25, retries=1)
     except Exception:  # noqa: BLE001 -- a 404, a timeout, a hostile page
         return Fetched(None, None)
-    found = _SF_DESCRIPTION.search(page)
-    return Fetched(_clean(found.group(1)) if found else None, _sf_place(page))
+    tree = parsing.soup(page)
+    found = tree.select_one(_SF_DESCRIPTION)
+    return Fetched(
+        _clean(found.decode_contents()) if found else None, _sf_place(tree)
+    )
 
 
 # iCIMS' classic portal serves the job page as a frame and the frame carries a
 # schema.org `JobPosting` island. `_ICIMS_LD` finds the island; the shape of
 # what is inside it is JSON, so nothing else here is a pattern.
-_ICIMS_LD = re.compile(
-    r'<script[^>]+type="application/ld\+json"[^>]*>(.*?)</script>', re.S | re.I
-)
+_ICIMS_LD = 'script[type="application/ld+json"]'
 
 
 def _ld_job_posting(page: str) -> dict | None:
@@ -345,9 +348,9 @@ def _ld_job_posting(page: str) -> dict | None:
     skipped rather than raised on: the others may still be good, and one
     vendor's stray comma must not cost the description.
     """
-    for island in _ICIMS_LD.findall(page):
+    for island in parsing.soup(page).select(_ICIMS_LD):
         try:
-            payload = json.loads(island)
+            payload = json.loads(island.string or island.get_text())
         except ValueError:
             continue
         for entry in payload if isinstance(payload, list) else [payload]:

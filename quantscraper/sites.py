@@ -45,6 +45,7 @@ from .models import Job
 
 
 _text = parsing.text  # one definition, in `parsing`
+_soup = parsing.soup  # and one parser, for the same reason
 
 
 class SiteChanged(ValueError):
@@ -564,15 +565,18 @@ def drw() -> list[Job]:
 # The D. E. Shaw group
 
 
-# One card per posting. Split on the id attribute rather than matched whole,
-# for the reason `extract.jobvite` gives: a single pattern reaching from the id
-# across the nested SVG markup to the title is where a regex over a 900 KB page
-# turns quadratic.
-_DESHAW_ID = re.compile(r'<div class="job" data-job-id="(\d+)"', re.I)
-_DESHAW_TITLE = re.compile(r'class="job-display-name">([\s\S]{0,300}?)</span>', re.I)
-_DESHAW_LOCATION = re.compile(r'class="location">([\s\S]{0,200}?)</span>', re.I)
-_DESHAW_CATEGORY = re.compile(r'class="category">([\s\S]{0,200}?)</p>', re.I)
-_DESHAW_HREF = re.compile(r'href="(/careers/[a-z0-9][a-z0-9-]{2,140})"', re.I)
+# One card per posting, and the fields are read out of the card rather than
+# out of the page. This used to be an id pattern that *split* the markup and
+# four more patterns run over each piece -- split rather than one pattern
+# spanning the card, because a single pattern reaching from the id across the
+# nested SVG to the title is where a regex over a 900 KB page turns quadratic.
+# A parser has no such shape to avoid: the card is a node and its fields are
+# inside it, so the containment the split was imitating is the real thing.
+_DESHAW_CARD = "div.job[data-job-id]"
+_DESHAW_TITLE = ".job-display-name"
+_DESHAW_LOCATION = ".location"
+_DESHAW_CATEGORY = ".category"
+_DESHAW_HREF = 'a[href^="/careers/"]'
 
 
 def deshaw() -> list[Job]:
@@ -589,33 +593,33 @@ def deshaw() -> list[Job]:
     the evidence.
     """
     body = http.get_text("https://www.deshaw.com/careers", timeout=40, retries=2)
-    chunks = _DESHAW_ID.split(body)
-    if len(chunks) < 3:
+    cards = _soup(body).select(_DESHAW_CARD)
+    if not cards:
         raise SiteChanged("deshaw: /careers has no data-job-id cards")
     jobs: list[Job] = []
     seen: set[str] = set()
-    # `split` on a capturing pattern yields [before, id, chunk, id, chunk, ...].
-    for job_id, chunk in zip(chunks[1::2], chunks[2::2]):
+    for card in cards:
+        job_id = card["data-job-id"]
         if job_id in seen:
             continue
         seen.add(job_id)
-        title = _DESHAW_TITLE.search(chunk)
+        title = card.select_one(_DESHAW_TITLE)
         if title is None:
             continue
-        href = _DESHAW_HREF.search(chunk)
-        location = _DESHAW_LOCATION.search(chunk)
-        category = _DESHAW_CATEGORY.search(chunk)
+        href = card.select_one(_DESHAW_HREF)
+        location = card.select_one(_DESHAW_LOCATION)
+        category = card.select_one(_DESHAW_CATEGORY)
         jobs.append(
             Job(
                 ats="site",
                 token="deshaw",
                 job_id=job_id,
-                title=_text(title.group(1)) or "",
+                title=_text(title.decode_contents()) or "",
                 url=urllib.parse.urljoin(
-                    "https://www.deshaw.com/", href.group(1) if href else "/careers"
+                    "https://www.deshaw.com/", href["href"] if href else "/careers"
                 ),
-                location=_text(location.group(1)) if location else None,
-                department=_text(category.group(1)) if category else None,
+                location=_text(location.decode_contents()) if location else None,
+                department=_text(category.decode_contents()) if category else None,
             )
         )
     if not jobs:
@@ -813,11 +817,14 @@ def anatole() -> list[Job]:
 # The vacancies table: one row per opening, the title in an anchor whose href
 # carries the recruitment reference, and the employer's own stated closing date
 # in the cell beside it.
-_HKMA_ROW = re.compile(
-    r'<td[^>]{0,120}>\s*<a href="([^"]{0,200}/recruit-([0-9a-z-]{4,40})/)"[^>]{0,120}>'
-    r"([\s\S]{0,200}?)</a>\s*</td>\s*<td[^>]{0,120}>([\s\S]{0,80}?)</td>",
-    re.I,
-)
+# The row is a `<tr>`, the posting is the anchor in its first cell and the
+# closing date is the cell beside it. Read as a table rather than as one
+# pattern spanning two cells: the pattern had to assert the whitespace between
+# `</a>`, `</td>` and the next `<td>`, so a re-indent of the template would
+# have taken the whole board to zero -- and `raise` is not the failure it
+# would have been, because `SiteChanged` is only raised when the anchors are
+# missing too, and here they would not be.
+_HKMA_REFERENCE = re.compile(r"/recruit-([0-9a-z-]{4,40})/", re.I)
 _HKMA_DATE = re.compile(r"^(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})$")
 _HKMA_MONTHS = {
     m: i
@@ -866,9 +873,16 @@ def hkma() -> list[Job]:
         raise SiteChanged("hkma: vacancies page lists no recruit- link")
     jobs: list[Job] = []
     seen: set[str] = set()
-    for match in _HKMA_ROW.finditer(body):
-        href, reference, title, closing = match.groups()
-        name = _text(title)
+    for row in _soup(body).find_all("tr"):
+        cells = row.find_all("td")
+        if len(cells) < 2:
+            continue
+        link = cells[0].find("a", href=_HKMA_REFERENCE.search)
+        if link is None:
+            continue
+        reference = _HKMA_REFERENCE.search(link["href"]).group(1)
+        name = _text(link.decode_contents())
+        closing = cells[1].decode_contents()
         if not name or reference in seen:
             continue
         seen.add(reference)
@@ -878,7 +892,7 @@ def hkma() -> list[Job]:
                 token="hkma",
                 job_id=reference,
                 title=name,
-                url=urllib.parse.urljoin(url, href),
+                url=urllib.parse.urljoin(url, link["href"]),
                 # Written rather than left None: every seat here is in Hong
                 # Kong, the authority has one office, and `_HUBS` reads the
                 # words. Unlike HKEX's site codes there is nothing to decode.

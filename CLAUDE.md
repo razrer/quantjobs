@@ -336,6 +336,38 @@ static, code-unread archive that used to duplicate the same "big CSV" mistake
 below). Neither is imported by the daily/weekly pipeline except `certifi`,
 which every fetch now depends on -- `http.py` is no longer stdlib-only.
 
+**The third is `beautifulsoup4`, and it is the first one whose case is made by
+the incident list rather than by line count.** The HTML list readers in
+`extract.py`, `sites.py` and `bodies.py` matched markup with small stacks of
+bounded regexes, and three of the failures catalogued below are the same
+failure: a *pattern* reads markup as characters where a *parser* reads it as a
+tree. `class="jv-job-list-location ml-auto"` cost every Jobvite location
+because the pattern wanted a quote where the markup has a space; Jobvite and
+SuccessFactors each ship two list layouts and each needed a second pattern
+written after a board answered HTTP 200 and read as empty; and SuccessFactors'
+`href` was captured verbatim, storing `&amp;` into **849 live URLs**. None of
+the three is reachable through a parser -- a class is a member of a list, one
+selector matches both layouts, an attribute is decoded on the way out.
+`parsing.soup` is the one entry point and `html.parser` is the backend, so
+this stays pure Python and adds no build step to `weekly.ps1`.
+
+**Verified against live markup, not against the fixtures.** The tests here are
+synthetic, so agreement with them would have proved only that the rewrite
+matches the fixtures. Old and new were run instead over pages captured from ten
+real boards -- both Jobvite layouts, two SuccessFactors tenants, the 869 KB
+D. E. Shaw page, Hailey, the HKMA table, a SuccessFactors detail page, an iCIMS
+frame and a Jobvite posting -- and they produce **identical postings
+everywhere except the `&amp;` URLs, where the parser is right**.
+
+**And the honest accounting is that it barely shortened anything: 2,335 code
+lines to 2,313, with `sites.py` two lines longer.** That is worth writing down
+because it is the opposite of what "use a library instead" is expected to buy.
+What it bought is that three classes of silent wrong answer are now unreachable
+rather than fixed one board at a time -- which is the second of the two tests
+above, not the first. **Parse cost is not the objection it sounds like**:
+measured over those ten pages `html.parser` runs at 8 MB/s, about 20 ms for a
+typical board page, against the 1-4 second throttled fetch that produced it.
+
 ### Adding a registry
 
 Drop a module in `quantscraper/registries/` exposing `NAME`, `JURISDICTION`,
@@ -756,6 +788,28 @@ nothing public — Da Vinci Derivatives is the standing example.
   table found 81 postings at Janus Henderson and none at Carnegie: a board
   answering 200 and coming back empty. Clarksons adds a third, a path prefix
   before `/job/`, worth 33 postings.
+  **All three are one selector now** (`tr.data-row, li.job-tile`), which is
+  what moving these readers onto a parser was for: the layouts differ in where
+  the anchor sits and a tree does not care.
+- **An `href` captured by a pattern is not the URL a browser follows, and 849
+  live postings carried the difference.** SuccessFactors tenants publish slugs
+  containing an ampersand -- Nomura's `Principal Risk &amp; Control
+  Specialist`, AkzoNobel's `Digital Marketing &amp; eCommerce Manager` -- and
+  the reader stored the escape verbatim, so the card's *open* button pointed
+  at a path with a literal `&amp;` in it. A parser unescapes an attribute on
+  the way out, which is the same *strip tags, then decode* rule `parsing.text`
+  exists for, one field over. This is the `url=None` argument again: **a wrong
+  link is worse than no link.**
+- **A 513-posting board ran with no shortfall guard at all, and nothing said
+  so.** `_SF_TOTAL` matched the words and the number with `\s*` between them,
+  and Nomura splits its own count across three elements -- `Results
+  </span>1 &#8211; 100<span> ... of <b>513</b>` -- so it matched nothing,
+  `advertised` stayed `None`, and the check every board here is held to was
+  simply *absent*. Not a wrong answer: a missing question, which is the
+  shape this project is least able to see. Read off the page's **text** now,
+  tags stripped first, which makes both layouts one sentence and one pattern.
+  **Whenever a check reads markup rather than prose, ask what happens when the
+  vendor puts a tag in the middle of the sentence.**
 - **A board page serving a dead end does not mean there is no feed.** Varbi's
   `/{lang}/what:list/` answers *404 Unallowed call* for every language and
   Homerun's board is script-rendered; both publish a feed (`/what:rssfeed/`,
@@ -3241,6 +3295,67 @@ table.
 Read `MIN(tagged_at)` and `MAX(tagged_at)` for the current tagger to time a
 re-tag. Those are exact, and trustworthy only for the *newest* version, because
 the primary key omits `tagger`.
+
+**Nothing had ever timed the board build, and it is four minutes.**
+`web/build_data.py` runs on every `publish` and inside `daily`, and
+`main()` takes **243s** over 512,109 live postings. Where it goes is one
+place: **`dedup.fingerprint` is ~76s of it, and 97% of that is
+`tagging.fold`** -- the whole description folded, for every posting, purely to
+canonicalise it before a hash. Broken down further over 116 MB of real
+descriptions, `fold`'s stages are transliteration 5.20s, the strip regex
+3.12s, symbols 0.37s, casefold 0.37s, tag-stripping 0.16s: the `_ASCII`
+translate is the expensive one, and it looks like the one a *hash* has no use
+for -- two copies of a reposted advertisement are byte-identical, so nothing
+about accents or `c++` should be able to separate them.
+
+**Measured over all 512,109 live postings, that reasoning is wrong, and the
+way it is wrong is the dangerous direction.** Folding without the
+transliteration and the symbol table is **2.4x -- 30.9s against 73.6s, about
+43s off a 243s build** -- and it does not produce the same clusters: it splits
+nothing and **merges ten pairs the current key keeps apart**. The cause is not
+the hash, it is the length test above it. Transliteration turns non-Latin
+characters into ASCII letters that then survive `_STRIP`, so it makes a body
+*longer*; without it ten short non-Latin bodies fall under `MIN_BODY` and fall
+back to the **title**, which is the blunter key. `CLAUDE.md` already says which
+direction costs more -- *the de-duplicator's dangerous direction is hiding a
+real opening, not showing an advertisement twice* -- so 43 seconds a build is
+not worth ten postings that might be real. Recorded rather than shipped, and
+recorded with the number so the next reader does not have to re-derive it.
+
+**`_STRIP.sub` was the obvious suspect and it is already the right choice.**
+Replacing the regex with a `str.translate` table over the whole BMP -- the
+usual advice, since `translate` runs in C -- is **0.62x, slower**, on
+byte-identical output over 20,000 real descriptions. Measured before it was
+believed.
+
+## Libraries considered for the hot paths, and refused
+
+Each of these was measured rather than reasoned about, and the measurement is
+the reason. **`requests`/`httpx` for `http.py` buys no wall-clock time**: a
+session with connection reuse is 0.153s a request against urllib's 0.244s, and
+every one of those requests then waits behind a **per-host throttle of 1 to 4
+seconds**, which absorbs the difference entirely. It would also mean rewriting
+38 `except urllib.error...` handlers across nine modules, each of which turns a
+bad host into a skipped row rather than a dead pass. **`pyahocorasick` for
+`lexicon`'s matching** caps out at the 30% of a re-tag that matching costs, and
+the current inverted index already tests only the phrases whose key word is
+present -- an automaton per list would scan the whole body once per list, which
+is more work, not less. **`tldextract` for `build_data._TWO_LABEL_TLDS`** is
+right in principle and worth 3 cards: of 9,117 live job domains exactly three
+render as a suffix word, `hkma.gov.hk` has a registry name so is unaffected,
+and the other two are `gov.uk` and an Australian embassy. **`dateutil` for
+`build_data.posted`** would return a datetime and throw away the *precision*
+that function exists to carry, and it does not read `Posted 30+ Days Ago`.
+**`tabulate` for `audit.format_report`** has no rectangle to format -- that
+output is nested sections with indented misses, not a table.
+
+**And `parsing.table_rows` is the one where the library is actively wrong.**
+Its docstring says it assumes tables are not nested; Euronext's member list
+*is* nested, and a tree parser reading `tr -> find_all(td)` recursively returns
+107 rows against the flat parser's 89, with the outer row swallowing every
+nested cell. The reader keys on `len(row) != 1`, so the flat scanner is not a
+poor imitation of a parser here -- it is the right tool, and swapping it in
+would have broken a registry silently.
 
 # Role scope
 
