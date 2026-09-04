@@ -760,20 +760,6 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
 }
 .empty strong { display: block; color: var(--ink); margin-bottom: 0.375rem; }
 
-.notes {
-  margin: 3rem 0 0;
-  padding-top: 1rem;
-  border-top: 1px solid var(--rule);
-  font-size: 0.71875rem;
-  line-height: 1.6;
-  color: var(--ink-faint);
-  columns: 2;
-  column-gap: 2.5rem;
-}
-.notes p { margin: 0 0 0.625rem; break-inside: avoid; }
-.notes b { color: var(--ink-soft); font-weight: 600; }
-.notes code { font-family: var(--font-mono); font-size: 0.9em; }
-
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 @media (prefers-reduced-motion: reduce) { *, *::before { animation: none !important; transition: none !important; } }
 
@@ -784,7 +770,6 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     border-bottom: 1px solid var(--rule); padding-bottom: 1rem;
   }
   .rail[hidden] { display: none; }
-  .notes { columns: 1; }
   .brand span { display: none; }
 }
 </style>
@@ -865,122 +850,6 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     <div class="grid" id="grid"></div>
     <div class="sentinel" id="sentinel"></div>
     <button class="tail" id="tail" hidden></button>
-
-    <div class="notes">
-      <p><b>Ordering.</b> A posting whose closing date is inside the pin window
-      sits above everything else, soonest first, whatever the sort says &mdash;
-      but only if it is on the shortlist (<em>apply now</em> or <em>strong</em>).
-      A closing date says a posting expires; it says nothing about whether you
-      want it, so pinning every dated card promoted the ones nothing had read
-      above the ones worth opening. Everything else keeps its place in the sort
-      you picked, and <em>Closing date</em> still orders purely by deadline
-      &mdash; that is where to look for anything further down that is about to
-      close. The pin window is
-      the <code>pin</code> control &mdash; set it to <em>nothing</em> to sort
-      purely by the spine you picked.</p>
-      <p><b>Closing dates are read, never guessed.</b> Two sources publish one
-      as a field &mdash; MyCareersFuture on every Singapore row, which is 98% of
-      the dated cards here, and JobStream on every Swedish ad. Everything else
-      has none. They are deliberately not mined out of descriptions: hundreds
-      of Swedish ads carry the sentence
-      <em>“tjänsten kan tillsättas innan sista ansökningsdag”</em> with no date
-      in it, and Ashby prints <em>“unless a specific application deadline is
-      stated”</em> on everything it hosts. A guessed date would pin the wrong
-      card to the top of this page for weeks.</p>
-      <p><b>Posted dates are not all equally known.</b> Greenhouse, Ashby,
-      Workable, Lever and JobStream publish a timestamp. Workday publishes a
-      sentence — <code>Posted 30+ Days Ago</code> is a floor, not a date.
-      BambooHR and Personio publish nothing, so those fall back to the day we
-      first saw the posting, an upper bound. Anything approximate is dotted and
-      says what it really knows on hover.</p>
-      <p><b>Stacking</b> collapses a group of three or more into one cell that
-      keeps the rank of its most urgent member, so a stack can never bury a
-      posting that is closing. Group by firm to see who is hiring, by role and
-      place to see one kind of job in one city.</p>
-      <p><b>Two stages, and only the first one removes anything.</b> Stage one
-      is a gate: a nurse, a welder, a <em>Medical AI Specialist</em> are not
-      distant quant roles but other professions, so they never reach this page.
-      It runs off JobStream's own occupation taxonomy where there is one — 15 of
-      its 21 fields can never hold a quant job — and off a short list of
-      unambiguous occupation words where there is not. Stage two is everything
-      in the rail, and it only ranks: <code>unknown</code> is a real value with
-      its own checkbox, because a posting nothing has decided about must stay
-      reachable.</p>
-      <p><b>Most postings with “Trader” in the title are not quant trading.</b>
-      <em>Agency MBS Trader</em>, <em>Precious Metals Trader</em>, <em>Associate
-      Trader, Fixed Income</em> — real seats, and not this job. <b>Trading
-      style</b> splits them from <em>Quantitative</em>, <em>Systematic</em> and
-      <em>Algorithmic Trader</em>, read from the title alone because a body
-      belonging to a trading firm says “systematic” about the firm.</p>
-      <p><b>Nothing is deleted anywhere.</b> The gate is a tag with the evidence
-      that set it; the rows stay in the database, and
-      <code>list --exclude off_industry</code> shows exactly what it ate. Every
-      build prints the count.</p>
-      <p><b>A red preset in the rail hides without judging.</b> <em>Hide credit
-      risk</em> and <em>Hide pure trader roles</em> remove a match from this
-      browser's view only -- nothing is tagged, nothing is written anywhere,
-      and the lexicon still calls the work relevant. They exist for postings
-      that are a real, correctly-graded fit and just not wanted twice. Both
-      start off; clicking one leaves a crumb above the grid saying what is
-      hidden, and clicking that crumb brings it back.</p>
-      <p><b>Two facets in the rail tick backwards from the rest, and they say
-      so.</b> Every other checkbox narrows the board to what you tick --
-      <em>Fit: apply now</em> shows apply-now postings. <em>Hard gates</em> and
-      <em>Language required</em> are marked <b>hides</b> because their values
-      are barriers, not preferences: ticking <em>no visa sponsorship</em> there
-      removes postings that will not sponsor one, instead of narrowing the
-      board down to only those. Nothing is deleted or re-tagged by it -- the
-      posting is still <code>visa_sponsorship_none</code> in the database and
-      comes back the moment the tick is cleared.</p>
-      <p><b>Saved</b> lives in this browser only, keyed on the posting id, and
-      comes back with the <em>Saved</em> preset. <b>Reject</b> is one click for
-      "not this line of work" -- it takes the posting off the board immediately
-      and comes back with the <em>Rejected</em> preset; click it again to
-      undo. The two dropdowns under each card's actions do the same thing more
-      precisely -- correct <b>relevance</b> and <b>seniority</b> by hand when
-      the tagger got one wrong or left it <code>unknown</code> -- and the
-      override sorts, filters and displays as the corrected value from then
-      on, in this browser, immediately. Every correction made here also goes
-      to a small Lambda that holds it until
-      <code>python -m quantscraper corrections</code> (or a normal
-      <code>daily</code> run) pulls it into <code>quantscraper/labels.csv</code>
-      on the machine that owns that file -- no download, no manual merge, just
-      a delay until the next pull instead of an immediate write. Opened over
-      <code>file://</code> or a bare <code>http.server</code> there is no route
-      to answer that POST at all, and a phone can simply be offline &mdash; so a
-      correction that does not get through is kept and retried on the next one
-      and on the next page load, and the rail says how many are still waiting.
-      Nothing has to be downloaded or merged by hand.</p>
-      <p><b>A rejection sticks across rebuilds now, and across a reposting.</b>
-      Once a Reject reaches <code>labels.csv</code>, the next build drops that
-      posting before the page is written -- so it does not come back in a new
-      browser or on another machine. It also drops any posting with the same
-      <em>fingerprint</em>: same firm, same stated location, same description.
-      One Singapore recruiter reposts the identical advertisement every five
-      days under a fresh id, and rejecting it once is meant to be the end of
-      it.</p>
-      <p><b>&times;N on a card means the same opening was found N times</b>,
-      and it folds two different things. One is an advertisement <em>reposted</em>
-      -- same firm, same place, same text -- where the newest is kept; one
-      Singapore recruiter republishes the identical ad every five days under a
-      fresh id. The location is part of that test on purpose: a firm that sends
-      one description to every office is hiring in every office, so Hong Kong
-      and London stay two cards rather than becoming one.</p>
-      <p>The other is <b>one job carried by two sources</b> -- a firm's own
-      careers board and a national board that republishes it, which is what a
-      national board is for. Barclays' <em>Quantitative Analytics Associate Off
-      Cycle Internship</em> is on its own Workday board and on MyCareersFuture,
-      and nothing about the two rows matches: different employer identity,
-      different address, and 7,875 characters of description on one against
-      none on the other. So that fold is decided by the firm, the place and the
-      title together, and the firm test is strict &mdash; <em>Squarepoint
-      Services Singapore</em> and <em>Squarepoint Ops</em> are one company;
-      <em>Blockchain Capital</em> and <em>Chevron Singapore</em> are not, and
-      neither are the seven different firms advertising a job called
-      <em>Trader</em> in Singapore. The card kept is whichever this board rates
-      higher, because the two copies are read separately and do not always
-      agree, and the closing date comes across with it.</p>
-    </div>
   </main>
 </div>
 
