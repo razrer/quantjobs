@@ -1,4 +1,4 @@
-"""Polite HTTP fetching. Standard library only, so there is nothing to install."""
+"""Polite HTTP fetching."""
 
 from __future__ import annotations
 
@@ -12,32 +12,24 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from pathlib import Path
+
+import certifi
 
 USER_AGENT = "quant-scraper/0.1 (personal job-hunt tool; razrer@live.com)"
 
 # Windows builds its certificate store lazily: roots are fetched on demand by
 # the OS, so a fresh Python process sees only the handful already cached -- 38
-# here, against the 152 in a real bundle. Any site whose root has not happened
-# to be cached fails with CERTIFICATE_VERIFY_FAILED, which reads exactly like a
-# broken server. FINMA was diagnosed as "serves an incomplete chain" on that
-# evidence and the diagnosis was wrong; the chain is fine, our trust store was
-# short. These bundles already exist on this machine.
-_CA_BUNDLES = (
-    r"C:\Program Files\Git\mingw64\etc\ssl\certs\ca-bundle.crt",
-    r"C:\msys64\etc\pki\ca-trust\extracted\pem\tls-ca-bundle.pem",
-)
-
-
+# measured here, against 152 in a real bundle. Any site whose root has not
+# happened to be cached fails with CERTIFICATE_VERIFY_FAILED, which reads
+# exactly like a broken server. FINMA was diagnosed as "serves an incomplete
+# chain" on that evidence and the diagnosis was wrong; the chain is fine, our
+# trust store was short. This used to borrow whichever of Git for Windows' or
+# msys2's own CA bundle happened to be installed on this machine -- correct
+# here, and silently back to the short OS store on a machine with neither.
+# `certifi` ships and maintains the bundle itself, so there is nothing to
+# happen to have installed.
 def _ssl_context() -> ssl.SSLContext:
-    for bundle in _CA_BUNDLES:
-        if Path(bundle).exists():
-            try:
-                return ssl.create_default_context(cafile=bundle)
-            except (ssl.SSLError, OSError):
-                continue
-    # No bundle found: the platform default still works for most hosts.
-    return ssl.create_default_context()
+    return ssl.create_default_context(cafile=certifi.where())
 
 # One opener for the process, so cookies persist across calls. Some registers
 # hand out a session on the search page and return an empty result set to
@@ -74,9 +66,18 @@ MIN_INTERVAL_S = 1.0
 # through a Hong Kong sweep and kept answering it for unrelated reads of a
 # board that *does* exist. Four seconds is the same conservative number, for
 # the same reason: the rate was not probed for.
+#
+# `www2.jobs.gov.hk` is the third and it is here for the opposite reason -- it
+# has said nothing to us at all. Its `robots.txt` ends `Disallow: /` and this
+# project reads it anyway, at the reader's instruction, so the interval is not
+# a response to a refusal but the whole of what is offered in exchange: a full
+# sweep of Hong Kong's statutory board is about 750 requests spread over
+# 50 minutes, once a week, by one reader. Nothing else about the request
+# changes -- same user agent, same single connection, no retry of a refusal.
 HOST_INTERVAL_S = {
     "api.mycareersfuture.gov.sg": 4.0,
     "apply.workable.com": 4.0,
+    "www2.jobs.gov.hk": 4.0,
 }
 
 # How long a 429 is honoured for when the server names no `Retry-After`. A 429

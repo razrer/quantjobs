@@ -1,0 +1,13 @@
+# certifi: quantscraper/http.py's TLS trust bundle. Windows populates its
+# certificate store lazily (38 roots cached fresh vs 152 in a real bundle),
+# which read as "FINMA serves an incomplete chain" before it was diagnosed
+# correctly. This replaces borrowing Git for Windows' or msys2's CA bundle --
+# correct only on a machine that happens to have one of those installed -- with
+# a bundle the package maintains itself.
+certifi==2025.8.3
+
+# pyarrow: reads/writes quantscraper/board_triage.parquet, a static archive
+# converted from CSV (530 KB -> 145 KB, byte-identical round-trip). Nothing in
+# the daily/weekly pipeline imports pyarrow; it is only needed to reopen that
+# one file by hand.
+pyarrow==21.0.0

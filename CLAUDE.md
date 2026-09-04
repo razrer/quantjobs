@@ -284,28 +284,57 @@ they cost nothing.** Free as in no licence fee, no account, no API key and no
 metered service -- an ordinary PyPI package under an open licence qualifies and
 a hosted API does not, whatever its free tier says, because a free tier is a
 bill waiting for a threshold. **This reverses the older rule** (*"standard
-library only, keep it that way"*), and the reasoning behind that rule is worth
-keeping as a default rather than as a prohibition: everything here still runs
-from a clean checkout on this machine, and a dependency that saves twenty lines
-is not worth a build step.
+library only, keep it that way"*) and the reversal is not conditional: reach
+for a well-established library first rather than proving a hand-rolled
+alternative is worse. The reasoning behind the old rule is still worth keeping
+as a *design taste* rather than a gate -- everything here still runs from a
+clean checkout on this machine, and a dependency earns its place by replacing
+something the standard library or a hand-rolled block does worse, not by
+surviving an interrogation.
 
-Three tests before adding one, in order:
+Two tests before adding one, and neither requires a benchmark first:
 
-1. **Does it remove a *measured* cost?** Not "would be nicer" -- a number.
-   `parsing.py`'s hand-written `.xlsx` reader is ninety lines and is called
-   twice a month; `openpyxl` would replace it and save nothing that has ever
-   been measured.
-2. **Would its absence be loud?** A pinned import that fails at start-up is
+1. **Would its absence be loud?** A pinned import that fails at start-up is
    fine. A dependency read at the bottom of a fetcher, inside a thread, on one
    source, is how a step goes quiet -- which is principle 2 arriving through
    the package manager.
-3. **Is it doing something this project would otherwise do badly?** Parsing,
-   throttling and classification are load-bearing here and are deliberately
-   ours. Connection pooling, compression and date handling are not.
+2. **Does it touch load-bearing logic without being proven equivalent on the
+   incidents that logic was written for?** Most of this codebase is ordinary
+   glue that any competent library can replace outright. A specific handful of
+   places are not glue -- they are fixes for a documented, measured failure,
+   and a library swapped in there must be checked against the same corpus or
+   the same incident before it ships, not assumed correct because it is
+   popular. The known list: `http.py`'s per-host throttle and its 429-vs-503
+   backoff split (see *A 429 is not a 503* above -- a generic retry
+   decorator's default schedule is exactly the bug that lost a MyCareersFuture
+   walk), `tagging.fold`'s confusable-character table (a general transliterator
+   like `unidecode` mangles the genuine CJK and Greek titles this was
+   deliberately scoped to leave alone), `audit._matches`'s token-run name
+   matching (a distance-based fuzzy match reintroduces the false-merge risk
+   Principle 3 exists to avoid -- `GRASSHOPPER ESCAPEMENT, LLC` is the standing
+   example), and the per-vendor paging/shape quirks in `extract.py` and
+   `bodies.py` (each `isinstance` check there is a specific vendor's specific
+   lie about its own data, catalogued above one at a time). Everywhere else --
+   HTTP transport plumbing below the throttle, TLS trust (`certifi` over
+   hand-listing Git/msys2 CA bundle paths), country-name normalization,
+   archive/columnar formats -- is ordinary and a library is the default,
+   not a last resort.
+
+`openpyxl` for `parsing.py`'s ninety-line `.xlsx` reader is the one measured
+counterexample on record -- called twice a month, and the library would save
+nothing that has ever cost anything. It is not a reason to require the same
+measurement of the next candidate; it is a reminder that "shorter" and "an
+improvement" are not always the same file.
 
 Whatever is added goes in `requirements.txt` with a pinned version and a line
-saying which measurement justified it, and `weekly.ps1` keeps working on a
-machine that has only run `pip install -r`.
+saying what it replaced, and `weekly.ps1` keeps working on a machine that has
+only run `pip install -r`. The first two entries: `certifi`, replacing the
+hand-listed Git/msys2 CA bundle fallback in `http._ssl_context` with a bundle
+the package maintains itself; and `pyarrow`, for `board_triage.parquet` -- a
+static, code-unread archive that used to duplicate the same "big CSV" mistake
+`labels.csv` was already fixed for (see *A fixture that caches a column*
+below). Neither is imported by the daily/weekly pipeline except `certifi`,
+which every fetch now depends on -- `http.py` is no longer stdlib-only.
 
 ### Adding a registry
 
