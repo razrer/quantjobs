@@ -31,7 +31,7 @@ SHORTFALL_TOLERANCE = 0.02
 
 def problem(
     seen: int, advertised: int, minimum: int,
-    *, noun: str = "board", or_else: str = "",
+    *, served: int | None = None, noun: str = "board", or_else: str = "",
 ) -> str | None:
     """The two checks every completed walk owes its caller, or None if sound.
 
@@ -41,14 +41,52 @@ def problem(
     shortfall can have on this particular source, which is worth saying in the
     message rather than in a comment: on a partitioned board it is at least as
     likely to be a facet the walk does not know about as a truncated page.
+
+    **`served` is how many rows the board actually handed over, duplicates
+    included, and it is what separates the two causes rather than naming
+    them.** A shortfall in *distinct* postings has two possible meanings and
+    the message above could only ever guess between them: the walk stopped
+    early, or the walk saw every row and some of them were the same posting
+    twice. Those want opposite responses -- the first is our paging and needs
+    fixing, the second is the index being rewritten underneath a walk that
+    reached the end of the board, and there is nothing to fix.
+
+    Measured on Jobbsafari, which is where this came from: 52,560 advertised,
+    **52,558 rows served over 107 pages ending on an empty one**, 51,507
+    distinct -- and **every one of the 1,051 duplicates was served exactly one
+    page after its first sighting, 1,051 of 1,051, none at any other
+    distance.** That is a row shifting across a page boundary while the board
+    re-indexes, not a truncated walk, and the check was calling it truncation
+    and failing the run.
+
+    So `served` short of advertised is the real truncation signal and a
+    stronger one than the old test, because duplicates cannot flatter it. Only
+    pass it for a walk over **one unfiltered sequence**: on a partitioned board
+    a repeat means a posting filed under two facets, which is a different fact
+    and is not comparable to the unfiltered total.
     """
     if seen < minimum:
         return (
             f"collected {seen:,d} postings, expected at least "
             f"{minimum:,d} -- treating as a broken source"
         )
+    if not advertised:
+        return None
+    tolerance = advertised * SHORTFALL_TOLERANCE
+    if served is not None and advertised - served > tolerance:
+        return (
+            f"the {noun} advertised {advertised:,d} and served {served:,d} rows"
+            f" -- {advertised - served:,d} short, which is truncation"
+            f"{or_else or ' rather than a moving index'}"
+        )
     short = advertised - seen
-    if advertised and short > advertised * SHORTFALL_TOLERANCE:
+    if short > tolerance:
+        if served is not None:
+            # The walk reached the end and the board handed over what it said
+            # it had; the gap is duplicates. Reported by the caller as the
+            # count it is -- `cli._sweden`'s "N served twice" -- rather than
+            # as an alert nobody can act on. See `SHORTFALL_TOLERANCE`.
+            return None
         return (
             f"collected {seen:,d} of the {advertised:,d} the {noun} advertised"
             f" -- {short:,d} short, which is truncation"

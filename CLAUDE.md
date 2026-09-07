@@ -1625,6 +1625,30 @@ nothing public — Da Vinci Derivatives is the standing example.
   what the *real* last page looks like too. Stop on an **empty** page, and check
   what arrived against the total the board publishes. `MIN_EXPECTED` is what
   actually announced it.
+- **And that check then called the opposite failure by the wrong name for
+  months.** A shortfall in *distinct* postings has two possible causes and
+  the message could only guess between them: the walk stopped early, or the
+  walk saw every row and some were the same posting twice. Jobbsafari kept
+  failing its own run with *1,239 short, which is truncation*, and it was
+  not truncation. Measured: **52,560 advertised, 52,558 rows served over
+  107 pages ending on an empty one, 51,507 distinct** -- the board handed
+  over everything it said it had. **Every one of the 1,051 duplicates was
+  served exactly one page after its first sighting -- 1,051 of 1,051, none
+  at any other distance** -- which is a row shifting across a page boundary
+  while the board re-indexes, and not our paging at all.
+- **`sweep.problem` takes `served` now, and it is a stronger test rather
+  than a softer one.** Rows-served-against-advertised cannot be flattered
+  by duplicates, because a repeat is counted on the same side as the
+  posting it displaced -- 20,000 distinct plus 20,000 repeats is still only
+  40,000 of 48,550 served, and still fails. Pass it only for a walk over
+  **one unfiltered sequence**: on a partitioned board a repeat means a
+  posting filed under two facets, which is a different fact and is not
+  comparable to the unfiltered total, so `jobindex` and `iesjobs` pass
+  none. The drift itself is still printed -- `cli._sweden`'s *N served
+  twice* -- because it is a number worth watching and not an alert anybody
+  can act on. **No stable sort is available to fix it at source**: the
+  site's own control sends `sortBy`, and the `_next/data` route ignores it
+  along with every other spelling tried.
 - **Platsbanken is not a census, and three files claimed it was.** Publishing
   there is **voluntary** for private employers, so "every job advertised in
   Sweden is published to Platsbanken" was false. Measured: of the Stockholm

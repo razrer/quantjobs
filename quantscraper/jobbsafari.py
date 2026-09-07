@@ -159,7 +159,15 @@ class Sweep:
                 f"stopped at the {MAX_PAGES:,d}-page bound with the board still "
                 "serving rows -- the walk was cut short rather than finished"
             )
-        return sweep.problem(self.seen, self.advertised, MIN_EXPECTED)
+        # `seen + repeats` is every row the board handed over, which is the
+        # evidence that separates "our paging stopped early" from "the index
+        # moved under a walk that reached the end". This is one unfiltered
+        # sequence, so the two numbers are comparable -- on a partitioned board
+        # they are not, which is why `jobindex` and `iesjobs` pass no `served`.
+        return sweep.problem(
+            self.seen, self.advertised, MIN_EXPECTED,
+            served=self.seen + self.repeats,
+        )
 
 
 def build_id() -> str:

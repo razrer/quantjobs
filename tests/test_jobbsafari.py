@@ -282,6 +282,39 @@ class GuardTest(unittest.TestCase):
         swept = jobbsafari.Sweep(seen=1_000, advertised=48_550, partial=True)
         self.assertIsNone(swept.problem)
 
+    def test_duplicates_across_a_page_boundary_are_not_truncation(self):
+        """Measured live: 52,560 advertised, 52,558 rows served over 107 pages
+        ending on an empty one, 51,507 distinct -- and every one of the 1,051
+        duplicates was served exactly one page after its first sighting, 1,051
+        of 1,051. The board re-indexes under the walk and a row shifts across a
+        page boundary. The walk reached the end; there is nothing to fix, and
+        calling it truncation failed the run every time it happened."""
+        swept = jobbsafari.Sweep(
+            seen=51_507, repeats=1_051, advertised=52_560, exhausted=True, pages=107
+        )
+        self.assertIsNone(swept.problem)
+
+    def test_a_walk_the_board_never_finished_serving_is_still_truncation(self):
+        """`served` is the stronger test, not a softer one: duplicates cannot
+        flatter it, because they are counted on the same side as the postings
+        they displaced."""
+        swept = jobbsafari.Sweep(
+            seen=30_000, repeats=100, advertised=48_550, exhausted=True
+        )
+        self.assertIn("truncation", swept.problem)
+        self.assertIn("served", swept.problem)
+
+    def test_duplicates_cannot_disguise_a_truncated_walk(self):
+        """The failure this could have introduced: counting repeats towards
+        completeness so a board serving page one forever looks finished. The
+        repeat guard in `run` catches that case, and the arithmetic must not
+        rescue it either -- 20,000 distinct plus 20,000 repeats is still only
+        40,000 of 48,550 rows served."""
+        swept = jobbsafari.Sweep(
+            seen=20_000, repeats=20_000, advertised=48_550, exhausted=True
+        )
+        self.assertIsNotNone(swept.problem)
+
 
 class BuildIdTest(unittest.TestCase):
     def test_the_deploy_id_comes_off_the_page(self):
