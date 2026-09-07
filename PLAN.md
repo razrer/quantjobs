@@ -20,9 +20,11 @@ session.
 
 ## Where it stands
 
-**Stage 45 is the last one written down and every stage is closed**, so the next
+**Stage 46 is the last one written down and every stage is closed**, so the next
 unit of work is a decision rather than a queue: what to widen, what to measure,
-or what to leave alone. `ACTION-REQUIRED.md` is empty of open items for the
+or what to leave alone. Stage 46 also changed how work ships: **one fix, one
+commit, one publish**, at the reader's instruction -- see *Publishing it* in
+`CLAUDE.md`. `ACTION-REQUIRED.md` is empty of open items for the
 first time — everything in it is settled and kept only so it does not get
 re-asked. The standing sequence is one command, `python -m
 quantscraper daily`, and `python web/publish.py` puts the result on the CDN.
@@ -1826,3 +1828,105 @@ positively-rated posting; every new reader and every new rule is pinned by a
 test verified by planting the failure. The Hong Kong link was verified end to
 end -- the board's own control captured mid-click, then the same POST replayed
 against the live portal, which answered with one row and it was ours.
+
+## Stage 46 -- every failing board, asked once; and the reports that could not see them
+
+**The exit criterion:** every tier-A board's last answer is recorded rather
+than printed and dropped, no failing board is holding live postings, and every
+alert that fires is one a human can act on -- with the shortlist unmoved.
+
+Prompted by a reader's report of *"a lot of APIs and endpoints that generate
+404s"* and *"no jobs from Handelsbanken"*. Both were true and neither was the
+problem it looked like.
+
+### Handelsbanken, and the sixth closure note written from one surface
+
+`CLAUDE.md` said this firm publishes its Swedish jobs on LinkedIn only. The
+same JS bundle that names the UK API -- the evidence that note quoted -- names
+**five `feed.jobylon.com` feeds**, and Jobylon is an ATS this project has read
+since Stage 44. Three `sites.Site` rows, no parsing: **Sweden 28, the
+Netherlands 11, Norway 3**, and the group feed's 42 decompose into exactly
+those three with no row in two of them and none in neither.
+
+Two things hid it and neither is about LinkedIn. `handelsbanken.se` links
+"Jobb" to its LinkedIn page, so the careers walk settled on the social profile
+-- the `pggm.nl`/Instagram shape, arriving one layer past the guard that
+refuses it. And the real page two hops on renders its list as an **empty
+`<shb-job-feed>` custom element**, so there is no markup for any fingerprint to
+read and the vendor is named nowhere on the page. **When a bundle names one
+board, read the rest of what it names.**
+
+Two bugs in the Jobylon reader found on the way: escapes were never decoded, so
+Aktia's `Large & SME` was stored as `Large \u0026 SME` and the tagger folded
+`u0026` as a word of the title; and a **surrogate pair would have ended the
+whole `jobs` command**, because two lone surrogates are refused by `sqlite3`
+with `UnicodeEncodeError` -- raised by `db.upsert_jobs`, which `extract.run`
+calls *outside* `_poll`'s guard.
+
+### The sweep, and where the cost actually was
+
+**All 1,182 tier-A boards were polled and the answers sorted.** 1,140 answered,
+42 failed -- and **27 of the 42 are 404s holding no live postings at all**, the
+documented dead-embed and somebody-else's-board population. They were loud,
+they cost nothing, and they were burying the fifteen failures that cost **2,265
+postings** between them. **Rank a failure log by what it is costing, never by
+how often it fires.**
+
+Both real causes were in shared code rather than in any vendor:
+
+- **A shortfall check that raised on a difference of one.** The churn tolerance
+  written for BNY went into `oracle_hcm` alone while `jobvite`, `adp`, `ukg`,
+  `eightfold`, `successfactors`, `icims_cs` and `emply` kept raising on any
+  difference. Scania advertised 741 and handed over 740, and its **879 live
+  postings** stopped being refreshed. Measured again minutes later: 740 and
+  740. `extract._shortfall` is one definition now, with a floor of one posting
+  beside its 2% share, and a test that greps the module for an inline
+  comparison left behind.
+- **A connection dropped mid-body was never retried.** `urllib` wraps a failure
+  to *open* a connection, so `_send`'s `URLError` clause covered everything
+  before the response headers and nothing after. Five SuccessFactors tenants
+  died together on `[WinError 10054]`, **1,289 live postings**, and every one
+  read correctly on the next attempt.
+
+### The reports that structurally could not see any of it
+
+`alerts` reads `runs`, which is per *source*, and Layer 3 polls a thousand
+boards under no source name -- so a board that had 404'd every week for months
+was invisible to the one report whose job is noticing silence. `board_polls` is
+one row per board with a **consecutive** failure count that any success resets.
+**Reported and never acted on automatically**: Topdanmark's Workday tenant
+answered 422 on every pod and to every request body, which reads exactly like a
+dead token, and Workday's own status page said *service interruption*.
+
+Two more the recording made visible:
+
+- **Norron's registration outlived its reader.** Removed from `SITES` on
+  purpose, its `ats_resolution` row was never withdrawn, so `sites.read` raised
+  on every poll. **A capability removed needs its registration removed with
+  it.**
+- **Jobbsafari's "truncation" was a moving index**, and the check could only
+  guess between the two. Measured: 52,560 advertised, **52,558 rows served over
+  107 pages ending on an empty one**, 51,507 distinct -- and **every one of the
+  1,051 duplicates was served exactly one page after its first sighting, 1,051
+  of 1,051**. `sweep.problem` takes `served` now, which duplicates cannot
+  flatter.
+- **And the mirror of the Singapore failure was live.** *A report that cannot
+  fail is not a report* was already written down; *a report that fails every
+  week is not a report either* was not. `shrank` judged **delta** sources on
+  volume, so a `daily` run five hours after the last one alerted every time.
+  `jobroom_ch` had refused that guard **in writing** and the alerting layer
+  never heard it.
+
+**Exit (met):** 1,089 tests pass. Boards failing **42 -> 36 and not one of them
+holds a live posting**; `alerts` **3 -> 0**; board **4,399 -> 4,478 cards** from
+**1,052 -> 1,101 firms**, shortlist **210 -> 213**.
+
+**The shortlist moving *up* is the reading to take, and it is the opposite of
+the usual check.** Every other stage here asks whether a tightening cost the
+shortlist anything, because a shortlist that shrinks with the junk means the
+needle was too wide. Nothing was tightened this time -- these are recovered
+sources and repaired transport, so the number that would have been alarming is
+a shortlist that *fell*, and three cards arriving is the boards coming back.
+
+Every fix was committed and published on its own, which is the workflow this
+stage also wrote into `CLAUDE.md` at the reader's instruction.
