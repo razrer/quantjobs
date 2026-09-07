@@ -1482,11 +1482,55 @@ def eightfold(token: str) -> list[Job]:
 # which is every place name on the board.
 _JOBYLON_RECORD = re.compile(r"\n\s+id: '(\d+)',")
 _JOBYLON_FIELD = "\n\\s+{name}: '((?:[^'\\\\]|\\\\.)*)'"
+# The value is a JavaScript string literal, so its escapes have to be decoded on
+# the way out -- the `&amp;` rule one vendor over, in `\u` spelling. Only `\'`
+# was, so Aktia's `Large & SME` was stored and rendered with the escape
+# still in it, and the tagger folded `u0026` as a word of the title. Measured
+# over the two live boards: 44 escapes, `&` 38 and `-` 6, and nothing
+# else -- no `\n`, no `\x`, no `\/`.
+#
+# Decoded with a bounded pattern rather than by re-quoting the value as JSON,
+# for the reason every reader here is written that way: `json.loads` **raises**
+# on an escape it does not define, and JavaScript defines several it does not
+# (`\x41`, `\0`). A tenant using one would cost the whole board rather than one
+# character. An unrecognised escape is left as it stands.
+#
+# **A surrogate pair is matched as one unit, and that is not decoration.**
+# JavaScript spells an emoji `\ud83d\ude00`, two escapes for one character, so
+# decoding each separately yields two lone surrogates -- which `sqlite3`
+# refuses with `UnicodeEncodeError` on the way in. That error would be raised
+# by `db.upsert_jobs`, which runs in `run` **outside** `_poll`'s guard, so one
+# emoji in one title would end the whole `jobs` command and take every board
+# after it -- the "an exception ends the pass, not the posting" rule, one layer
+# up from where `bodies` learned it. A surrogate left over from a half-published
+# pair becomes U+FFFD rather than being dropped, so the mistake stays visible
+# in the title instead of silently closing the gap.
+_JOBYLON_ESCAPE = re.compile(
+    r"\\u([dD][89abAB][0-9a-fA-F]{2})\\u([dD][c-fC-F][0-9a-fA-F]{2})"
+    r"|\\u([0-9a-fA-F]{4})"
+    r"|\\(.)"
+)
+
+
+def _jobylon_replace(match: re.Match) -> str:
+    high, low, single, other = match.groups()
+    if high:
+        return chr(
+            0x10000 + ((int(high, 16) - 0xD800) << 10) + (int(low, 16) - 0xDC00)
+        )
+    if single:
+        code = int(single, 16)
+        return "�" if 0xD800 <= code <= 0xDFFF else chr(code)
+    return other
+
+
+def _jobylon_unescape(value: str) -> str:
+    return _JOBYLON_ESCAPE.sub(_jobylon_replace, value)
 
 
 def _jobylon_field(name: str, block: str) -> str | None:
     found = re.search(_JOBYLON_FIELD.format(name=name), block)
-    return _text(found.group(1).replace("\\'", "'")) if found else None
+    return _text(_jobylon_unescape(found.group(1))) if found else None
 
 
 def jobylon(token: str) -> list[Job]:

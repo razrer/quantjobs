@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import sqlite3
 import time
 import unittest
 import urllib.error
@@ -836,6 +837,67 @@ class JobylonTest(unittest.TestCase):
 
     def test_the_vendors_own_host_still_yields_no_token(self):
         self.assertIsNone(ats.fingerprint("https://emp.jobylon.com/")[1])
+
+    ESCAPED = "\n".join(
+        (
+            "JBL.embed_v2['jobs'] = [",
+            "    {",
+            "      id: '374915',",
+            "      title: 'Large \\u0026 SME \\u002D Nordic',",
+            "      company: 'Aktia\\u0027s Bank',",
+            "      locations_text: 'Helsinki',",
+            "    },",
+            "];",
+        )
+    )
+
+    def test_javascript_escapes_are_decoded(self):
+        """The value is a JS string literal, so its escapes must be decoded.
+
+        Only `\\'` was, so Aktia's `Large & SME` reached the board with the
+        escape still in it and the tagger folded `u0026` as a word of the
+        title -- the `&amp;` bug one vendor over, in `\\u` spelling.
+        """
+        with mock.patch.object(extract.http, "get_text", return_value=self.ESCAPED):
+            jobs = extract.jobylon("2551")
+        self.assertEqual(jobs[0].title, "Large & SME - Nordic")
+        self.assertEqual(jobs[0].employer, "Aktia's Bank")
+
+    def test_a_surrogate_pair_becomes_one_storable_character(self):
+        """JavaScript spells an emoji as two escapes for one character.
+
+        Decoded separately they are two lone surrogates, which `sqlite3`
+        refuses with `UnicodeEncodeError` -- raised by `upsert_jobs`, outside
+        `_poll`'s guard, so one emoji would end the whole `jobs` command.
+        """
+        widget = self.ESCAPED.replace(
+            "Large \\u0026 SME \\u002D Nordic", "Trader \\ud83d\\ude00"
+        )
+        with mock.patch.object(extract.http, "get_text", return_value=widget):
+            jobs = extract.jobylon("2551")
+        self.assertEqual(jobs[0].title, "Trader \U0001F600")
+
+        stored = sqlite3.connect(":memory:")
+        stored.execute("CREATE TABLE t (x TEXT)")
+        stored.execute("INSERT INTO t VALUES (?)", (jobs[0].title,))
+        self.assertEqual(stored.execute("SELECT x FROM t").fetchone()[0], "Trader \U0001F600")
+
+    def test_a_lone_surrogate_is_replaced_rather_than_stored(self):
+        widget = self.ESCAPED.replace("Large \\u0026 SME \\u002D Nordic", "Trader \\ud83d X")
+        with mock.patch.object(extract.http, "get_text", return_value=widget):
+            title = extract.jobylon("2551")[0].title
+        self.assertNotIn("\ud83d", title)
+        title.encode("utf-8")  # would raise if a lone surrogate survived
+
+    def test_an_undefined_escape_costs_a_character_and_not_the_board(self):
+        """`json.loads` would raise on `\\x41`, which JavaScript defines and
+        JSON does not -- and losing a board to one character is the trade this
+        project refuses. An unrecognised escape is left as it stands."""
+        widget = self.ESCAPED.replace("Large \\u0026 SME \\u002D Nordic", "Risk \\x41nalyst")
+        with mock.patch.object(extract.http, "get_text", return_value=widget):
+            jobs = extract.jobylon("2551")
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].location, "Helsinki")
 
 
 class EveryFingerprintHasAReaderTest(unittest.TestCase):

@@ -154,6 +154,28 @@ raise `UnicodeEncodeError` on this console.
 python web/publish.py                         # build, push, sync the CDN
 ```
 
+**Ship each fix on its own, at the user's instruction: commit it and publish
+the board, then start the next one.** Not a batch at the end of a session — one
+fix, one commit, one publish. The reason is this project's own failure mode
+rather than tidiness: a session that lands six changes and publishes once
+produces a board whose diff nobody can attribute, and when a card count moves
+the wrong way there is no way to say which change moved it. **The number to
+read after a fix is the one that should not have changed** — the shortlist —
+and that reading only exists if the fix was published alone.
+
+```bash
+git add -A && git commit && python web/publish.py
+```
+
+Three things this ordering already relies on, all of them documented below:
+`build_data.MIN_CARDS` refuses a catastrophic build **before** it opens the
+file, so a bad fix cannot overwrite a good `data.js`; `publish.py` greps the
+Spawned CLI's output as well as its exit code, because that CLI prints `Error:`
+and still exits 0; and CloudFront revalidates, so the publish is visible
+immediately with nothing to invalidate. **A fix that changes the tagger needs
+`tagging.TAGGER` bumped and `tag` re-run before the publish**, or the build
+serves the previous verdicts and reports success — `alerts` is what says so.
+
 The board is served at **https://quantjobs.spawned.app** from `infra.json`: a
 private S3 bucket and a CloudFront distribution, and that is the whole estate.
 No container, no load balancer, no database — the board was already a static
@@ -1228,9 +1250,41 @@ nothing public — Da Vinci Derivatives is the standing example.
   probed **ING, Societe Generale, Intesa Sanpaolo, Natixis, RBC and Bank of
   China -- 50 firms, 0 boards, not one of them a Hong Kong company.** Scoped
   sweeps order by `row_count` instead.
-- **Handelsbanken publishes its Swedish jobs on LinkedIn only.** The
+- ~~**Handelsbanken publishes its Swedish jobs on LinkedIn only.**~~ The
   `careers.handelsbanken.co.uk` API its own bundle names is the **UK** board. A
   structural limit, not a gap — LinkedIn is deliberately out of scope.
+  **Wrong, and it is the sixth closure note here written from one surface and
+  generalised.** The same bundle that names the UK API names **five
+  `feed.jobylon.com` feeds**, and Jobylon is an ATS this project already reads
+  — 42 postings across three companies, `2204` Sweden 28, `2649` the
+  Netherlands 11 and `2648` Norway 3, registered in `sites.py` and needing no
+  parsing. Two things made it look closed and neither is about LinkedIn.
+  `handelsbanken.se` links "Jobb" to `linkedin.com/company/handelsbanken/jobs/`,
+  so the careers walk settled on the social page — the `pggm.nl`/Instagram
+  shape `careers_candidates` refuses, arriving one layer later. And the real
+  page two hops on renders its list as an **empty `<shb-job-feed>` custom
+  element**, so there is no markup for any fingerprint to read and the vendor
+  is named nowhere on the page. **The vendor was in the JS bundle, which is
+  where the UK API had already been found** — the note quoted a line it had
+  read past. When a bundle names one board, read the rest of what it names.
+- **A JavaScript string literal's escapes are not decoded by reading the
+  literal**, and Jobylon shipped 44 of them across two live boards. The reader
+  handled `\'` and nothing else, so Aktia's `Large & SME` reached the
+  board as `Large \u0026 SME`, with the tagger folding `u0026` as a word of
+  the title — the SuccessFactors `&amp;` bug in `\u` spelling, and
+  the same *strip tags, then decode* rule one field over. Decoded with a
+  bounded pattern rather than by re-quoting as JSON: `json.loads` **raises** on
+  an escape JavaScript defines and JSON does not (`\x41`, `\0`), and losing a
+  whole board to one character is the trade this project refuses everywhere.
+- **And a surrogate pair has to be matched as one unit, or one emoji ends the
+  whole `jobs` command.** JavaScript spells an emoji as two escapes for one
+  character; decoded separately they are two lone surrogates, and `sqlite3`
+  refuses those with `UnicodeEncodeError` on the way in. That error is raised
+  by `db.upsert_jobs`, which `extract.run` calls **outside** `_poll`'s guard --
+  so it would not cost one board, it would end the pass and take every board
+  after it. The guard catches what the *fetch* raises and nothing the *write*
+  does. **Whenever a reader gains a decode step, check which side of that line
+  its failure lands on.**
 
 ## National boards (Layer 4)
 

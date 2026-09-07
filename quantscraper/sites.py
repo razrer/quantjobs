@@ -1007,6 +1007,33 @@ SITES: tuple[Site, ...] = (
     ),
     Site("teza-technologies", "teza.com", "Teza Technologies", None, ats="ashby"),
     Site("magnetar", "magnetar.com", "Magnetar Capital", None, ats="greenhouse"),
+    # **Handelsbanken, and it reverses a note in `CLAUDE.md` that said this
+    # firm publishes its Swedish jobs on LinkedIn only.** That note was written
+    # from the careers walk's own result, which is the trap: `handelsbanken.se`
+    # linked "Jobb" to `linkedin.com/company/handelsbanken/jobs/`, the walk
+    # settled there, and the row sat tier B reading *"careers page, no ATS
+    # fingerprint"* -- the `pggm.nl`/Instagram shape `careers_candidates` was
+    # written to refuse, one layer further on. The real page is two hops past
+    # it, at `/sv/om-oss/jobba-hos-oss/lediga-jobb`, and its list is an empty
+    # `<shb-job-feed>` custom element -- so there is no markup for any
+    # fingerprint to read, and the vendor is named nowhere on the page.
+    #
+    # The bank's own JS bundle names five `feed.jobylon.com` feeds, and Jobylon
+    # is an ATS this project has read since Stage 44. Three companies rather
+    # than one: `2516c62d` is the whole group and decomposes exactly into
+    # Sweden 28, the Netherlands 11 and Norway 3, which is a partition measured
+    # rather than assumed -- the union of the three is the 42 the group feed
+    # carries, with no row in two of them and none in neither.
+    #
+    # Each is registered under its own branch domain, verified by reading the
+    # page: `handelsbanken.nl` serves *Handelsbanken Nederland* and
+    # `handelsbanken.no` *Handelsbanken*, which is the `acadian.com` check.
+    # Amsterdam is a focus hub, so the Dutch board is the second reason this is
+    # worth having; Norway is neither focus nor deprioritized and rides along
+    # because principle 1 says geography sets ranking and never membership.
+    Site("2204", "handelsbanken.se", "Handelsbanken", None, ats="jobylon"),
+    Site("2649", "handelsbanken.nl", "Handelsbanken Nederland", None, ats="jobylon"),
+    Site("2648", "handelsbanken.no", "Handelsbanken Norge", None, ats="jobylon"),
     # Amsterdam. Robeco's board is one hop past the careers page the walk
     # settled on -- `/careers` links to `/careers/job-openings`, and only the
     # second one carries the Workday host. VivCourt is here for the domain
