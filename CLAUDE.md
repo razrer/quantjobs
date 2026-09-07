@@ -164,8 +164,16 @@ read after a fix is the one that should not have changed** — the shortlist —
 and that reading only exists if the fix was published alone.
 
 ```bash
-git add -A && git commit && python web/publish.py
+git add -A && git commit && git push quantjobs master && python web/publish.py
 ```
+
+**Both halves, and they are not the same half.** `git push` ships the *code*
+and, through `.github/workflows/publish-board-static.yml`, re-uploads
+`index.html` and `robots.txt`; `publish.py` ships the *data*, which cannot go
+through CI because `data.js` is built from the local SQLite database. A fix to
+the board's markup is live on the push alone; a fix to a reader or the tagger
+is only live once `publish.py` has run here. The remote is `quantjobs` and the
+branch is `master` — there is no `main`.
 
 Three things this ordering already relies on, all of them documented below:
 `build_data.MIN_CARDS` refuses a catastrophic build **before** it opens the
