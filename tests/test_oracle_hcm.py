@@ -900,6 +900,74 @@ class JobylonTest(unittest.TestCase):
         self.assertEqual(jobs[0].location, "Helsinki")
 
 
+class ShortfallToleratesChurnTest(unittest.TestCase):
+    """The shortfall check must not delete the board it exists to protect.
+
+    Written for Oracle when BNY advertised 1,390 and handed over 1,387, then
+    applied to `oracle_hcm` alone while seven other readers went on raising on
+    a difference of one -- which is what threw Scania's 879 live postings away.
+    """
+
+    def _read(self, advertised, got):
+        return advertised, list(range(got))
+
+    def test_one_requisition_closing_mid_walk_is_not_a_truncation(self):
+        """Scania: advertised 741, read 740. Measured again minutes later the
+        board advertised 740 and read 740 -- churn, not an off-by-one."""
+        extract._shortfall("successfactors", "jobs.scania.com", *self._read(741, 740))
+
+    def test_the_floor_holds_on_a_small_board(self):
+        """Churn is an event, not a proportion: one requisition closing costs
+        one posting whatever the board's size, and 2% of 40 is less than one."""
+        extract._shortfall("teamtailor", "small", *self._read(40, 39))
+
+    def test_a_missing_total_is_not_a_shortfall(self):
+        """`advertised` is None when the page states no count -- a missing
+        question, which must not read as a passed one *or* a failed one."""
+        extract._shortfall("successfactors", "x", None, [])
+
+    def test_every_truncation_on_record_still_raises(self):
+        """A cap leaves a round number behind, never a shortfall of one."""
+        for source, token, advertised, got in (
+            ("jobvite", "sikich", 73, 50),           # the missing trailing slash
+            ("workday", "lseg", 1_295, 800),         # the 40-page guard
+            ("oracle_hcm", "kotak", 9_959, 3_199),   # the short-page stop
+            ("adp", "any", 174, 20),                 # `$top` accepted and ignored
+            ("eightfold", "any", 50, 10),            # `num` ignored, ten served
+        ):
+            with self.subTest(source=source):
+                with self.assertRaises(ValueError):
+                    extract._shortfall(source, token, *self._read(advertised, got))
+
+    def test_the_message_names_the_board_and_both_numbers(self):
+        with self.assertRaises(ValueError) as caught:
+            extract._shortfall("adp", "acadianhealth", *self._read(174, 20))
+        self.assertIn("adp/acadianhealth", str(caught.exception))
+        self.assertIn("174", str(caught.exception))
+        self.assertIn("20", str(caught.exception))
+
+    # `join` keeps its own comparison and is the one deliberate exception: it
+    # tolerates a whole page, which is *wider* than `_shortfall`, so routing it
+    # through the helper would tighten a board nothing has reported a problem
+    # with. Named here rather than skipped, so the next reader that keeps an
+    # inline check has to argue for it in this list.
+    INLINE_BY_DESIGN = ("join",)
+
+    def test_every_reader_that_reads_a_total_goes_through_the_helper(self):
+        """A reader keeping its own inline comparison is how this bug survived
+        the first time it was written up -- `oracle_hcm` was fixed and seven
+        readers beside it were not. The guard is the source, not a list of
+        readers somebody has to remember to extend."""
+        source = inspect.getsource(extract)
+        stray = [
+            line.strip() for line in source.splitlines()
+            if "advertises {advertised} postings" in line
+            and "{source}/{token}" not in line
+            and not any(f'f"{name}/' in line for name in self.INLINE_BY_DESIGN)
+        ]
+        self.assertEqual(stray, [], f"inline shortfall check left behind: {stray}")
+
+
 class EveryFingerprintHasAReaderTest(unittest.TestCase):
     """The gap Stage 14 exists to close, pinned for the whole table.
 

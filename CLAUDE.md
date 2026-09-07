@@ -443,6 +443,8 @@ to get past a refusal**, and do not probe for where a threshold sits.
 it asked us to slow down, and slowing down is what a 429 requests. See
 `http._retry_after`.
 
+**A connection dropped *mid-body* is not a `URLError`, and for a long time it was not retried at all.** `urllib` wraps a failure to *open* a connection, so `_send`'s `URLError` clause covered everything that goes wrong before the response headers arrive and nothing that goes wrong after. A server closing the socket during `response.read()` raises `ConnectionResetError` straight through — an `OSError`, not a `URLError` — so it left the retry loop on the first attempt and cost the caller its **whole board**. Measured on a sweep of all 1,182 tier-A boards: five SuccessFactors tenants died together on `[WinError 10054]` — Ametek, Royal Caribbean, Valentino, Vistance and DAI, **1,289 live postings** between them — and every one read correctly on the next attempt. **The boards this hits are the large ones by construction**: a 768-posting RMK tenant is fifty page reads, so it is exposed fifty times as long as a board with one, which is why it looked like a vendor problem rather than a transport one. `ConnectionError` and `http.client.IncompleteRead` are retried now — the second is the same event reported by `http.client` rather than by the socket, and is not an `OSError` at all. **Whenever an exception is caught by base class, check which of the failures you care about actually inherit from it.**
+
 ## Geographic priority
 
 Priority affects **what to build next**, not what to ingest.
@@ -640,6 +642,25 @@ nothing public — Da Vinci Derivatives is the standing example.
   postings were thrown away**. `_ORACLE_CHURN` is what one walk may lose;
   anything wider is our paging. (`TotalJobsCount` is honest on every page, so
   Oracle has no `total: 0` trap; it is a *check*, never the stop condition.)
+- **And that lesson was applied to one reader while seven kept the bug.**
+  `oracle_hcm` got a tolerance; `jobvite`, `adp`, `ukg`, `eightfold`,
+  `successfactors`, `icims_cs` and `emply` all went on raising on a
+  difference of **one**. Scania advertised 741 and handed over 740, so its
+  **879 live postings** got no `last_seen` refresh and were due to be taken
+  by the `withdrawn` gate. Measured again minutes later the board advertised
+  740 and read 740 -- churn, exactly as at BNY, and not an off-by-one.
+  `extract._shortfall` is the one definition now, and
+  `ShortfallToleratesChurnTest` greps the module for an inline comparison
+  left behind, because *a fix applied to the reader that found the bug and
+  to no other* is how this survived. `join` is the one deliberate exception
+  and is named in that test: it tolerates a whole page, which is wider.
+- **The tolerance has a floor of one posting as well as a share, because
+  churn is an event and not a proportion.** One requisition closing costs
+  one posting whatever the board's size, and 2% of a 40-posting board is
+  less than one -- so a proportional rule alone still deletes small boards
+  for the thing it was written to forgive. Every truncation on record still
+  raises: a cap leaves a round number behind (Sikich 50 of 73, LSEG 800 of
+  1,295, Kotak 3,199 of 9,959, ADP 20 of 174), never a shortfall of one.
 
 ### Tokens: the wrong answer looks right
 

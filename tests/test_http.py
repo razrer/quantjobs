@@ -12,7 +12,9 @@ from __future__ import annotations
 import email
 import time
 import unittest
+import unittest.mock
 import urllib.error
+import urllib.request
 
 from quantscraper import http
 
@@ -88,6 +90,69 @@ class HostIntervalTest(unittest.TestCase):
         waited = time.monotonic() - started
         http._last_hit.pop(host, None)
         self.assertGreater(waited, http.MIN_INTERVAL_S)
+
+
+class MidBodyFailureIsRetriedTest(unittest.TestCase):
+    """A connection dropped *after* the response headers is not a `URLError`.
+
+    `urllib` wraps a failure to open a connection, so the retry loop's
+    `URLError` clause covers everything before the headers arrive and nothing
+    after. A server closing the socket during `read()` raises
+    `ConnectionResetError` straight through -- an `OSError`, not a `URLError`
+    -- so it left the loop on the first attempt and cost the caller a whole
+    board. Five SuccessFactors tenants and 1,289 live postings, in one sweep.
+    """
+
+    def _opener(self, failures: list[Exception], body: bytes = b"ok"):
+        """An opener that raises `failures` in turn, then returns `body`."""
+        calls = {"n": 0}
+
+        class _Response:
+            headers: dict[str, str] = {}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                index = calls["n"]
+                calls["n"] += 1
+                if index < len(failures):
+                    raise failures[index]
+                return body
+
+            def geturl(self):
+                return "https://example.com/"
+
+        return _Response, calls
+
+    def _send(self, failures, retries=3):
+        response, calls = self._opener(failures)
+        request = urllib.request.Request("https://example.com/")
+        with unittest.mock.patch.object(http, "_OPENER") as opener:
+            opener.open.side_effect = lambda *a, **k: response()
+            with unittest.mock.patch.object(http, "_throttle"), \
+                    unittest.mock.patch.object(time, "sleep"):
+                return http._send(request, timeout=5, retries=retries), calls
+
+    def test_a_reset_mid_body_is_retried_rather_than_losing_the_board(self):
+        body, calls = self._send([ConnectionResetError(10054, "forcibly closed")])
+        self.assertEqual(body, b"ok")
+        self.assertEqual(calls["n"], 2, "the reset should have been retried once")
+
+    def test_an_incomplete_read_is_retried_too(self):
+        """The same event -- the body stopped early -- reported by
+        `http.client` rather than by the socket, and not an `OSError` at all."""
+        body, _ = self._send([http.http.client.IncompleteRead(b"half")])
+        self.assertEqual(body, b"ok")
+
+    def test_a_reset_on_every_attempt_still_raises(self):
+        """Retrying must not turn a genuinely dead host into a silent empty
+        board -- principle 2, which this whole module exists to serve."""
+        with self.assertRaises(ConnectionResetError):
+            self._send([ConnectionResetError(10054, "x")] * 3, retries=3)
 
 
 if __name__ == "__main__":

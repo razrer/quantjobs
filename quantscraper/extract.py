@@ -58,6 +58,48 @@ def _json(url: str, **kwargs) -> object:
     return json.loads(http.get_text(url, timeout=25, retries=2, **kwargs))
 
 
+# How much of a board one walk may lose to postings closing while it runs,
+# before the shortfall stops reading as churn and starts reading as truncation.
+_CHURN = 0.02
+# ...and the floor under it, because churn is an *event* and not a proportion.
+# One requisition closing costs one posting whatever the board's size, so a
+# proportional tolerance alone still raises on a board of forty that loses one.
+_CHURN_FLOOR = 1
+
+
+def _shortfall(source: str, token: str, advertised: object, jobs: list) -> None:
+    """Raise when a board handed over materially less than it advertised.
+
+    **The one check every reader here owes its caller**, because a board that
+    states its own size is the only thing that can say a walk was truncated:
+    Jobvite's missing trailing slash, Workday's 40-page guard, Eightfold's
+    ignored `num`, ADP's `advertises 174, read 20` were each caught by this and
+    by nothing else.
+
+    **A shortfall check and not an equality check, because a large board
+    changes underneath a walk that takes minutes.** That was written up for
+    Oracle when BNY advertised 1,390 and handed over 1,387 -- three
+    requisitions closing mid-walk, and raising on it threw away 1,387 real
+    postings, which is the guard deleting the board it exists to protect. The
+    lesson was then applied to `oracle_hcm` alone and **seven other readers
+    kept raising on a difference of one**: Scania advertised 741, handed over
+    740, and 879 live postings went stale on the next build. Measured twice
+    minutes apart, the board then advertised 740 and read 740 -- churn, not an
+    off-by-one.
+
+    The tolerance preserves every truncation on record. Sikich's 50 of 73,
+    LSEG's 800 of 1,295, Kotak's 3,199 of 9,959 and ADP's 20 of 174 all still
+    raise; a cap leaves a round number behind, never a shortfall of one.
+    """
+    if not isinstance(advertised, int):
+        return
+    allowed = max(_CHURN_FLOOR, advertised * _CHURN)
+    if advertised - len(jobs) > allowed:
+        raise ValueError(
+            f"{source}/{token}: board advertises {advertised} postings, read {len(jobs)}"
+        )
+
+
 def greenhouse(token: str) -> list[Job]:
     payload = _json(
         f"https://boards-api.greenhouse.io/v1/boards/{token}/jobs?content=true"
@@ -628,10 +670,7 @@ def jobvite(token: str) -> list[Job]:
         # serves page one forever and never returns an empty page.
         if not fresh:
             break
-    if advertised > len(jobs):
-        raise ValueError(
-            f"jobvite/{token}: board advertises {advertised} postings, read {len(jobs)}"
-        )
+    _shortfall("jobvite", token, advertised, jobs)
     return jobs
 
 
@@ -947,9 +986,6 @@ def avature(token: str) -> list[Job]:
 # with HTTP 200 one day, which is the Workday trap two hundred lines up.
 _ORACLE_PAGE = 200
 _ORACLE_PAGES = 1_000
-# How much of a board one walk may lose to postings closing while it runs,
-# before the shortfall stops reading as churn and starts reading as truncation.
-_ORACLE_CHURN = 0.02
 
 
 def oracle_hcm(token: str) -> list[Job]:
@@ -1035,21 +1071,12 @@ def oracle_hcm(token: str) -> list[Job]:
                     description=_text(job.get("ShortDescriptionStr")),
                 )
             )
-    # The board states its own size. A board that says 1,295 and hands over 800
-    # is what a page cap looks like from the outside, and nothing else would
-    # say so -- this is the check that caught Jobvite's missing slash.
-    #
-    # **It is a shortfall check and not an equality check, because a large
-    # board changes underneath a walk that takes minutes.** BNY advertises
-    # 1,390 and hands over 1,387: three requisitions closed between the first
-    # page and the last, and raising on that threw away 1,387 real postings --
-    # the guard against silent truncation deleting a board outright, which is
-    # the failure it exists to prevent, one direction over. `_ORACLE_CHURN` is
-    # what one walk can lose to that; anything wider is our paging.
-    if advertised is not None and len(jobs) < advertised * (1 - _ORACLE_CHURN):
-        raise ValueError(
-            f"oracle_hcm/{token}: board advertises {advertised} postings, read {len(jobs)}"
-        )
+    # `TotalJobsCount` is honest on every page here, unlike Workday's `total`,
+    # which is what lets this be a check rather than the stop condition. The
+    # churn tolerance it reads is `_shortfall`'s -- written for BNY's 1,387 of
+    # 1,390, and shared since seven other readers turned out to be raising on a
+    # difference of one.
+    _shortfall("oracle_hcm", token, advertised, jobs)
     return jobs
 
 
@@ -1149,10 +1176,7 @@ def adp(token: str) -> list[Job]:
         # which is the rule Workday and iCIMS each needed.
         if not requisitions or not fresh:
             break
-    if isinstance(advertised, int) and advertised > len(jobs):
-        raise ValueError(
-            f"adp/{token}: board advertises {advertised} postings, read {len(jobs)}"
-        )
+    _shortfall("adp", token, advertised, jobs)
     return jobs
 
 
@@ -1252,10 +1276,7 @@ def ukg(token: str) -> list[Job]:
             )
         if len(opportunities) < _UKG_PAGE:
             break
-    if isinstance(advertised, int) and advertised > len(jobs):
-        raise ValueError(
-            f"ukg/{token}: board advertises {advertised} postings, read {len(jobs)}"
-        )
+    _shortfall("ukg", token, advertised, jobs)
     return jobs
 
 
@@ -1454,10 +1475,7 @@ def eightfold(token: str) -> list[Job]:
             )
         if not fresh:
             break
-    if isinstance(advertised, int) and advertised > len(jobs):
-        raise ValueError(
-            f"eightfold/{token}: board advertises {advertised} postings, read {len(jobs)}"
-        )
+    _shortfall("eightfold", token, advertised, jobs)
     return jobs
 
 
@@ -1711,11 +1729,7 @@ def successfactors(token: str) -> list[Job]:
             )
         if not fresh:
             break
-    if isinstance(advertised, int) and advertised > len(jobs):
-        raise ValueError(
-            f"successfactors/{token}: board advertises {advertised} postings,"
-            f" read {len(jobs)}"
-        )
+    _shortfall("successfactors", token, advertised, jobs)
     return jobs
 
 
@@ -1795,10 +1809,7 @@ def icims_cs(token: str) -> list[Job]:
         # test catches -- the rule Workday, ADP and iCIMS each needed.
         if not fresh:
             break
-    if isinstance(advertised, int) and advertised > len(jobs):
-        raise ValueError(
-            f"icims_cs/{token}: board advertises {advertised} postings, read {len(jobs)}"
-        )
+    _shortfall("icims_cs", token, advertised, jobs)
     return jobs
 
 
@@ -1896,10 +1907,7 @@ def emply(token: str) -> list[Job]:
     # Jobvite get. Emply's boards are small enough that a walk cannot lose a
     # posting to churn, so this is an equality-shaped check rather than a
     # tolerance.
-    if isinstance(advertised, int) and advertised > len(jobs):
-        raise ValueError(
-            f"emply/{token}: board advertises {advertised} postings, read {len(jobs)}"
-        )
+    _shortfall("emply", token, advertised, jobs)
     return jobs
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime
 import email.utils
 import gzip
+import http.client
 import http.cookiejar
 import ssl
 import threading
@@ -185,7 +186,28 @@ def _send(
             # nothing in `runs` to say so.
             time.sleep(_retry_after(exc, attempt))
             continue
-        except (urllib.error.URLError, TimeoutError):
+        # **A connection dropped mid-body is not a `URLError` and was not being
+        # retried.** `urllib` wraps a failure to *open* a connection, so the
+        # clause above catches everything that goes wrong before the response
+        # headers arrive -- and nothing that goes wrong after. A server closing
+        # the socket during `response.read()` raises `ConnectionResetError`
+        # straight through, which is an `OSError` and not a `URLError`, so it
+        # left the loop on the first attempt and cost the caller its whole
+        # board.
+        #
+        # Measured: a concurrent sweep of 1,182 boards lost five SuccessFactors
+        # tenants to `[WinError 10054]` at once -- Ametek, Royal Caribbean,
+        # Valentino, Vistance and DAI, 1,289 live postings between them -- and
+        # every one of them read correctly on the next attempt. The boards that
+        # hit this are the large ones by construction: a 768-posting RMK tenant
+        # is fifty page reads, so it is exposed for fifty times as long as a
+        # board with one.
+        #
+        # `IncompleteRead` is here for the same reason and is *not* an
+        # `OSError`: it is the same event -- the body stopped early -- reported
+        # by `http.client` rather than by the socket.
+        except (urllib.error.URLError, TimeoutError, ConnectionError,
+                http.client.IncompleteRead):
             if attempt == retries - 1:
                 raise
         time.sleep(2**attempt)
