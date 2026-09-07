@@ -1268,4 +1268,24 @@ def register(connection: sqlite3.Connection) -> int:
                 for site in SITES
             ],
         )
+        # **A reader taken out of `SITES` leaves a row that fails every poll
+        # forever, and Norron was doing exactly that.** Its reader was removed
+        # on purpose when the fund business went to Simplicity AB, and the
+        # `ats_resolution` row a previous `register` wrote stayed tier A with
+        # `token = 'norron'` -- so `extract.targets` kept handing it to
+        # `sites.read`, which kept raising `no site reader registered`. Not a
+        # wrong answer; a question nobody had withdrawn.
+        #
+        # Only rows this function wrote are removed, matched on the evidence
+        # string it writes -- the same marker `ats.reprobe_targets` uses to
+        # leave hand-verified boards alone. A row that any other layer resolved
+        # is not ours to delete, and `INSERT OR REPLACE` above would have taken
+        # it over rather than left it behind.
+        placeholders = ",".join("?" * len(SITES)) or "NULL"
+        connection.execute(
+            f"DELETE FROM ats_resolution"
+            f" WHERE evidence LIKE '%in sites.py (%'"
+            f"   AND token NOT IN ({placeholders})",
+            [site.token for site in SITES],
+        )
     return len(SITES)

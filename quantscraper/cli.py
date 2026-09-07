@@ -432,6 +432,67 @@ def _bodies(database: str, limit: int, workers: int) -> int:
     return 0
 
 
+# Ordered, and read first-match-wins: the vendor-specific messages have to be
+# tested before the status codes, or "no longer a customer" reads as whatever
+# code carried it. Each label names a *cause* rather than a symptom, because
+# the point of grouping is to say which of these needs a human.
+_FAILURE_KINDS = (
+    ("no longer a customer", "board retired by the vendor"),
+    ("no site reader registered", "sites.py entry removed, row left behind"),
+    ("advertises", "shortfall -- suspect our paging"),
+    ("ConnectionReset", "connection reset"),
+    ("getaddrinfo", "DNS does not resolve"),
+    ("HTTP Error 404", "404 gone"),
+    ("HTTP Error 403", "403 refused"),
+    ("HTTP Error 422", "422 refused"),
+    ("HTTP Error 5", "vendor 5xx -- probably an outage, not a dead board"),
+)
+
+
+def _board_failures(connection, failures: list[str]) -> None:
+    """What failed, grouped, and what it is costing.
+
+    **A list of ten arbitrary lines is what this printed before, and it is why
+    the 404s looked like the problem.** Measured over all 1,182 tier-A boards:
+    42 fail, 27 of them 404s -- and every one of those 27 holds *no live
+    postings*. They are the documented dead-embed and somebody-else's-board
+    population, they are loud, they cost nothing, and they were burying the
+    fifteen failures that were costing 2,265 postings between them.
+
+    So the report leads with the postings at risk rather than the count, and
+    the count is grouped rather than sampled. `board_polls` supplies the "and
+    how long has this been broken" column, which no report here could answer
+    before it existed.
+    """
+    if not failures:
+        return
+    kinds: dict[str, int] = {}
+    for failure in failures:
+        label = next(
+            (name for needle, name in _FAILURE_KINDS if needle in failure), "other"
+        )
+        kinds[label] = kinds.get(label, 0) + 1
+    print(f"\n{len(failures)} boards did not answer", file=sys.stderr)
+    for label, count in sorted(kinds.items(), key=lambda kv: -kv[1]):
+        print(f"  {count:4d}  {label}", file=sys.stderr)
+
+    costly = [row for row in db.failing_boards(connection) if row["postings"]]
+    if not costly:
+        print("  none of them held a live posting", file=sys.stderr)
+        return
+    at_risk = sum(row["postings"] for row in costly)
+    print(
+        f"\n  {len(costly)} of them last held {at_risk:,d} postings between them:",
+        file=sys.stderr,
+    )
+    for row in costly[:15]:
+        weeks = f"{row['failures']}x" if row["failures"] > 1 else "1st"
+        print(
+            f"    {row['postings']:6,d}  {weeks:>4}  {row['ats']}/{row['token']}",
+            file=sys.stderr,
+        )
+
+
 def _jobs(database: str, limit: int, workers: int) -> int:
     connection = db.connect(database)
     # Layer 3C rides Layer 3: each hand-written reader is an `ats_resolution`
@@ -440,10 +501,7 @@ def _jobs(database: str, limit: int, workers: int) -> int:
     sites.register(connection)
     boards, jobs, failures = extract.run(connection, limit, workers)
     print(f"polled {boards:,d} boards, wrote {jobs:,d} postings")
-    for failure in failures[:10]:
-        print(f"  FAIL {failure}", file=sys.stderr)
-    if len(failures) > 10:
-        print(f"  ... and {len(failures) - 10} more", file=sys.stderr)
+    _board_failures(connection, failures)
 
     print("\npostings by ATS")
     for row in connection.execute(

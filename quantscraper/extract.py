@@ -2091,11 +2091,22 @@ def run(
     rows = targets(connection, limit)
     total = 0
     failures: list[str] = []
+    # What each board answered, for `board_polls`. Kept per poll rather than
+    # derived from `jobs` afterwards, because the two facts this needs -- that a
+    # board was *asked*, and that it failed -- both vanish the moment the run
+    # returns. That is the `_record_poll` argument one layer up: a source that
+    # was asked and did not come back looks exactly like a source nobody asked.
+    outcomes: list[tuple] = []
     with ThreadPoolExecutor(max_workers=workers) as pool:
         for row, jobs, failure in pool.map(_poll, rows):
+            outcomes.append(
+                (row["ats"], row["token"], row["domain"], not failure,
+                 len(jobs), failure)
+            )
             if failure:
                 failures.append(failure)
                 continue
             if jobs:
                 total += db.upsert_jobs(connection, row["domain"], jobs)
+    db.record_board_polls(connection, outcomes)
     return len(rows), total, failures

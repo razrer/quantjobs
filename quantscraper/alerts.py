@@ -152,7 +152,50 @@ def check(connection: sqlite3.Connection, now: datetime | None = None) -> list[A
             " bump tagging.TAGGER and re-run `tag`, or the board is serving"
             " the previous classifier's answers",
         ))
+    alerts.extend(_board_alerts(connection))
     return alerts
+
+
+# A board is allowed a bad morning before it is worth reporting: a vendor
+# outage looks exactly like a dead board from here, and Workday's own status
+# page said so while Topdanmark's tenant answered 422 on every pod. Two
+# consecutive failures is a fortnight at this project's cadence.
+BOARD_FAILURES = 2
+
+
+def _board_alerts(connection: sqlite3.Connection) -> list[Alert]:
+    """Layer 3 boards that have stopped answering and were holding postings.
+
+    **`check` above cannot see Layer 3 at all**, and that is not an oversight
+    it can fix: it walks `SELECT DISTINCT source FROM runs`, and a thousand
+    boards poll under no source name. So a board that had 404'd every week for
+    months was invisible to the one report whose entire job is noticing
+    silence -- the job-room.ch failure, a layer down and a thousand times over.
+
+    **Reported only when the board was holding postings**, which is the whole
+    finding from the sweep that prompted this: of 42 failing boards, 27 are
+    404s holding nothing -- stale embeds and other firms' boards, correctly
+    dead -- and alerting on those would bury the fifteen that cost 2,265
+    postings. An alert that cries wolf gets ignored, which `SHRANK_TO` already
+    says one constant up.
+    """
+    # Imported inside the function, like `REGISTRIES` below, so this module
+    # keeps its one promise: it reads, and it depends on nothing that writes.
+    # The query lives in `db` rather than being restated here, because two
+    # copies of "which boards are failing" is the `feed_state` mistake.
+    from . import db
+
+    rows = db.failing_boards(connection, minimum=BOARD_FAILURES)
+    return [
+        Alert(
+            f"{row['ats']}/{row['token']}"[:20],
+            "board",
+            f"{row['failures']} consecutive failures, last held"
+            f" {row['postings']:,d} postings -- {(row['error'] or '')[:90]}",
+        )
+        for row in rows
+        if row["postings"]
+    ]
 
 
 def _expected() -> set[str]:

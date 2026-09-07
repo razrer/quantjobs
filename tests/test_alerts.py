@@ -308,5 +308,87 @@ class AnUnbumpedLexiconIsLoudTest(unittest.TestCase):
             tagging.fingerprint())
 
 
+class BoardPollsTest(unittest.TestCase):
+    """Layer 3 polls a thousand boards under no source name, so `runs` could
+    not see any of them and neither could `alerts`. A board that had 404'd
+    every week for months was invisible to the one report whose job is
+    noticing silence."""
+
+    def _poll(self, connection, ok, postings=0, error=None,
+              ats="workday", token="acme|wd1|Careers"):
+        db.record_board_polls(
+            connection, [(ats, token, "acme.com", ok, postings, error)]
+        )
+        return connection.execute(
+            "SELECT * FROM board_polls WHERE ats = ? AND token = ?", (ats, token)
+        ).fetchone()
+
+    def test_a_first_failure_is_counted_as_one(self):
+        row = self._poll(_memory(self), False, error="HTTP Error 404")
+        self.assertEqual(row["failures"], 1)
+        self.assertEqual(row["ok"], 0)
+        self.assertIsNone(row["last_ok"])
+
+    def test_consecutive_failures_accumulate(self):
+        connection = _memory(self)
+        for expected in (1, 2, 3):
+            row = self._poll(connection, False, error="HTTP Error 404")
+            self.assertEqual(row["failures"], expected)
+
+    def test_one_success_resets_the_count(self):
+        """The count separates a vendor having a bad morning from a board
+        that has been dead since spring, which it cannot do if it only ever
+        goes up."""
+        connection = _memory(self)
+        self._poll(connection, False, error="reset")
+        self._poll(connection, False, error="reset")
+        row = self._poll(connection, True, postings=94)
+        self.assertEqual(row["failures"], 0)
+        self.assertEqual(row["postings"], 94)
+        self.assertIsNotNone(row["last_ok"])
+
+    def test_a_failure_keeps_what_the_board_last_held(self):
+        """The postings a dead board was holding is the number that says
+        whether it matters -- 27 of the 42 failing boards hold none."""
+        connection = _memory(self)
+        self._poll(connection, True, postings=879)
+        row = self._poll(connection, False, error="advertises 741, read 740")
+        self.assertEqual(row["postings"], 879)
+        self.assertEqual(row["failures"], 1)
+
+    def test_a_board_holding_nothing_raises_no_alert(self):
+        """The 404s are 27 of 42 failures and cost nothing. Alerting on them
+        buries the fifteen that cost 2,265 postings."""
+        connection = _memory(self)
+        for _ in range(5):
+            self._poll(connection, False, postings=0, error="HTTP Error 404")
+        self.assertEqual(alerts._board_alerts(connection), [])
+
+    def test_a_board_holding_postings_alerts_after_a_second_failure(self):
+        connection = _memory(self)
+        self._poll(connection, True, postings=879)
+        self._poll(connection, False, error="HTTP Error 500")
+        self.assertEqual(alerts._board_alerts(connection), [],
+                         "one bad morning is a vendor outage, not a dead board")
+        self._poll(connection, False, error="HTTP Error 500")
+        found = alerts._board_alerts(connection)
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].kind, "board")
+        self.assertIn("879", found[0].detail)
+
+    def test_failing_boards_are_ordered_by_what_they_cost(self):
+        """Not by how long they have been broken: a board that has failed
+        twice holding 879 postings matters more than one that has failed
+        thirty times holding none."""
+        connection = _memory(self)
+        for token, postings in (("small", 3), ("big", 879), ("dead", 0)):
+            self._poll(connection, True, postings=postings, token=token)
+            self._poll(connection, False, error="x", token=token)
+        self.assertEqual(
+            [row["token"] for row in db.failing_boards(connection)],
+            ["big", "small", "dead"],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

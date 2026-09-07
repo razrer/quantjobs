@@ -290,7 +290,8 @@ registries/*.py  ->  employers table  ->  resolve.py  ->  firms table
   job-type partition
 - `lexicon.py` / `tagging.py` — Layer 5, the deterministic classifier
 - `labels.py` — the hand-labelled fixture and the scoring
-- `alerts.py` — per-source volume anomaly detection over the `runs` history
+- `alerts.py` — per-source volume anomaly detection over the `runs` history,
+  plus the per-board check `runs` structurally cannot make (`board_polls`)
 - `web/build_data.py` — Layer 6: dumps `jobs` + `job_tags` to `data.js`
 - `web/index.html` — the board: filter rail, card grid, deadline-first ordering
 - `web/publish.py` — pushes the built board to the CDN
@@ -784,6 +785,31 @@ nothing public — Da Vinci Derivatives is the standing example.
   `"items":[],"total":0`, Homerun and Varbi serve feeds with no entries. **A
   board that answers 200 with nothing is usually telling the truth**, and the
   way to know which is to ask the endpoint rather than the reader.
+- **Nothing recorded any of this, which is why "there are a lot of 404s" was the
+  report rather than a number.** `extract.run` returns its failures,
+  `cli._jobs` printed the first ten and dropped the rest, and `alerts` --
+  whose entire job is noticing silence -- reads `runs`, which is per
+  *source*, and Layer 3 polls a thousand boards under no source name. So a
+  board that had 404'd every week for months was invisible to every report
+  here. That is the job-room.ch failure a layer down and a thousand times
+  over. `board_polls` is one row per board with a **consecutive** failure
+  count that any success resets, which is the only thing that separates a
+  vendor having a bad morning from a board dead since spring.
+- **The whole population was swept and the loud half costs nothing.** 1,182
+  tier-A boards: 1,140 answered, 42 failed, and **27 of the 42 are 404s
+  holding no live postings at all** -- the stale-embed and
+  somebody-else's-board population above, correctly dead. The cost was
+  entirely in the quiet fifteen: **2,265 live postings**, and every one of
+  them traced to shared code rather than to a vendor. **Rank a failure log
+  by what it is costing, never by how often it fires** -- the report leads
+  with postings at risk now, and the 404s are one grouped line.
+- **Do not retire a board automatically on N failures, however tempting.**
+  Topdanmark's Workday tenant answered **422 to every request body on every
+  pod**, which reads exactly like a dead token -- and its own careers site
+  links to that URL, and Workday's status page said *we are experiencing a
+  service interruption*. A vendor outage is indistinguishable from a dead
+  board from here, and auto-retiring during one would delete every posting
+  on every board that vendor serves. `board_polls` reports and never acts.
 - **Most of the 404s are somebody else's board.** `8vc.com` resolving to
   `greenhouse/habi`, `valuestreamventures.com` to `userinterviews`,
   `infinityvc.capital` to `sensible` -- a venture firm's careers page links to
@@ -1153,6 +1179,19 @@ nothing public — Da Vinci Derivatives is the standing example.
   saying anything, which is a different fact from advertising nothing, and
   the reader raised every poll until the roster caught up. It is `stale` now,
   the fund business having gone to Simplicity AB.
+- **And removing that reader left a row behind that failed every poll for
+  months.** `sites.register` wrote Norron an `ats_resolution` row, the
+  reader was then deleted from `SITES` on purpose, and nothing withdrew the
+  registration — so `extract.targets` went on handing `token = 'norron'` to
+  `sites.read`, which went on raising `no site reader registered`. Not a
+  wrong answer: **a question nobody had withdrawn**, which is the shape
+  this project is least able to see, and it was invisible because nothing
+  recorded a per-board failure. `register` deletes rows carrying its own
+  evidence marker whose token has left `SITES` now — its own marker only,
+  the same string `ats.reprobe_targets` reads, because a board another
+  layer resolved is not this file's to delete. **A capability removed needs
+  its registration removed with it**; `INSERT OR REPLACE` maintains the
+  rows that stay and says nothing about the ones that should go.
 - **A hand-edited careers page has no house style.** AP7 writes three of its
   four openings as `<a><strong>Title</strong></a>` and the fourth as
   `<strong><a>Title</a></strong>` — and the fourth is the Senior Portfolio

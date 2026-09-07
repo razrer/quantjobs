@@ -97,6 +97,49 @@ class RegistrationTest(unittest.TestCase):
         sites.register(connection)
         self.assertEqual(ats.reprobe_targets(connection, 100), [])
 
+    def test_a_reader_removed_from_sites_takes_its_row_with_it(self):
+        """Norron's reader was removed when the fund went to Simplicity AB and
+        its `ats_resolution` row stayed, so `extract.targets` kept handing the
+        token to `sites.read`, which kept raising `no site reader registered`
+        -- a failure on every poll, forever, for a question nobody had
+        withdrawn."""
+        connection = db.connect(":memory:")
+        sites.register(connection)
+        connection.execute(
+            "INSERT INTO ats_resolution"
+            " (domain, careers_url, ats, token, tier, evidence, checked_at)"
+            " VALUES ('norron.com', 'https://norron.com/', 'site', 'norron',"
+            " 'A', 'hand-written reader in sites.py (Norron)', '2026-01-01')"
+        )
+        sites.register(connection)
+        self.assertIsNone(
+            connection.execute(
+                "SELECT 1 FROM ats_resolution WHERE token = 'norron'"
+            ).fetchone()
+        )
+        self.assertEqual(
+            connection.execute("SELECT COUNT(*) FROM ats_resolution").fetchone()[0],
+            len(sites.SITES),
+        )
+
+    def test_a_row_this_file_did_not_write_is_left_alone(self):
+        """Only rows carrying this file's own evidence marker are removed. A
+        board any other layer resolved is not ours to delete."""
+        connection = db.connect(":memory:")
+        sites.register(connection)   # creates the table
+        connection.execute(
+            "INSERT INTO ats_resolution"
+            " (domain, careers_url, ats, token, tier, evidence, checked_at)"
+            " VALUES ('other.com', 'https://other.com/', 'greenhouse', 'other',"
+            " 'A', 'careers page names boards-api.greenhouse.io', '2026-01-01')"
+        )
+        sites.register(connection)
+        self.assertIsNotNone(
+            connection.execute(
+                "SELECT 1 FROM ats_resolution WHERE token = 'other'"
+            ).fetchone()
+        )
+
 
 class NordeaTest(unittest.TestCase):
     def test_it_pages_and_stops_on_a_short_page(self):

@@ -78,6 +78,40 @@ CREATE TABLE IF NOT EXISTS runs (
     ok          INTEGER NOT NULL,
     error       TEXT
 );
+
+-- What each Layer 3 board answered, and how long it has been answering it.
+--
+-- **`runs` is per *source* and Layer 3 is a thousand boards under one name**,
+-- so a board that has 404'd every week for months was invisible to every report
+-- here: `extract.run` returned its failures, `cli._jobs` printed the first ten
+-- and dropped the rest, and `alerts` -- whose whole job is noticing silence --
+-- reads `runs` and therefore could not see Layer 3 at all. Measured over all
+-- 1,182 tier-A boards: 42 fail, and 27 of those are 404s holding no postings,
+-- which is the population that makes the other fifteen unreadable.
+--
+-- One row per board rather than one per poll, because the question is "is this
+-- board still answering", not "what did it say in March". `failures` is
+-- **consecutive** and resets on any success, so it separates a vendor having a
+-- bad morning from a board that has been dead since spring.
+--
+-- **Deliberately reported and never acted on automatically.** Retiring a board
+-- on N failures is the obvious next step and it is unsafe: Topdanmark's board
+-- answered 422 on every pod and every request body while Workday's own status
+-- page read "we are experiencing a service interruption" -- a vendor outage is
+-- indistinguishable from a dead board from here, and auto-retiring during one
+-- would delete every posting on every board that vendor serves.
+CREATE TABLE IF NOT EXISTS board_polls (
+    ats        TEXT NOT NULL,
+    token      TEXT NOT NULL,
+    domain     TEXT,
+    polled_at  TEXT NOT NULL,   -- the most recent attempt, successful or not
+    ok         INTEGER NOT NULL,
+    postings   INTEGER,         -- what the last successful poll returned
+    failures   INTEGER NOT NULL DEFAULT 0,   -- consecutive, reset by a success
+    last_ok    TEXT,
+    error      TEXT,
+    PRIMARY KEY (ats, token)
+);
 """
 
 
@@ -268,3 +302,72 @@ def record_run(
             " VALUES (?, ?, ?, ?, ?)",
             (source, started_at, row_count, int(ok), error),
         )
+
+
+def record_board_polls(
+    connection: sqlite3.Connection, outcomes: Iterable[tuple]
+) -> int:
+    """Record what each board answered. `outcomes` is `(ats, token, domain,
+    ok, postings, error)`.
+
+    **`failures` is consecutive and the arithmetic happens in the `ON CONFLICT`
+    clause on purpose.** Reading the old count into Python and writing it back
+    is a read-modify-write, which is the race that emptied `labels.csv` once
+    already; letting SQLite do `failures + 1` in the same statement cannot lose
+    a poll. The values in `VALUES` are the *first* poll of a board -- the insert
+    branch -- and the `DO UPDATE` branch is every poll after it.
+
+    A failure deliberately leaves `postings` and `last_ok` alone, so the row
+    still says what the board held when it last worked. That is the number
+    worth having when deciding whether a dead board matters.
+    """
+    timestamp = now()
+    rows = [
+        (
+            ats, token, domain, timestamp, int(bool(ok)),
+            postings if ok else None,   # a failure keeps what the board held
+            0 if ok else 1,             # this row's own first outcome
+            timestamp if ok else None,
+            None if ok else error,
+        )
+        for ats, token, domain, ok, postings, error in outcomes
+    ]
+    with connection:
+        connection.executemany(
+            """
+            INSERT INTO board_polls
+                (ats, token, domain, polled_at, ok, postings, failures,
+                 last_ok, error)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (ats, token) DO UPDATE SET
+                domain    = excluded.domain,
+                polled_at = excluded.polled_at,
+                ok        = excluded.ok,
+                postings  = CASE WHEN excluded.ok THEN excluded.postings
+                                 ELSE board_polls.postings END,
+                failures  = CASE WHEN excluded.ok THEN 0
+                                 ELSE board_polls.failures + 1 END,
+                last_ok   = CASE WHEN excluded.ok THEN excluded.polled_at
+                                 ELSE board_polls.last_ok END,
+                error     = excluded.error
+            """,
+            rows,
+        )
+    return len(rows)
+
+
+def failing_boards(
+    connection: sqlite3.Connection, minimum: int = 1
+) -> list[sqlite3.Row]:
+    """Boards whose last poll failed, worst first.
+
+    Ordered by what they are costing rather than by how long they have been
+    broken: a board that has failed twice holding 879 postings matters more
+    than one that has failed thirty times holding none, and the 404s in this
+    corpus are overwhelmingly the second kind.
+    """
+    return connection.execute(
+        "SELECT * FROM board_polls WHERE ok = 0 AND failures >= ?"
+        " ORDER BY COALESCE(postings, 0) DESC, failures DESC",
+        (minimum,),
+    ).fetchall()
