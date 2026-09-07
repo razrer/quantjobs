@@ -80,6 +80,13 @@ from .resolve import domain_of, is_platform_domain
 NAME = "jobroom"
 TOKEN = "switzerland"  # one national portal, so the board identifier is constant
 
+# A windowed poll rather than a full sweep, so its row count is a function of
+# `onlineSince` and not of its health -- see `Sweep.problem` below, which
+# refuses an absolute floor for exactly this reason and says so. `alerts.check`
+# reads this flag and skips the `shrank` comparison, which is that same floor
+# taken from a median instead of from a constant.
+DELTA = True
+
 URL = "https://www.job-room.ch/jobadservice/api/jobAdvertisements/_search"
 
 # `page * size` may not reach this. Asserted against rather than merely used:

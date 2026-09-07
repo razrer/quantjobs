@@ -59,6 +59,52 @@ class BreakageTest(unittest.TestCase):
         self.assertEqual(len(shrank), 1, "a 40% collapse above the floor went unnoticed")
         self.assertIn("16,000", shrank[0].detail)
 
+    def test_a_delta_source_is_not_judged_on_volume(self):
+        """A delta's row count is the gap since the last poll, so a median over
+        its history averages polls taken at different intervals. A `daily` run
+        five hours after the last one returns a few hundred rows against a
+        median of twenty thousand -- that fired on Sweden and Switzerland on
+        essentially every close-spaced run, and `alerts` exiting non-zero every
+        week for a healthy pipeline is how a report stops being read."""
+        connection = _memory(self)
+        for _ in range(3):
+            _run(connection, "jobtech", 26_996)
+        _run(connection, "jobtech", 2_656)
+        self.assertNotIn("shrank", {a.kind for a in alerts.check(connection)})
+
+    def test_a_delta_source_is_still_judged_on_answering_at_all(self):
+        """The exemption is volume only. Whether the source answered is a fair
+        question to put to any source, and it is the one `_record_poll` exists
+        to make askable."""
+        connection = _memory(self)
+        for _ in range(3):
+            _run(connection, "jobroom", 16_000)
+        _run(connection, "jobroom", 0, ok=False, error="the portal refused")
+        self.assertIn("fail", {a.kind for a in alerts.check(connection)})
+
+        empty = _memory(self)
+        for _ in range(3):
+            _run(empty, "jobroom", 16_000)
+        _run(empty, "jobroom", 0)
+        self.assertIn("empty", {a.kind for a in alerts.check(empty)})
+
+    def test_a_full_sweep_is_still_judged_on_volume(self):
+        """The exemption must not spread. Jobbsafari walks the whole board on
+        every sweep, so its volume *is* a health signal -- and it is the source
+        whose first live sweep returned 5,421 of 48,550 and looked clean."""
+        connection = _memory(self)
+        for _ in range(3):
+            _run(connection, "jobbsafari", 52_000)
+        _run(connection, "jobbsafari", 5_421)
+        self.assertIn("shrank", {a.kind for a in alerts.check(connection)})
+
+    def test_the_delta_list_is_read_off_the_modules(self):
+        """Restated here, it could say one thing while the source says another
+        -- the `feed_state` mistake. A source declaring nothing is judged."""
+        self.assertEqual(alerts._deltas(), {"jobtech", "jobroom"})
+        self.assertNotIn("jobbsafari", alerts._deltas())
+        self.assertNotIn("mycareersfuture", alerts._deltas())
+
     def test_a_failed_fetch_is_reported(self):
         connection = _memory(self)
         _run(connection, "eurex", 330)

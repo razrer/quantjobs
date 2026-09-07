@@ -1706,6 +1706,24 @@ nothing public — Da Vinci Derivatives is the standing example.
   printed `all sources healthy`. `cli._poll` wraps every Layer 4 sweep and
   records `ok=0` on the way out, which is the contract `_fetch` has had for the
   registries since the beginning. **A report that cannot fail is not a report.**
+- **And the opposite failure was live at the same time: a report that fails
+  every week is not a report either.** `shrank` compares a run against the
+  median of its own history, which is right for a full sweep and
+  meaningless for a **delta** -- there the row count is the gap since the
+  last poll, so the median averages polls taken at different intervals. A
+  `daily` run five hours after the previous one returned 2,656 Swedish rows
+  against a median of 26,996 and 2,721 Swiss against 13,140, and both
+  alerted, every time. `jobroom_ch.Sweep.problem` had already refused an
+  absolute floor **in writing** for exactly this reason -- *"this is a
+  delta, so a quiet window is a true answer and a floor would only fire on
+  the days it should not"* -- and `shrank` is that same floor taken from a
+  median instead of from a constant. `jobstream` and `jobroom_ch` declare
+  `DELTA = True` and `alerts._deltas()` reads it off the modules rather
+  than restating the list, so a source cannot be a delta in one file and a
+  full sweep in another. **The exemption is volume only**: `fail`, `empty`
+  and `stale` still apply, because whether a source answered at all is a
+  fair question to put to any of them. **When a guard is refused in one
+  module, grep for the same guard wearing a different name in another.**
 - **`alerts.coverage` read `REGISTRIES` alone, so the national boards were
   missing from *both* of its lists at once.** `check` walks
   `SELECT DISTINCT source FROM runs` and therefore cannot judge a source with

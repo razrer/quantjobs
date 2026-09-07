@@ -52,6 +52,17 @@ from .resolve import domain_of
 NAME = "jobtech"
 TOKEN = "jobstream"  # one national feed, so the board identifier is constant
 
+# **A delta, so its row count measures the gap since the last poll and not its
+# health.** `alerts.check` reads this: comparing a delta against the median of
+# its own history compares two polls taken at different intervals, and a
+# `daily` run five hours after the last one legitimately returns a few hundred
+# rows where the median is twenty thousand. That fired on every close-spaced
+# run, and an alert that cries wolf gets ignored -- which is the argument
+# `SHRANK_TO` already makes about itself. `fail`, `empty` and `stale` still
+# apply: they ask whether the source answered at all, which is a fair question
+# to put to any source. This module's own guards are the sharp ones.
+DELTA = True
+
 URL = "https://jobstream.api.jobtechdev.se/stream?date={since}"
 
 # Re-read this much on every resume. Cheap insurance against a boundary ad.

@@ -119,8 +119,19 @@ def check(connection: sqlite3.Connection, now: datetime | None = None) -> list[A
 
         # Baseline from earlier *successful* runs only. Including the run under
         # test would let a breakage vote on its own normality.
+        #
+        # **And a delta source has no baseline to build.** Its row count is the
+        # gap since the last poll, so a median over its history averages polls
+        # taken at different intervals and means nothing: a `daily` run five
+        # hours after the last one returns a few hundred rows against a median
+        # of twenty thousand, and `shrank` fired on both Swedish and Swiss
+        # sources on essentially every close-spaced run. `jobroom_ch.Sweep`
+        # already refuses an absolute floor for this exact reason and explains
+        # why; this is the same floor taken from a median rather than from a
+        # constant, and it is wrong for the same reason. The other three checks
+        # still apply -- they ask whether the source answered at all.
         history = [row["row_count"] for row in runs[1:] if row["ok"] and row["row_count"]]
-        if len(history) >= MIN_HISTORY:
+        if source not in _deltas() and len(history) >= MIN_HISTORY:
             median = _median(history)
             if latest["row_count"] < median * SHRANK_TO:
                 alerts.append(
@@ -196,6 +207,24 @@ def _board_alerts(connection: sqlite3.Connection) -> list[Alert]:
         for row in rows
         if row["postings"]
     ]
+
+
+def _deltas() -> frozenset[str]:
+    """Sources whose row count measures elapsed time rather than health.
+
+    Read off the modules rather than listed here, so a source cannot be a delta
+    in one file and a full sweep in another -- the `feed_state` argument, and
+    the reason `_HUB_ORDER` is derived rather than restated. A source that
+    declares nothing is judged, which is the failing-towards-noticing
+    direction this module always picks.
+    """
+    from . import jobroom_ch, jobstream
+
+    return frozenset(
+        module.NAME
+        for module in (jobstream, jobroom_ch)
+        if getattr(module, "DELTA", False)
+    )
 
 
 def _expected() -> set[str]:
