@@ -272,6 +272,32 @@ _HREF = re.compile(r'href=["\']([^"\']{0,2000})["\']', re.I)
 
 _MAX_CAREERS_PAGES = 3
 
+# **A careers page is a page, and the word list alone does not say so.**
+# `_CAREERS_WORDS` holds `job` and `join`, matched as substrings anywhere in an
+# href and case-insensitively, so a *content hash* qualifies: Framer serves
+# `images/aujhJOBjha04nI6uQdgvtKiq4.png` and `Smooth_Scroll.DEsjOBbi.mjs`, and
+# both were recorded as a firm's careers page. So were `Careers.css`,
+# `pb_2-2173685473_careers_bw.jpg` and an ASP.NET `WebResource.axd`.
+#
+# Measured over every stored `careers_url`: **54 of 4,805 point at an asset
+# rather than a page**, 52 of them tier B -- a firm sitting in the watch queue
+# behind a stylesheet, whose real careers page was never fetched because only
+# three candidates ever are. That is most of Layer 3B's *no same-site links*
+# bucket, which is what a CSS file looks like to a link scanner.
+#
+# **This is a documented failure and not a new one.** `CLAUDE.md` records the
+# careers walk settling on a Cloudinary **image** for DRW and a **PDF** for Man
+# Group, and names it as the reason `discover.py` had to exist. This is the
+# general case of it.
+#
+# Shortest-first ordering is what makes it bite: a terse CDN asset URL sorts
+# above the firm's own `/about/careers/`.
+_NOT_A_PAGE = re.compile(
+    r"\.(?:css|m?js|json|pdf|png|jpe?g|gif|svg|webp|ico|woff2?|ttf|otf|eot"
+    r"|mp4|webm|mp3|zip|axd|map)$",
+    re.I,
+)
+
 # Careers pages fetched per domain across both hops. The queue is 19,000
 # domains long, so this is a budget, not a preference.
 _MAX_FETCHES = 6
@@ -664,6 +690,8 @@ def careers_candidates(markup: str, domain: str) -> list[str]:
         if not url.startswith("http"):
             continue
         if is_platform_domain(urllib.parse.urlsplit(url).netloc):
+            continue
+        if _NOT_A_PAGE.search(urllib.parse.urlsplit(url).path):
             continue
         if url not in found:
             found.append(url)

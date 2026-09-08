@@ -848,6 +848,24 @@ nothing public — Da Vinci Derivatives is the standing example.
   and `coverage` counts exactly those, while `failures > 0` means a
   baseline that can no longer be refreshed. And `last_seen` stays the last
   *successful* read, because that is what the whole layer compares.
+- **A careers page is a page, and the word list alone does not say so --
+  which is where most of that *no same-site links* bucket came from.**
+  `_CAREERS_WORDS` holds `job` and `join`, matched as substrings anywhere
+  in an href and case-insensitively, so a **content hash** qualifies:
+  Framer serves `images/aujhJOBjha04nI6uQdgvtKiq4.png` and
+  `Smooth_Scroll.DEsjOBbi.mjs`, and both were recorded as a firm's careers
+  page. So were `Careers.css`, `pb_2-2173685473_careers_bw.jpg` and an
+  ASP.NET `WebResource.axd`. Measured over every stored URL: **54 of 4,805
+  point at an asset rather than a page, 52 of them tier B** -- a firm
+  sitting in the watch queue behind a stylesheet, whose real careers page
+  was never fetched because only three candidates ever are.
+  **Shortest-first ordering is what makes it bite**: a terse CDN asset URL
+  sorts above the firm's own `/about/careers/`. `ats._NOT_A_PAGE` refuses
+  them on the extension, and **this is the general case of a failure
+  already written down** -- the walk settling on a Cloudinary *image* for
+  DRW and a *PDF* for Man Group, which is named above as the reason
+  `discover.py` had to exist. The 52 stored rows correct themselves on the
+  next `ats --reprobe`, which re-walks tier B by construction.
 - **Most of the 404s are somebody else's board.** `8vc.com` resolving to
   `greenhouse/habi`, `valuestreamventures.com` to `userinterviews`,
   `infinityvc.capital` to `sensible` -- a venture firm's careers page links to

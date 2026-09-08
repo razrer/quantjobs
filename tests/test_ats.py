@@ -60,6 +60,38 @@ class CareersScanTest(unittest.TestCase):
             "https://jobs.lever.co/example",
         )
 
+    def test_an_asset_is_not_a_careers_page(self):
+        """`_CAREERS_WORDS` holds `job` and `join`, matched as substrings
+        anywhere in an href -- so a *content hash* qualifies. Framer serves
+        `aujhJOBjha04nI6uQdgvtKiq4.png`, and it was recorded as a firm's
+        careers page. Measured: 54 of 4,805 stored careers URLs point at an
+        asset, 52 of them tier B."""
+        markup = (
+            '<a href="https://framerusercontent.com/images/aujhJOBjha0.png">Logo</a>'
+            '<a href="https://framerusercontent.com/Smooth_Scroll.DEsjOBbi.mjs">s</a>'
+            '<a href="/-/media/Themes/Body/Careers.css?v=2023">Style</a>'
+            '<a href="/files/pb_2-2173685473_careers_bw.jpg">Photo</a>'
+            '<a href="/WebResource.axd?d=jobs">Bundle</a>'
+            '<a href="/reports/graduate-careers-brochure.pdf">Brochure</a>'
+            '<a href="/about/careers/">Careers</a>'
+        )
+
+        self.assertEqual(
+            ats.careers_candidates(markup, "example.com"),
+            ["https://example.com/about/careers/"],
+        )
+
+    def test_a_page_whose_path_merely_contains_a_dot_survives(self):
+        """The test is the *extension*, not the presence of a dot: a real
+        careers page can sit under a versioned or dotted path."""
+        markup = (
+            '<a href="/careers/index.html">Careers</a>'
+            '<a href="/v2.0/jobs">Roles</a>'
+        )
+        found = ats.careers_candidates(markup, "example.com")
+        self.assertIn("https://example.com/v2.0/jobs", found)
+        self.assertIn("https://example.com/careers/index.html", found)
+
 
 class CustomDomainTest(unittest.TestCase):
     """An ATS serving a board from the firm's own hostname.
