@@ -896,11 +896,24 @@ def _improves(result: Resolution, stored: sqlite3.Row) -> bool:
     Two answers qualify:
 
       * a pollable board, which is the point of the sweep;
-      * a real careers page replacing a *platform* one. That is not a
-        promotion -- it stays tier B -- but leaving it alone would keep Layer 3B
-        diffing `instagram.com/werkenbijpggm/` forever, watching a page that
-        can never carry a posting. The walk stopped producing those; the stored
-        rows still hold them.
+      * a real careers page replacing one that **can never carry a posting**.
+        That is not a promotion -- it stays tier B -- but leaving it alone
+        would keep Layer 3B diffing `instagram.com/werkenbijpggm/` forever,
+        watching a page no posting can appear on. The walk stopped producing
+        those; the stored rows still hold them.
+
+    **That second clause tested for a platform profile and meant something
+    wider, which is why it did not reach the asset URLs.** `Careers.css`,
+    `aujhJOBjha04nI6uQdgvtKiq4.png` and a careers *brochure* PDF are the same
+    fact as an Instagram profile -- a URL no job can ever be published on -- and
+    a stylesheet is the purer case, because it has no links at all, so Layer 3B
+    fingerprints an empty set on every poll until someone looks. 52 tier-B rows
+    held one, and a re-walk would have found the real page and **refused to
+    write it**: tier B replacing tier B, and the stored URL was on the firm's
+    own domain, so the platform test said no.
+
+    `_unwatchable` is the union, and the principle rather than either instance
+    of it.
     """
     if result.tier == "A" and result.token:
         return True
@@ -908,9 +921,16 @@ def _improves(result: Resolution, stored: sqlite3.Row) -> bool:
     return bool(
         result.careers_url
         and old
-        and is_platform_domain(urllib.parse.urlsplit(old).netloc)
-        and not is_platform_domain(urllib.parse.urlsplit(result.careers_url).netloc)
+        and _unwatchable(old)
+        and not _unwatchable(result.careers_url)
     )
+
+
+def _unwatchable(url: str) -> bool:
+    """A URL no posting can ever appear on: somebody's social profile, or an
+    asset that is not a page at all."""
+    parts = urllib.parse.urlsplit(url)
+    return bool(is_platform_domain(parts.netloc) or _NOT_A_PAGE.search(parts.path))
 
 
 def reprobe(

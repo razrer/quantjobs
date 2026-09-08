@@ -312,6 +312,33 @@ class ReprobeTest(unittest.TestCase):
         )
         self.assertFalse(ats._improves(found, self._stored("https://acme.com/careers")))
 
+    def test_a_real_careers_page_replaces_an_asset_one(self):
+        """The platform test meant something wider than it said. A stylesheet
+        is the same fact as an Instagram profile -- a URL no job can ever be
+        published on -- and the purer case, because it has no links at all, so
+        Layer 3B fingerprints an empty set on every poll. 52 tier-B rows held
+        one, and the old clause would have found the real page and refused to
+        write it: tier B replacing tier B, on the firm's own domain."""
+        found = ats.Resolution(
+            "acme.com", "https://acme.com/about/careers/", None, None, "B", "no fp"
+        )
+        for asset in (
+            "https://acme.com/-/media/Themes/Body/Careers.css",
+            "https://framerusercontent.com/images/aujhJOBjha04nI6uQdgvtKiq4.png",
+            "https://acme.com/reports/graduate-careers-brochure.pdf",
+        ):
+            with self.subTest(asset=asset):
+                self.assertTrue(ats._improves(found, self._stored(asset)))
+
+    def test_an_asset_does_not_replace_a_real_careers_page(self):
+        """The asymmetry is the whole point: it may only ever improve."""
+        found = ats.Resolution(
+            "acme.com", "https://acme.com/assets/Careers.css", None, None, "B", "no fp"
+        )
+        self.assertFalse(
+            ats._improves(found, self._stored("https://acme.com/about/careers/"))
+        )
+
 
 class AdpTest(unittest.TestCase):
     """ADP Workforce Now -- the largest unrecognised vendor in a tier-B sample."""

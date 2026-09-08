@@ -875,8 +875,22 @@ nothing public — Da Vinci Derivatives is the standing example.
   them on the extension, and **this is the general case of a failure
   already written down** -- the walk settling on a Cloudinary *image* for
   DRW and a *PDF* for Man Group, which is named above as the reason
-  `discover.py` had to exist. The 52 stored rows correct themselves on the
-  next `ats --reprobe`, which re-walks tier B by construction.
+  `discover.py` had to exist.
+- **~~The 52 stored rows correct themselves on the next `ats --reprobe`.~~
+  They would not have, and the reason is a clause that tested for one
+  instance of the principle it meant.** `ats._improves` may only ever
+  improve a stored row, and its second clause admitted *a real careers
+  page replacing a platform one* -- written for `instagram.com/
+  werkenbijpggm/`, on the grounds that leaving it would keep Layer 3B
+  watching **a page that can never carry a posting**. An asset URL is
+  exactly that and is the purer case, because a stylesheet has no links
+  at all, so the watch fingerprints an empty set on every poll. But the
+  test was `is_platform_domain`, and `Careers.css` is on the firm's own
+  domain -- so a re-walk would have found the real page, seen tier B
+  replacing tier B, and **refused to write it**. `_unwatchable` is the
+  union of the two, and the principle rather than either instance.
+  **When a guard's docstring states a principle and its code tests one
+  case of it, the gap is every other case.**
 - **Most of the 404s are somebody else's board.** `8vc.com` resolving to
   `greenhouse/habi`, `valuestreamventures.com` to `userinterviews`,
   `infinityvc.capital` to `sensible` -- a venture firm's careers page links to
