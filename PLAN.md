@@ -2035,3 +2035,92 @@ Both are visible now instead of silent, which was the point.
 
 **Exit (met):** 1,103 tests pass, `alerts` reports every source healthy, and
 **35 boards fail with not one of them holding a live posting.**
+
+---
+
+## Stage 48 -- the reader's own rejections, read as vocabulary; and the
+## duplicates a hash could not see
+
+**The exit criterion:** the junk the reader has been clearing by hand comes off
+on evidence instead, and a repost whose text drifted by one character folds
+into the card it repeats -- with the shortlist unmoved by either.
+
+Two complaints, and they turned out to have separate causes and separate fixes,
+so they shipped separately.
+
+### The junk
+
+`corrections` pulled 297 reclassify clicks off the live board, taking
+`labels.csv` to 364 hand rejections. Cross-referenced against what the tagger
+had said: **198 were already gated and 161 had reached the board** -- 73 from
+Jobbsafari and 19 from job-room.ch, which is what *"junk jobs, especially in
+Sweden"* is once it is counted.
+
+**Every one of those 92 came back `undecided` from `lexicon.judge`.** Not a
+wrong answer -- no answer at all. `Hemstäd`, `Trädgårdarbete`, `Hundrastare`,
+`Däckansvarig`, `Teaterproducent`, `Skyddsvakt`: no needle in either module
+reaches them, and `hand_rejected` removes a card the moment it is clicked and
+does nothing for the one that arrives next week.
+
+52 needles, dry-run over all 570,852 live postings: **5,724 hits, not one rated
+positively**, 32 reaching the board today on nothing but the reader's click.
+**The split is job-room.ch 18 to Jobbsafari 14** -- Switzerland is the larger
+half of a complaint about Sweden, because the Swiss board is gated by *words*
+where Denmark and Singapore are gated by a taxonomy.
+
+Four candidates were measured and dropped, three on the reason rather than the
+count: `ställning` is a scaffold and a *standing*, `odling` is horticulture and
+a bacterial *culture*, `servitis` is one advertisement's misspelling, and
+`städpoolen` is a company name attached to a posting that names no occupation
+at all.
+
+**And the non-Nordic half of the same 161 needed no change**, which is the
+finding that stops the next sweep: it is asset management, equity research,
+treasury and private equity *ranking* rather than rejecting -- the reader's own
+standing call -- plus `business analyst`, measured and refused before.
+
+### The duplicates
+
+`fingerprint` folds a repost whose text is byte-identical, and that is a
+narrower claim than it reads as. Over every same-firm, same-office, same-title
+group on the board, **67 cards were a second copy the hash did not fold**, and
+the diffs are almost nothing: China Merchants Bank's `Treasury Dealer` twice at
+1,790 characters each way, differing in `2` against `3`; Invesco's `Senior
+Engineer Invest Tech` differing by **one space**.
+
+`collapse_near_duplicates` keeps `fingerprint`'s own group -- firm, office,
+folded title, the location included for exactly the reason it is in the key --
+and replaces the byte comparison with a similarity. **The threshold sits in an
+empty band**: the highest pair it does not fold is 0.8970 and the lowest it does
+is 0.9377. Below the gap are genuinely different postings sharing a title --
+Squarepoint's two `Software Developer` openings, one data infrastructure and one
+risk technology, score **0.27**.
+
+**The first reading of that band was wrong because `autojunk` was on.**
+`SequenceMatcher`'s default discards any character in over 1% of a long string,
+which on two nearly identical documents suppresses the score and scrambles the
+opcodes -- William Blair's `Business Analyst II` read 0.9147 and "different
+skills required" under it, 0.9929 and "one edited bullet" without.
+**Whenever a similarity is used as evidence, check what the library discarded
+before reading the diff.**
+
+### What it cost, and the one number that should not have moved
+
+Junk: board **4,623 -> 4,709** cards, and **the growth is not this change** --
+see the open item in `ACTION-REQUIRED.md`. Of the 5,724 postings the new needles
+gate, **zero** carry a `fit` of `plausible` or better.
+Duplicates: **4,709 -> 4,691**, 18 folded, every one read by hand.
+**Shortlist 215 across both**, which is the reading this project takes.
+
+**Exit (met):** 1,112 tests pass, `alerts` reports every source healthy, the
+Swedish and Swiss trades are off the board, and the shortlist did not move.
+
+### What this stage found and did not fix
+
+`bodies.py` resolves Workday's `N Locations` into a real place list and
+`db.upsert_jobs` writes the placeholder back on the next poll -- two writers, no
+agreement about who owns the column, the poller last. **10,690 live postings
+hold the placeholder and 3,580 carried a real hub at tagger 62**; 1,333 of those
+read `hub: other` before, which the geography gate removes, so they are on the
+page now. Recorded as the open item rather than fixed, because it is a third
+change and the standing rule is one fix, one commit, one publish.
