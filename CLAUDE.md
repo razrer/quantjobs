@@ -818,6 +818,36 @@ nothing public — Da Vinci Derivatives is the standing example.
   service interruption*. A vendor outage is indistinguishable from a dead
   board from here, and auto-retiring during one would delete every posting
   on every board that vendor serves. `board_polls` reports and never acts.
+- **Layer 3B had the same silence and three wrong numbers on top of it.**
+  `pages.snapshot` returned `None` for three unrelated reasons -- the fetch
+  raised, a hostile host raised something else, or the page came back with
+  no same-site links at all -- and `run` counted every one as a page
+  polled. Measured over all 3,593 tier-B pages: **120 yield nothing, 69 of
+  which have never once been read**. A page that cannot be fetched can
+  never report a change, so it has left the watch while every report goes
+  on counting it as watched. `Poll` carries the reason now and
+  `page_watch` gained `polled_at`, `failures` and `error`.
+- **`polled`, `baselined` and `watched` were all counting the wrong thing,
+  and one of them printed an impossible number.** `polled` incremented
+  before the snapshot was tested; `baselined` counted every target with no
+  previous row whether or not this run read one, so a page that has never
+  been fetchable was reported as a *new baseline on every single run*; and
+  `coverage` counted every `page_watch` row against the tier-B total and
+  printed **3,873 of 3,593 -- 108%**. The excess is pages since promoted to
+  tier A (318 of them, 276 yielding real postings), which is this layer
+  succeeding -- the row stays behind after `targets` stops selecting it, so
+  the count drifted above the thing it was a share of. **A coverage report
+  that overstates itself is the one number nobody re-checks**, which is the
+  `coverage.unmeasured_hubs` lesson in a second place.
+- **A failed poll must not write a placeholder row, and the reason is the
+  change detector.** `record`'s test is `stored fingerprint != this one`,
+  so a row holding a fingerprint no page ever produced makes the first real
+  read come back as **changed** -- the false hiring signal `snapshot`
+  refuses an empty link set to avoid, arriving by the other door. The two
+  states need no sentinel: **no row at all** means never read successfully
+  and `coverage` counts exactly those, while `failures > 0` means a
+  baseline that can no longer be refreshed. And `last_seen` stays the last
+  *successful* read, because that is what the whole layer compares.
 - **Most of the 404s are somebody else's board.** `8vc.com` resolving to
   `greenhouse/habi`, `valuestreamventures.com` to `userinterviews`,
   `infinityvc.capital` to `sensible` -- a venture firm's careers page links to

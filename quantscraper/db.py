@@ -155,6 +155,13 @@ _ADDED_COLUMNS = (
     ("jobs", "deadline", "TEXT"),
     ("jobs", "employer", "TEXT"),
     ("jobs", "category", "TEXT"),
+    # `page_watch` is created by `pages.SCHEMA` rather than by this module's,
+    # and that is fine: `_migrate` skips a table that does not exist yet, and a
+    # fresh install gets these from the `CREATE TABLE` there. Only an install
+    # that already has the table needs them added.
+    ("page_watch", "polled_at", "TEXT"),
+    ("page_watch", "failures", "INTEGER NOT NULL DEFAULT 0"),
+    ("page_watch", "error", "TEXT"),
 )
 
 

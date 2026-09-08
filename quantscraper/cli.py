@@ -538,17 +538,32 @@ def _jobstream(database: str, since_text: str | None = None) -> int:
 
 def _pages(database: str, limit: int, workers: int) -> int:
     connection = db.connect(database)
-    polled, baselined, changed = pages.run(connection, limit, workers)
-    if polled:
+    read, baselined, changed, failures = pages.run(connection, limit, workers)
+    if read or failures:
         print(
-            f"polled {polled:,d} tier-B pages, {baselined:,d} new baselines,"
+            f"read {read:,d} tier-B pages, {baselined:,d} new baselines,"
             f" {changed:,d} changed"
         )
     else:
         print("no tier-B pages to poll")
 
+    # Grouped by cause rather than sampled, which is the Layer 3 lesson: a
+    # careers page that has 404'd for months can never report a change, so it
+    # has left the watch while every report went on counting it as watched.
+    if failures:
+        kinds: dict[str, int] = {}
+        for poll in failures:
+            label = (poll.error or "unknown").split(":")[0]
+            kinds[label] = kinds.get(label, 0) + 1
+        print(f"\n{len(failures):,d} pages did not answer", file=sys.stderr)
+        for label, count in sorted(kinds.items(), key=lambda kv: -kv[1]):
+            print(f"  {count:5,d}  {label}", file=sys.stderr)
+
     row = pages.coverage(connection)
-    print(f"\n{row['watched']:,d} of {row['tier_b']:,d} tier-B pages watched")
+    print(
+        f"\n{row['watched']:,d} of {row['tier_b']:,d} tier-B pages watched"
+        f"  ({row['unwatched']:,d} never read, {row['dark']:,d} dark)"
+    )
 
     recent = pages.recent_changes(connection)
     if recent:

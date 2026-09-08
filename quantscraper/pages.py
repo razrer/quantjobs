@@ -45,7 +45,14 @@ CREATE TABLE IF NOT EXISTS page_watch (
     first_seen  TEXT NOT NULL,
     last_seen   TEXT NOT NULL,
     changed_at  TEXT,            -- NULL until the set moves for the first time
-    changes     INTEGER NOT NULL DEFAULT 0
+    changes     INTEGER NOT NULL DEFAULT 0,
+    -- Why a watched page stopped answering, and for how long. `last_seen` is
+    -- the last *successful* read and must stay that, because the whole layer
+    -- compares one successful read against the next; `polled_at` is the last
+    -- attempt, and the gap between them is how long this page has been dark.
+    polled_at   TEXT,
+    failures    INTEGER NOT NULL DEFAULT 0,  -- consecutive, reset by a success
+    error       TEXT
 );
 """
 
@@ -101,14 +108,39 @@ def page_links(markup: str, url: str) -> list[str]:
     return sorted(found)
 
 
-def snapshot(row: sqlite3.Row) -> Snapshot | None:
+@dataclass(frozen=True, slots=True)
+class Poll:
+    """One attempt at one page: a snapshot, or why there is not one.
+
+    **`snapshot` used to return `None` for three unrelated reasons** -- the
+    fetch raised, a hostile host raised something else, or the page came back
+    with no same-site links at all -- and `run` counted every one of them as a
+    page polled. So a careers page that had 404'd for months was indistinct
+    from a healthy page that had not changed, which is the same silence
+    `board_polls` was built for one layer up, on a population of 3,593.
+
+    It matters more here than the lower stakes suggest. This layer's only
+    output is *a page changed*, and a page that cannot be fetched can never
+    report a change -- it drops out of the watch entirely while the report goes
+    on counting it as watched.
+    """
+
+    domain: str
+    shot: Snapshot | None = None
+    error: str | None = None
+
+
+def snapshot(row: sqlite3.Row) -> Poll:
     url = row["careers_url"]
     try:
         body, landed = http.get_with_url(url, timeout=15, retries=1)
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
-        return None
-    except Exception:  # noqa: BLE001 -- one hostile host must not stop the run
-        return None
+    except urllib.error.HTTPError as exc:
+        return Poll(row["domain"], error=f"HTTP {exc.code}")
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        reason = "DNS does not resolve" if "getaddrinfo" in str(exc) else "unreachable"
+        return Poll(row["domain"], error=f"{reason}: {type(exc).__name__}")
+    except Exception as exc:  # noqa: BLE001 -- one hostile host must not stop the run
+        return Poll(row["domain"], error=f"unreadable: {type(exc).__name__}")
 
     markup = body.decode("utf-8", errors="replace")[:_MAX_MARKUP]
     links = page_links(markup, landed)
@@ -116,9 +148,10 @@ def snapshot(row: sqlite3.Row) -> Snapshot | None:
         # No same-site links at all means the fetch did not return the page we
         # think it did -- a consent wall, a redirect to a login. Recording an
         # empty set as the baseline would report a change the moment the real
-        # page came back, and would call that a hiring signal.
-        return None
-    return Snapshot(row["domain"], landed, links)
+        # page came back, and would call that a hiring signal. Still not a
+        # snapshot, and now no longer indistinguishable from a 404 either.
+        return Poll(row["domain"], error="no same-site links -- a wall, not the page")
+    return Poll(row["domain"], shot=Snapshot(row["domain"], landed, links))
 
 
 def targets(connection: sqlite3.Connection, limit: int) -> list[sqlite3.Row]:
@@ -156,8 +189,8 @@ def record(connection: sqlite3.Connection, shots: list[Snapshot]) -> int:
                 """
                 INSERT INTO page_watch
                     (domain, url, fingerprint, links, first_seen, last_seen,
-                     changed_at, changes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                     changed_at, changes, polled_at, failures, error)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)
                 ON CONFLICT (domain) DO UPDATE SET
                     url         = excluded.url,
                     fingerprint = excluded.fingerprint,
@@ -166,7 +199,13 @@ def record(connection: sqlite3.Connection, shots: list[Snapshot]) -> int:
                     changed_at  = CASE WHEN page_watch.fingerprint != excluded.fingerprint
                                        THEN excluded.last_seen ELSE page_watch.changed_at END,
                     changes     = page_watch.changes
-                                  + (page_watch.fingerprint != excluded.fingerprint)
+                                  + (page_watch.fingerprint != excluded.fingerprint),
+                    -- A success clears the run of failures and the reason for
+                    -- them, so `failures` counts the *current* outage rather
+                    -- than every one this page has ever had.
+                    polled_at   = excluded.polled_at,
+                    failures    = 0,
+                    error       = NULL
                 """,
                 (
                     shot.domain,
@@ -177,40 +216,82 @@ def record(connection: sqlite3.Connection, shots: list[Snapshot]) -> int:
                     timestamp,
                     timestamp if moved else None,
                     1 if moved else 0,
+                    timestamp,
                 ),
             )
     return changed
 
 
+def record_failures(connection: sqlite3.Connection, polls: list[Poll]) -> int:
+    """Count a failed poll against a page already on the watch. Returns how
+    many rows were touched.
+
+    **Only a page that has a baseline gets a row here, and that is deliberate
+    rather than an omission.** The two states are already distinguishable
+    without inventing a sentinel: a page with no `page_watch` row at all has
+    never been read successfully, and `coverage` counts exactly those. Writing
+    a placeholder row instead would put a fingerprint in the table that no page
+    ever produced -- and `record`'s `moved` test compares against whatever is
+    stored, so the first real read would come back as *changed*. That is the
+    false hiring signal `snapshot` refuses an empty link set to avoid, arriving
+    by the other door.
+
+    `last_seen` is deliberately not touched. It is the last *successful* read
+    and the whole layer compares one of those against the next; `polled_at`
+    carries the attempt, and the gap between the two is the outage.
+    """
+    timestamp = db.now()
+    with connection:
+        cursor = connection.executemany(
+            "UPDATE page_watch SET polled_at = ?, failures = failures + 1,"
+            " error = ? WHERE domain = ?",
+            [(timestamp, poll.error, poll.domain) for poll in polls],
+        )
+    return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+
+
 def run(
     connection: sqlite3.Connection, limit: int, workers: int = 12
-) -> tuple[int, int, int]:
-    """Poll tier-B pages. Returns (polled, baselined, changed)."""
+) -> tuple[int, int, int, list[Poll]]:
+    """Poll tier-B pages. Returns (read, baselined, changed, failures).
+
+    **The first two numbers used to count the failures too.** `polled` was
+    incremented before the snapshot was tested, so a page that 404'd was
+    reported as a page polled; and `baselined` counted every target that had no
+    previous row, whether or not this run managed to read one -- so a page that
+    has never once been fetchable was reported as a new baseline on every
+    single run. Both now count what actually happened, which is why the first
+    is named `read`.
+    """
     connection.executescript(SCHEMA)
     rows = targets(connection, limit)
     if not rows:
-        return 0, 0, 0
+        return 0, 0, 0, []
 
     known = {
         row["domain"]
         for row in connection.execute("SELECT domain FROM page_watch")
     }
 
-    polled = changed = 0
+    read = changed = baselined = 0
+    failures: list[Poll] = []
     batch: list[Snapshot] = []
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        for shot in pool.map(snapshot, rows):
-            polled += 1
-            if shot is None:
+        for poll in pool.map(snapshot, rows):
+            if poll.shot is None:
+                failures.append(poll)
                 continue
-            batch.append(shot)
+            read += 1
+            baselined += poll.domain not in known
+            batch.append(poll.shot)
             if len(batch) >= 100:
                 changed += record(connection, batch)
                 batch.clear()
     changed += record(connection, batch)
-
-    baselined = sum(1 for row in rows if row["domain"] not in known)
-    return polled, baselined, changed
+    # After the successes, so a page that failed this run keeps the baseline it
+    # already had and only its counter moves.
+    record_failures(connection, failures)
+    return read, baselined, changed, failures
 
 
 def recent_changes(connection: sqlite3.Connection, limit: int = 20):
@@ -223,13 +304,38 @@ def recent_changes(connection: sqlite3.Connection, limit: int = 20):
 
 
 def coverage(connection: sqlite3.Connection):
+    """How much of tier B is actually being watched, and what is dark.
+
+    **`watched` counted every row in `page_watch` against the tier-B total, so
+    it printed 3,873 of 3,593 -- 108%, an impossible number.** The excess is
+    pages that have since been *promoted*: 318 of them are tier A now and 276
+    are yielding real postings, which is this layer succeeding rather than
+    failing. But the row stays behind after `targets` stops selecting it, so
+    the count drifted above the thing it was a share of. A coverage report that
+    overstates itself is the one number nobody re-checks -- the same failure
+    `coverage.unmeasured_hubs` had, where a stale hub list claimed three metros
+    were measured that nothing had measured.
+
+    So `watched` is now the intersection with tier B, `unwatched` names what is
+    missing from it, and `dark` is a page that has a baseline it can no longer
+    refresh -- watched in name only.
+    """
     connection.executescript(SCHEMA)
     return connection.execute(
         """
         SELECT (SELECT COUNT(*) FROM ats_resolution
-                WHERE tier = 'B' AND careers_url IS NOT NULL) AS tier_b,
-               (SELECT COUNT(*) FROM page_watch)              AS watched,
+                WHERE tier = 'B' AND careers_url IS NOT NULL)  AS tier_b,
+               (SELECT COUNT(*) FROM ats_resolution a
+                JOIN page_watch w ON w.domain = a.domain
+                WHERE a.tier = 'B' AND a.careers_url IS NOT NULL) AS watched,
+               (SELECT COUNT(*) FROM ats_resolution a
+                LEFT JOIN page_watch w ON w.domain = a.domain
+                WHERE a.tier = 'B' AND a.careers_url IS NOT NULL
+                  AND w.domain IS NULL)                        AS unwatched,
+               (SELECT COUNT(*) FROM ats_resolution a
+                JOIN page_watch w ON w.domain = a.domain
+                WHERE a.tier = 'B' AND w.failures > 0)         AS dark,
                (SELECT COUNT(*) FROM page_watch
-                WHERE changed_at IS NOT NULL)                 AS moved
+                WHERE changed_at IS NOT NULL)                  AS moved
         """
     ).fetchone()

@@ -12,7 +12,7 @@ from __future__ import annotations
 import sqlite3
 import unittest
 
-from quantscraper import pages
+from quantscraper import db, pages
 
 
 class LinkSetTest(unittest.TestCase):
@@ -103,6 +103,149 @@ class RecordTest(unittest.TestCase):
         row = self.connection.execute("SELECT * FROM page_watch").fetchone()
         self.assertEqual(row["changes"], 1)
         self.assertIsNotNone(row["changed_at"])
+
+
+class FailedPollTest(unittest.TestCase):
+    """`snapshot` returned `None` for three unrelated reasons and `run`
+    counted every one of them as a page polled -- so a careers page that had
+    404'd for months was indistinguishable from a healthy page that had not
+    changed. The same silence `board_polls` closed one layer up."""
+
+    def setUp(self):
+        self.connection = db.connect(":memory:")
+        self.connection.executescript(pages.SCHEMA)
+
+    def tearDown(self):
+        self.connection.close()
+
+    def _shot(self, links, domain="firm.com"):
+        return pages.Snapshot(domain, "https://firm.com/careers/", links)
+
+    def _row(self, domain="firm.com"):
+        return self.connection.execute(
+            "SELECT * FROM page_watch WHERE domain = ?", (domain,)
+        ).fetchone()
+
+    def test_a_failure_counts_against_a_page_that_has_a_baseline(self):
+        pages.record(self.connection, [self._shot(["/a"])])
+        pages.record_failures(
+            self.connection, [pages.Poll("firm.com", error="HTTP 404")]
+        )
+        row = self._row()
+        self.assertEqual(row["failures"], 1)
+        self.assertEqual(row["error"], "HTTP 404")
+
+    def test_a_failure_does_not_disturb_the_baseline_it_cannot_refresh(self):
+        """`last_seen` is the last *successful* read and the whole layer
+        compares one of those against the next. The attempt goes to
+        `polled_at`, and the gap between them is the outage."""
+        pages.record(self.connection, [self._shot(["/a", "/jobs/quant"])])
+        before = self._row()
+        pages.record_failures(
+            self.connection, [pages.Poll("firm.com", error="HTTP 404")]
+        )
+        after = self._row()
+        self.assertEqual(after["fingerprint"], before["fingerprint"])
+        self.assertEqual(after["links"], before["links"])
+        self.assertEqual(after["last_seen"], before["last_seen"])
+        self.assertIsNotNone(after["polled_at"])
+
+    def test_a_success_clears_the_run_of_failures(self):
+        pages.record(self.connection, [self._shot(["/a"])])
+        for _ in range(3):
+            pages.record_failures(
+                self.connection, [pages.Poll("firm.com", error="HTTP 500")]
+            )
+        self.assertEqual(self._row()["failures"], 3)
+        pages.record(self.connection, [self._shot(["/a"])])
+        self.assertEqual(self._row()["failures"], 0)
+        self.assertIsNone(self._row()["error"])
+
+    def test_a_page_that_never_read_gets_no_placeholder_row(self):
+        """Writing one would put a fingerprint in the table that no page ever
+        produced, and `record`'s change test compares against whatever is
+        stored -- so the first real read would come back as *changed*. That is
+        the false hiring signal an empty link set is refused to avoid,
+        arriving by the other door. The absence of a row is the record, and
+        `coverage` counts exactly those."""
+        pages.record_failures(
+            self.connection, [pages.Poll("never.com", error="DNS does not resolve")]
+        )
+        self.assertIsNone(self._row("never.com"))
+
+    def test_the_first_read_after_a_failure_is_not_reported_as_a_change(self):
+        pages.record(self.connection, [self._shot(["/a"])])
+        pages.record_failures(
+            self.connection, [pages.Poll("firm.com", error="HTTP 503")]
+        )
+        changed = pages.record(self.connection, [self._shot(["/a"])])
+        self.assertEqual(changed, 0)
+        self.assertIsNone(self._row()["changed_at"])
+
+
+class CoverageTest(unittest.TestCase):
+    """It printed 3,873 of 3,593 -- 108%, an impossible number. The excess is
+    pages since promoted to tier A, which is this layer succeeding; the row
+    stays behind after `targets` stops selecting it, so the count drifted
+    above the thing it was a share of."""
+
+    def setUp(self):
+        self.connection = db.connect(":memory:")
+        self.connection.executescript(pages.SCHEMA)
+        self.connection.executescript(
+            "CREATE TABLE IF NOT EXISTS ats_resolution ("
+            " domain TEXT PRIMARY KEY, careers_url TEXT, ats TEXT, token TEXT,"
+            " tier TEXT NOT NULL, evidence TEXT, checked_at TEXT)"
+        )
+
+    def tearDown(self):
+        self.connection.close()
+
+    def _tier(self, domain, tier):
+        self.connection.execute(
+            "INSERT INTO ats_resolution (domain, careers_url, tier, checked_at)"
+            " VALUES (?, ?, ?, '2026-01-01')",
+            (domain, f"https://{domain}/careers", tier),
+        )
+
+    def test_a_promoted_page_does_not_inflate_the_share(self):
+        self._tier("stillb.com", "B")
+        self._tier("promoted.com", "A")
+        for domain in ("stillb.com", "promoted.com"):
+            pages.record(
+                self.connection,
+                [pages.Snapshot(domain, f"https://{domain}/careers", ["/a"])],
+            )
+        row = pages.coverage(self.connection)
+        self.assertEqual(row["tier_b"], 1)
+        self.assertEqual(row["watched"], 1, "the tier-A row must not be counted")
+        self.assertLessEqual(row["watched"], row["tier_b"])
+
+    def test_a_page_never_read_is_named_rather_than_missing(self):
+        self._tier("read.com", "B")
+        self._tier("never.com", "B")
+        pages.record(
+            self.connection,
+            [pages.Snapshot("read.com", "https://read.com/careers", ["/a"])],
+        )
+        row = pages.coverage(self.connection)
+        self.assertEqual(row["tier_b"], 2)
+        self.assertEqual(row["watched"], 1)
+        self.assertEqual(row["unwatched"], 1)
+
+    def test_a_watched_page_that_can_no_longer_be_read_counts_as_dark(self):
+        self._tier("dark.com", "B")
+        pages.record(
+            self.connection,
+            [pages.Snapshot("dark.com", "https://dark.com/careers", ["/a"])],
+        )
+        self.assertEqual(pages.coverage(self.connection)["dark"], 0)
+        pages.record_failures(
+            self.connection, [pages.Poll("dark.com", error="HTTP 404")]
+        )
+        row = pages.coverage(self.connection)
+        self.assertEqual(row["watched"], 1, "still on the watch")
+        self.assertEqual(row["dark"], 1, "and watched in name only")
 
 
 if __name__ == "__main__":
