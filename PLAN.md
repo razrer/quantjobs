@@ -20,7 +20,7 @@ session.
 
 ## Where it stands
 
-**Stage 46 is the last one written down and every stage is closed**, so the next
+**Stage 47 is the last one written down and every stage is closed**, so the next
 unit of work is a decision rather than a queue: what to widen, what to measure,
 or what to leave alone. Stage 46 also changed how work ships: **one fix, one
 commit, one publish**, at the reader's instruction -- see *Publishing it* in
@@ -1829,12 +1829,11 @@ test verified by planting the failure. The Hong Kong link was verified end to
 end -- the board's own control captured mid-click, then the same POST replayed
 against the live portal, which answered with one row and it was ours.
 
-## Stage 46 -- every failing source, asked once; and the reports that could not see them
+## Stage 46 -- every failing board, asked once; and the reports that could not see them
 
-**The exit criterion:** every tier-A board's and tier-B page's last answer is
-recorded rather than printed and dropped, nothing that fails is holding live
-postings, and every alert and every count that a report prints is one a human
-can act on and none of them is impossible.
+**The exit criterion:** every tier-A board's last answer is recorded rather
+than printed and dropped, nothing that fails is holding live postings, and
+every alert that fires is one a human can act on.
 
 Prompted by a reader's report of *"a lot of APIs and endpoints that generate
 404s"* and *"no jobs from Handelsbanken"*. Both were true and neither was the
@@ -1932,9 +1931,17 @@ a shortlist that *fell*, and three cards arriving is the boards coming back.
 Every fix was committed and published on its own, which is the workflow this
 stage also wrote into `CLAUDE.md` at the reader's instruction.
 
-### And then the same question, one layer down
+## Stage 47 -- the same question, one layer down
 
-Layer 3B had the identical silence on a population three times the size.
+**The exit criterion:** every tier-B page's last answer is recorded rather than
+dropped, and every count a report prints is one a human can act on -- none of
+them impossible.
+
+Stage 46 asked its question of Layer 3 and stopped there. Layer 3B had the
+identical silence on a population three times the size, which is the shape
+this whole stage pair is about: a lesson learned once, fixed at the site that
+taught it, and left standing everywhere else.
+
 `pages.snapshot` returned `None` for three unrelated reasons -- the fetch
 raised, a hostile host raised something else, or the page came back with no
 same-site links -- and `run` counted every one as a page polled. Measured over
@@ -1976,7 +1983,28 @@ schema change, which is the assertion for a fix that must not touch posting
 data. `pages.run` and `pages.snapshot` had **no tests at all**, which is why
 changing their signatures broke nothing; they have eight now.
 
-Left deliberately: the 52 stored asset URLs correct themselves on the next
-`ats --reprobe`, which re-walks tier B by construction -- a full-population
-sweep whose ordering does not favour them, so it is worth running
-deliberately rather than as a side effect.
+### Closing the three things this stage left open
+
+**The 36 dead boards needed no retirement mechanism at all -- 33 of them were
+already queued.** `ats.reprobe_targets` has a third clause for *tier A with a
+token that has never produced a posting*, so the re-walk was always going to
+reach them; what had not happened was the run. The 3 it excludes are exactly
+right: Norron's row is gone, and Topdanmark (94 postings) and Western Asset (3)
+are protected by the same clause because they *have* produced postings. So the
+answer was to stop designing a retirement rule and run the sweep. **A second
+measurement hours later recovered 0 of 36**, which is the evidence the first
+one could not give.
+
+**`board_polls` needed the withdrawal `sites.register` had just gained.**
+Norron's reader was deleted, its `ats_resolution` row withdrawn -- and its
+`board_polls` row stayed, so `failing_boards` reported a board nothing polls.
+A capability removed needs *every* registration removed with it.
+
+**And the 52 asset URLs would not have corrected themselves**, which is the
+find worth keeping. `ats._improves` admits *a real careers page replacing a
+platform one*, and its stated reason is that leaving one keeps Layer 3B
+watching **a page that can never carry a posting** -- but it tested
+`is_platform_domain`, and `Careers.css` is on the firm's own domain. A re-walk
+would have found the real page, seen tier B replacing tier B, and refused to
+write it. **When a guard's docstring states a principle and its code tests one
+case of it, the gap is every other case.**
