@@ -2008,3 +2008,30 @@ watching **a page that can never carry a posting** -- but it tested
 would have found the real page, seen tier B replacing tier B, and refused to
 write it. **When a guard's docstring states a principle and its code tests one
 case of it, the gap is every other case.**
+
+**What running the sweep was actually worth.** 3,742 domains re-walked, **138
+promoted to tier A** and 10 careers pages moved off an unwatchable URL. Boards
+polled **1,185 -> 1,216**, boards yielding postings **1,014 -> 1,041**, live
+postings **564,668 -> 570,852**, board **4,478 -> 4,691 cards** from
+**1,101 -> 1,130 firms**, shortlist **213 -> 216**.
+
+**6,184 new postings bought 213 cards, and that ratio is the gates working
+rather than a disappointment.** The promotions are overwhelmingly large
+corporates -- Artex Risk 1,188, Dachser 877, First Citizens 347, Reliance 321,
+Hydro 273 -- and 97% of what they carry is gated on evidence. What the sweep was
+*for* is the handful underneath: **Acadian on the correct domain**
+(`acadian-asset.com`, against the `acadian.com` ambulance company this file
+records as the expensive one), plus Citibank Singapore, TD, JLL, Ally, Kotak and
+Tata Capital.
+
+**Two things came out short and are recorded rather than rounded up.** Only
+**10 of the 54** asset URLs were corrected: for the other 44 the walk now finds
+*nothing* rather than an asset, and `_improves` rightly refuses to demote, so
+they keep a URL that cannot be watched -- Man Group among them, which is the
+`discover.py` population by name. And the 404s that are **somebody else's
+board** persist by construction: `8vc.com` re-resolves to `greenhouse/habi`
+every time, because 8vc's careers page genuinely links to a portfolio company.
+Both are visible now instead of silent, which was the point.
+
+**Exit (met):** 1,103 tests pass, `alerts` reports every source healthy, and
+**35 boards fail with not one of them holding a live posting.**
