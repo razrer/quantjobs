@@ -266,5 +266,100 @@ class CollapseAcrossSourcesTest(unittest.TestCase):
         self.assertEqual(out[0]["dup"], 5)
 
 
+def _near_rank(card):
+    """What `build_data` passes: the board's own ranking, then the firm's own
+    board over a portal, then the newest."""
+    return (
+        {"apply_now": 5, "strong": 4, "plausible": 3}.get(card.get("fit"), 0),
+        0 if card["ats"] in dedup.PORTALS else 1,
+        card["posted"],
+    )
+
+
+def _near(body, *, fit=None, ats="workday", posted="2026-09-01", dup=None,
+          firm="janestreet.com", place="hong kong", title="software engineer"):
+    card = {"ats": ats, "posted": posted,
+            "nd": {"g": (firm, place, title), "b": dedup.fold(body)}}
+    if fit:
+        card["fit"] = fit
+    if dup:
+        card["dup"] = dup
+    return card
+
+
+class CollapseNearDuplicatesTest(unittest.TestCase):
+    """The duplicates a hash cannot see.
+
+    Measured on the live board: 67 cards are a second copy under the same firm,
+    the same office and the same title that `fingerprint` did not fold, and the
+    diffs are a digit, a space or a sign-off.
+    """
+
+    def test_one_changed_digit_is_still_one_advertisement(self):
+        """China Merchants Bank's `Treasury Dealer`: 1,790 characters each way,
+        differing in `2` against `3`."""
+        out = dedup.collapse_near_duplicates(
+            [_near(BODY + " five years experience 2"),
+             _near(BODY + " five years experience 3")], rank=_near_rank)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["dup"], 2)
+
+    def test_one_extra_space_is_still_one_advertisement(self):
+        """Invesco's `Senior Engineer Invest Tech` differed by exactly this."""
+        out = dedup.collapse_near_duplicates(
+            [_near(BODY), _near(BODY + " ")], rank=_near_rank)
+        self.assertEqual(len(out), 1)
+
+    def test_two_different_postings_under_one_title_stay_two_cards(self):
+        """The population the threshold exists to protect. Jane Street writes
+        one title per office three times -- an experienced hire, a graduate
+        version and an evergreen -- and they must stay three cards."""
+        other = (
+            "Our goal is to give you a real sense of what it is like to work "
+            "here from day one. You will sit with a team of new graduates and "
+            "rotate through several desks before choosing one. "
+        ) * 4
+        out = dedup.collapse_near_duplicates(
+            [_near(BODY), _near(other)], rank=_near_rank)
+        self.assertEqual(len(out), 2)
+
+    def test_the_same_text_in_another_office_is_another_job(self):
+        """The location is in the group for the reason it is in the key: one
+        description posted in every office is not one opening."""
+        out = dedup.collapse_near_duplicates(
+            [_near(BODY, place="hong kong"), _near(BODY, place="london")],
+            rank=_near_rank)
+        self.assertEqual(len(out), 2)
+
+    def test_a_short_body_is_never_folded_by_this_pass(self):
+        """Two usable bodies are required. Where one copy has a description and
+        the other does not there is nothing to compare, and folding would mean
+        trusting the title inside a group the title was too blunt for."""
+        out = dedup.collapse_near_duplicates(
+            [_near(BODY), _near("apply within")], rank=_near_rank)
+        self.assertEqual(len(out), 2)
+
+    def test_the_survivor_is_the_card_the_board_rates_highest(self):
+        out = dedup.collapse_near_duplicates(
+            [_near(BODY + " 2", fit="plausible"),
+             _near(BODY + " 3", fit="apply_now")], rank=_near_rank)
+        self.assertEqual(out[0]["fit"], "apply_now")
+
+    def test_counts_from_the_earlier_passes_survive(self):
+        out = dedup.collapse_near_duplicates(
+            [_near(BODY + " 2", fit="apply_now", dup=3),
+             _near(BODY + " 3", dup=2)], rank=_near_rank)
+        self.assertEqual(out[0]["dup"], 5)
+
+    def test_the_working_key_never_reaches_the_page(self):
+        out = dedup.collapse_near_duplicates(
+            [_near(BODY + " 2"), _near(BODY + " 3")], rank=_near_rank)
+        self.assertNotIn("nd", out[0])
+
+    def test_a_card_with_no_key_is_carried_through_untouched(self):
+        out = dedup.collapse_near_duplicates([{"ats": "workday"}], rank=_near_rank)
+        self.assertEqual(len(out), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

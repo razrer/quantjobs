@@ -75,10 +75,43 @@ genuine seats -- Jane Street really does advertise two `Software Engineer`
 openings in one office. The justification for this pass is that a portal
 republishes somebody else's advertisement, so it applies only where one side
 is a portal and the other is not.
+
+## The third kind, which is the first kind with one character moved
+
+`fingerprint` folds a repost whose text is byte-identical, and that turns out
+to be a narrower claim than it reads as. Measured over every same-firm,
+same-office, same-title group on the board, **67 cards are a second copy that
+the hash did not fold** -- and reading the diffs, most of them differ in almost
+nothing at all. China Merchants Bank advertises `Treasury Dealer` twice with
+1,790 characters each way and one digit between them, `2` against `3`. IDC's
+`Business Analyst Cat 1` differs in `7` against `4`. Invesco's `Senior Engineer
+Invest Tech` differs by **one space**. Northern Trust's `Associate Portfolio
+Advisor` differs by `#` against `to`.
+
+**A hash cannot express "nearly", and that is the whole of the defect.** The
+key is right about what it compares and wrong about how: two copies of one
+advertisement are the same posting whether or not a requisition number moved.
+So `collapse_near_duplicates` keeps `fingerprint`'s own group -- firm, office,
+folded title, for exactly the reason the location is in the key above -- and
+replaces the byte comparison inside it with a similarity, at the `NEAR`
+threshold that constant explains.
+
+**On the board this folds 18 cards, and the number to read is the one that did
+not move**: the shortlist stayed at 215 across the change, and the whole board
+went 4,709 to 4,691. Scoring costs about 12 seconds on a four-minute build,
+almost all of it in the handful of pairs that survive the two cheap upper
+bounds `near` applies first.
+
+**It is a separate pass rather than a wider key, and it has to be.** The
+comparison is pairwise, so it is a clustering step and not something a key can
+hold; and `fingerprint` is what `build_data.hand_rejections` matches a
+rejection against, which must stay a pure function of one posting or a
+rejection stops sticking to its own repost.
 """
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 
 from .tagging import fold
@@ -87,6 +120,54 @@ from .tagging import fold
 # postings sharing it are not thereby the same posting. Set from the corpus:
 # the short bodies on this board are apply-here stubs.
 MIN_BODY = 400
+
+# **How alike two descriptions have to be before they are one advertisement.**
+# `fingerprint` hashes the body, and a hash is all-or-nothing: one character
+# moves and the cluster splits. Measured over every same-firm, same-place,
+# same-title pair on the board, that is exactly what was happening -- China
+# Merchants Bank's `Treasury Dealer` twice, 1,790 characters each way, differing
+# in the single digit `2` against `3`; IDC's `Business Analyst Cat 1` differing
+# in `7` against `4`; Invesco's `Senior Engineer Invest Tech` differing by **one
+# space**; RBC BlueBay's consultant by the five characters `s wmu`; Northern
+# Trust's `Associate Portfolio Advisor` by `#` against `to`.
+#
+# **The threshold sits in an empty band, which is what makes it a reading
+# rather than a knob.** Scored over every candidate pair on the board, the
+# highest pair this does *not* fold is **0.8970** and the lowest it does is
+# **0.9377**; there is nothing in between. Below that gap the pairs are
+# genuinely different postings sharing a title -- Squarepoint's two `Software
+# Developer` openings, one on the data infrastructure team and one on risk
+# technology, score **0.27**, and Jane Street's three `Quantitative Researcher`
+# postings per office score 0.86 and below against each other, because one of
+# them is the graduate version whose body says *"give you a real sense of what
+# it's like to work at Jane Street"*. Those must stay separate cards.
+#
+# **The pairs either side of the line were read by hand.** Just above it,
+# Stifel's `Sr Developer Full Stack` at 0.9377 differs by a pay range and
+# William Blair's `Business Analyst II` at 0.9929 by whitespace, the word
+# *senior*, one bullet about AI tools and an `#li hybrid` marker -- one
+# advertisement lightly edited, both. Just below it, Persol's `Senior System
+# Analyst` at 0.8970 differs only by a trailing recruiter contact line and
+# **stays two cards**. That is the direction to be wrong in: a duplicate costs
+# a second of reading and a fold hides an opening.
+#
+# **The one fold with a known cost is Bridge33's `Senior Analyst, Asset
+# Management`**, whose two copies differ by four characters and the word
+# `seattle` against `chicago` -- two openings in two cities. Neither posting
+# publishes a location field at all, so both read `hub: unknown` and the board
+# could not have shown the difference either way; the badge says `x2`. It is
+# recorded rather than guarded against, because the guard would be a location
+# test that `fingerprint` itself does not apply and it would cost two correct
+# folds to buy this one.
+#
+# **Measured with `autojunk` off, and the first reading of this was wrong
+# because it was not.** `SequenceMatcher`'s default treats any character in
+# more than 1% of a long string as noise, which on two nearly identical
+# documents suppresses the score and scrambles the opcodes: William Blair read
+# 0.9147 and "different skills required" under the default and 0.9929 and "one
+# edited bullet" without it. **Whenever a similarity is used as evidence, check
+# what the library discarded before reading the diff.**
+NEAR = 0.93
 
 
 # The sources that publish other people's advertisements rather than their
@@ -227,6 +308,107 @@ def collapse_across_sources(cards: list[dict], key: str = "xs", rank=None) -> li
                 if not same_company(a["names"], b["names"]):
                     continue
                 parent[find(i)] = find(j)
+
+        clusters: dict[int, list[int]] = {}
+        for i in range(len(group)):
+            clusters.setdefault(find(i), []).append(i)
+
+        for members in clusters.values():
+            if len(members) < 2:
+                continue
+            cluster = [group[i] for i in members]
+            winner = max(cluster, key=rank) if rank else cluster[0]
+            winner["dup"] = sum(c.get("dup", 1) for c in cluster)
+            if "due" not in winner:
+                for other in cluster:
+                    if "due" in other:
+                        winner["due"] = other["due"]
+                        break
+            for other in cluster:
+                if other is not winner:
+                    dropped.add(id(other))
+
+    out = [c for c in cards if id(c) not in dropped]
+    for card in cards:
+        card.pop(key, None)
+    for card in out:
+        if card.get("dup", 1) <= 1:
+            card.pop("dup", None)
+    return out
+
+
+def near(left: str, right: str) -> float:
+    """How alike two folded descriptions are, 0 to 1.
+
+    `SequenceMatcher` offers two upper bounds that cost a fraction of the real
+    comparison, so a pair that cannot possibly clear `NEAR` is rejected on a
+    length test rather than on a diff. `autojunk` is off: it treats a character
+    appearing in more than 1% of a long string as noise, which on two nearly
+    identical documents lowers the score of exactly the pairs this is here to
+    find.
+    """
+    matcher = difflib.SequenceMatcher(None, left, right, autojunk=False)
+    if matcher.real_quick_ratio() < NEAR:
+        return 0.0
+    if matcher.quick_ratio() < NEAR:
+        return 0.0
+    return matcher.ratio()
+
+
+def collapse_near_duplicates(cards: list[dict], key: str = "nd",
+                             rank=None) -> list[dict]:
+    """Fold one advertisement republished with a handful of characters changed.
+
+    `card[key]` is `{"g": (firm, location, folded title), "b": folded body}`;
+    a card without it, or whose body is under `MIN_BODY`, is never folded.
+
+    **The third pass, and the one the other two cannot reach.** `collapse`
+    folds an exact repost and `collapse_across_sources` folds a portal's copy
+    of somebody else's advertisement. This one folds the case where the board
+    is republishing *itself* and the text drifted: the same firm, the same
+    office and the same title, with a requisition number, a pay range or a
+    recruiter's sign-off changed. `fingerprint` hashes the body, so it sees a
+    stranger; there is no key that does not, because the difference is a
+    character rather than a field.
+
+    **The group is `fingerprint`'s own components and that is the safety
+    argument.** Location is in it for the reason the module docstring gives --
+    Jane Street writes one description per role and posts it in every office,
+    so comparing bodies without the office would merge Hong Kong into London
+    and delete the London opening. Within one office the comparison is between
+    postings that already agree on everything a key can hold.
+
+    **Two usable bodies are required, and the mixed case is left alone.** Where
+    one copy carries a description and the other does not there is nothing to
+    compare, and the two are already on opposite sides of `fingerprint` -- one
+    keyed on its text and one on its title. Folding them would mean trusting
+    the title alone inside a group the title alone was too blunt for. Three
+    pairs on the board are in that state; they stay two cards each.
+    """
+    groups: dict[tuple, list[dict]] = {}
+    for card in cards:
+        meta = card.get(key)
+        if meta and len(meta["b"]) >= MIN_BODY:
+            groups.setdefault(meta["g"], []).append(card)
+
+    dropped: set[int] = set()
+    for group in groups.values():
+        if len(group) < 2:
+            continue
+        parent = list(range(len(group)))
+
+        def find(i: int) -> int:
+            while parent[i] != i:
+                parent[i] = parent[parent[i]]
+                i = parent[i]
+            return i
+
+        for i in range(len(group)):
+            for j in range(i + 1, len(group)):
+                if find(i) == find(j):
+                    continue
+                if near(group[i][key]["b"], group[j][key]["b"]) >= NEAR:
+                    parent[find(i)] = find(j)
 
         clusters: dict[int, list[int]] = {}
         for i in range(len(group)):

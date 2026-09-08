@@ -972,6 +972,17 @@ def main() -> None:
             "names": (row["employer"], firms[key]["name"], *names.get(domain, ())),
             "portal": row["ats"] in dedup.PORTALS,
         }
+        # **And what the near-duplicate fold needs**, which is `fingerprint`'s
+        # own group with the body kept rather than hashed -- see `dedup`'s
+        # docstring for why one character is enough to split a hash and should
+        # not be enough to split a card. Folded here rather than in `dedup` so
+        # it happens once, for the postings that survived the gates, instead of
+        # for every row read.
+        job["nd"] = {
+            "g": (key, (row["location"] or "").strip().lower(),
+                  job["xs"]["t"]),
+            "b": tagging.fold(row["description"] or ""),
+        }
         jobs.append(job)
 
     # A stable base order. The board re-sorts on every render -- deadline
@@ -1002,6 +1013,21 @@ def main() -> None:
         ))
     folded_across = across - len(jobs)
 
+    # **One card per advertisement again, for the copies whose text drifted.**
+    # Run last, after the two folds above have each removed a card this would
+    # otherwise have to compare: an exact repost costs nothing to diff and a
+    # portal's copy is a different employer name, so neither belongs in a
+    # pairwise pass over descriptions. Same `rank`, so the survivor is chosen
+    # the same way.
+    near = len(jobs)
+    jobs = dedup.collapse_near_duplicates(
+        jobs, rank=lambda card: (
+            _FIT_RANK.get(card.get("fit"), 0),
+            0 if card["ats"] in dedup.PORTALS else 1,
+            card["posted"],
+        ))
+    folded_near = near - len(jobs)
+
     # **The diagnostics print before anything is written and before anything
     # can fail**, because they are what says *which* gate ate the board -- and
     # the one build that has to be readable is the one that refuses.
@@ -1015,6 +1041,9 @@ def main() -> None:
     if folded_across:
         print(f"{folded_across:>7,d} folded across sources"
               f"  (a national board's copy of a job the firm advertises itself)")
+    if folded_near:
+        print(f"{folded_near:>7,d} folded as near-identical"
+              f"  (same firm, same place, same text but for a few characters)")
     # Said out loud on every run. A gate that removes postings silently is how
     # a widened lexicon quietly eats a hub, and this is the only number that
     # would show it.
