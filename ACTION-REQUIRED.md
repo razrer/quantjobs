@@ -1,11 +1,53 @@
 # Things only you can do
 
-Nothing is open. Every judgement call previously parked here has been settled,
-and the settled list below is kept so none of it gets re-asked. The pipeline
-runs and the board is live at https://quantjobs.spawned.app.
+One item is open. Every other judgement call previously parked here has been
+settled, and the settled list below is kept so none of it gets re-asked. The
+pipeline runs and the board is live at https://quantjobs.spawned.app.
 
 Add an item here when something genuinely needs your input; delete it when it
 is resolved, and move the reasoning worth keeping into `CLAUDE.md`.
+
+---
+
+## Open
+
+### 1. `bodies` resolves a Workday location and the next poll throws it away
+
+**Found while reading why the board grew after a re-tag, and it is a standing
+loss rather than a one-off.** Workday summarises a multi-site requisition as
+`N Locations`; `bodies.py` fetches the detail page and writes the real place
+list, guarded so it only ever overwrites that placeholder. Then the next
+`jobs` poll runs `db.upsert_jobs`, whose SQL is `location = excluded.location`
+with no condition, and writes `N Locations` straight back over it.
+
+The two writers disagree about who owns the column and the poller runs last,
+so this happens every week: `bodies` spends throttled detail fetches resolving
+places, `jobs` un-resolves them, and `bodies.targets` — which queues exactly
+the postings holding the placeholder — pays for them again next time.
+
+**Measured now: 10,690 live postings hold the placeholder, and 3,580 of them
+carried a real hub at tagger 62 and read `unknown` today.** It costs the board
+in both directions:
+
+- **1,333 of them used to read `hub: other`**, which the geography gate
+  removes. As `unknown` they survive the gate, so they are on the page now.
+  This is most of why the board grew from 4,623 to 4,709 cards across the
+  re-tag, and none of that growth is anything the tagger decided.
+- **1,054 used to read a focus hub** — New York 438, Chicago 390, Boston 168,
+  Singapore 18, Hong Kong 13, Switzerland 13, Amsterdam 10, Stockholm 4 — plus
+  1,684 `us_other`. Those cards say `unstated` where the answer was known and
+  paid for.
+
+**The fix is one clause and the question is whether you want it.** `upsert_jobs`
+would keep the stored location when the incoming one is the placeholder and the
+stored one is not — the same asymmetry `bodies._write` already applies with
+`_UNRESOLVED`, which is deliberately narrow: `N Locations` only, never `Remote`,
+because Workday answers a remote requisition with its anchor office and pinning
+one to a city nobody travels to is worse than saying nothing.
+
+Recovering the 3,580 needs no separate operation: with the clause in place the
+next `bodies` pass makes the resolution stick, and `daily --full` runs one every
+Wednesday. Say the word and it ships as its own commit and publish.
 
 ---
 
