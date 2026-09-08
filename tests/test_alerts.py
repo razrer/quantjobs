@@ -422,6 +422,46 @@ class BoardPollsTest(unittest.TestCase):
         self.assertEqual(found[0].kind, "board")
         self.assertIn("879", found[0].detail)
 
+    def test_a_board_nothing_polls_any_more_is_forgotten(self):
+        """The `sites.py` lesson one table over, and it appeared the same
+        week: Norron's reader was removed on purpose and its `ats_resolution`
+        row withdrawn, but its `board_polls` row stayed -- so `failing_boards`
+        went on reporting a board that no longer exists."""
+        connection = _memory(self)
+        connection.executescript(
+            "CREATE TABLE IF NOT EXISTS ats_resolution ("
+            " domain TEXT PRIMARY KEY, careers_url TEXT, ats TEXT, token TEXT,"
+            " tier TEXT NOT NULL, evidence TEXT, checked_at TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO ats_resolution (domain, ats, token, tier, checked_at)"
+            " VALUES ('live.com', 'workday', 'live|wd1|X', 'A', '2026-01-01')"
+        )
+        self._poll(connection, False, error="x", ats="workday", token="live|wd1|X")
+        self._poll(connection, False, error="x", ats="site", token="norron")
+
+        self.assertEqual(db.prune_board_polls(connection), 1)
+        self.assertEqual(
+            [r["token"] for r in db.failing_boards(connection)], ["live|wd1|X"]
+        )
+
+    def test_pruning_reads_resolvability_and_not_what_a_run_reached(self):
+        """`jobs --limit` deliberately polls a subset, so pruning on "not
+        polled this run" would throw away the history of every board below the
+        limit."""
+        connection = _memory(self)
+        connection.executescript(
+            "CREATE TABLE IF NOT EXISTS ats_resolution ("
+            " domain TEXT PRIMARY KEY, careers_url TEXT, ats TEXT, token TEXT,"
+            " tier TEXT NOT NULL, evidence TEXT, checked_at TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO ats_resolution (domain, ats, token, tier, checked_at)"
+            " VALUES ('unreached.com', 'greenhouse', 'unreached', 'A', '2026-01-01')"
+        )
+        self._poll(connection, True, postings=12, ats="greenhouse", token="unreached")
+        self.assertEqual(db.prune_board_polls(connection), 0)
+
     def test_failing_boards_are_ordered_by_what_they_cost(self):
         """Not by how long they have been broken: a board that has failed
         twice holding 879 postings matters more than one that has failed

@@ -818,6 +818,17 @@ nothing public — Da Vinci Derivatives is the standing example.
   service interruption*. A vendor outage is indistinguishable from a dead
   board from here, and auto-retiring during one would delete every posting
   on every board that vendor serves. `board_polls` reports and never acts.
+- **And `board_polls` needed the same withdrawal `sites.register` does, the
+  same week.** Norron's reader was removed on purpose and its
+  `ats_resolution` row withdrawn -- and its `board_polls` row stayed, so
+  `failing_boards` went on reporting a board nothing polls and `alerts`
+  would have carried it forever. **A capability removed needs *every*
+  registration removed with it, and this table is a second one.**
+  `db.prune_board_polls` deletes a row whose `(ats, token)` is no longer a
+  tier-A target -- pruned on *not resolvable* and never on *not polled this
+  run*, because `jobs --limit` deliberately polls a subset and deleting
+  whatever a run did not reach would throw away the history of every board
+  below the limit.
 - **Layer 3B had the same silence and three wrong numbers on top of it.**
   `pages.snapshot` returned `None` for three unrelated reasons -- the fetch
   raised, a hostile host raised something else, or the page came back with

@@ -363,6 +363,36 @@ def record_board_polls(
     return len(rows)
 
 
+def prune_board_polls(connection: sqlite3.Connection) -> int:
+    """Forget boards nothing polls any more. Returns rows removed.
+
+    **The `sites.py` lesson one table over, and it appeared the same week.**
+    Norron's reader was removed on purpose and `sites.register` now withdraws
+    its `ats_resolution` row -- but its `board_polls` row stayed, so
+    `failing_boards` went on reporting a board that no longer exists and
+    `alerts` would have carried it forever. A capability removed needs every
+    registration removed with it, and this table is a second registration.
+
+    Pruned on *not resolvable* rather than on *not polled this run*, which is
+    the distinction that makes it safe: `jobs --limit` deliberately polls a
+    subset, so deleting whatever a run did not reach would throw away the
+    history of every board below the limit.
+    """
+    with connection:
+        cursor = connection.execute(
+            """
+            DELETE FROM board_polls
+            WHERE NOT EXISTS (
+                SELECT 1 FROM ats_resolution a
+                WHERE a.ats = board_polls.ats
+                  AND a.token = board_polls.token
+                  AND a.tier = 'A'
+            )
+            """
+        )
+    return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+
+
 def failing_boards(
     connection: sqlite3.Connection, minimum: int = 1
 ) -> list[sqlite3.Row]:

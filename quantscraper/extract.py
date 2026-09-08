@@ -2109,4 +2109,8 @@ def run(
             if jobs:
                 total += db.upsert_jobs(connection, row["domain"], jobs)
     db.record_board_polls(connection, outcomes)
+    # A board that has stopped being a pollable target keeps no history here --
+    # otherwise `failing_boards` reports a board nothing polls, forever. See
+    # `db.prune_board_polls`; Norron was doing exactly that within a week.
+    db.prune_board_polls(connection)
     return len(rows), total, failures
