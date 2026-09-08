@@ -42,7 +42,7 @@ from . import db, lexicon
 # classifier improved" from "the market moved". **Forgetting is now loud** --
 # see `fingerprint`, which records what wrote each version's tags so that
 # `alerts` can say when the two have parted company.
-TAGGER = 62
+TAGGER = 63
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS job_tags (
@@ -1865,6 +1865,80 @@ _OFF_INDUSTRY = _terms(
     "plant manager", "field technician", "police officer",
     # campus jobs and the university's own administration
     "federal work study", "admissions representative", "adjunct faculty",
+    # ----------------------------------------------------------------------
+    # **Read off the reader's own reclassify clicks, which is a frame none of
+    # the batches above used.** 364 hand rejections were pulled off the live
+    # board and cross-referenced against what the tagger had said: 198 were
+    # already gated, and **161 had reached the board** -- 73 of them from
+    # Jobbsafari and 19 from job-room.ch, which is what "junk jobs, especially
+    # in Sweden" is when you count it. Every one of those 92 came back
+    # `undecided` from `lexicon.judge`: not a wrong answer, no answer at all,
+    # because no needle in either module reaches `Hemstäd`, `Trädgårdarbete`,
+    # `Hundrastare`, `Däckansvarig`, `Teaterproducent` or `Skyddsvakt`.
+    #
+    # **This is the vocabulary half of a repair the reader has been doing by
+    # hand.** `hand_rejected` removes a card the moment it is clicked and does
+    # nothing for the one that arrives next week -- *a list of rejected ids is
+    # not a classifier*, which this file says elsewhere about the model sheets
+    # and is just as true of the reader's own clicks. These are the words those
+    # clicks were pointing at.
+    #
+    # Dry-run over all 570,852 live postings: 5,724 hits, **not one of them
+    # rated positively**, and 32 of them reach the board today on nothing but
+    # the reader having clicked. The split is **job-room.ch 18 to Jobbsafari
+    # 14** -- Switzerland is the larger half of a complaint about Sweden,
+    # because the Swiss board is gated by words where Denmark and Singapore are
+    # gated by a taxonomy.
+    #
+    # **`städ` is still refused and `hemstäd` is not**, which is the whole care
+    # in the Swedish half. The note above records that bare `städ` folds to
+    # `stad` and would gate every posting at *Stockholms stad*; `hemstad` is
+    # the compound and all 47 of its live titles are cleaning work.
+    # `flyttstad`, `kontorsstad` and `fonsterputs` are the same shape.
+    #
+    # **Four candidates were measured and dropped, three on the reason rather
+    # than the count.** `ställning` is a scaffold and a *standing* --
+    # `Utredningssekreterare Stärkt ställning för det svenska språket` is a
+    # policy secretary, and a gate whose reason is wrong is wrong even where
+    # its verdict is right. `odling` is horticulture and a bacterial *culture*:
+    # `Biomedicinsk analytiker till Odling & direktpåvisning` is a lab. `servitis`
+    # is one advertisement's misspelling of `servitris`, which is a typo rather
+    # than a vocabulary gap. And `städpoolen` is a *company name*; the posting
+    # it would catch -- `Bli en del av vårt fantastiska team på Städpoolen
+    # Scandinavia AB!` -- names no occupation at all, which is the shape
+    # `Veteraner till städuppdrag!` already records and no word list reaches.
+    #
+    # cleaning, in the compounds that do not collide with `stad`
+    "hemstad", "staderska", "stadfirma", "flyttstad", "kontorsstad",
+    "fonsterputs",
+    # grounds, garden and groundworks -- the family behind `Plog,Trädgård
+    # skötsel,Handskottning,odling, plock,hakklippning utemiljö`, a title that
+    # names five trades and matched nothing
+    "tradgardarbete", "tradgardsarbete", "tradgardsskotsel",
+    "tradgardsanlaggning", "markbyggnad", "handskottning", "snoskottning",
+    "hackklippning", "gronyteskotare", "anlaggningsarbetare", "grovarbetare",
+    # building. `-arbetare` is still refused as a *head* (it reaches
+    # `medarbetare`) and these are whole words, which is why they are safe.
+    "byggnadsarbetare", "snickeri", "fonsterrenovering", "takentreprenad",
+    # animals, vehicles and the rest of the Swedish service tail
+    "hundrastare", "hundfrisor", "dackansvarig", "dackskifte", "bilvard",
+    # hospitality and shift staffing, where the *shift* is the only thing
+    # naming the work -- the `äldreboende` shape, one industry over
+    "pizzeria", "helgpersonal", "kvallspersonal", "kokspersonal",
+    "kundsupport", "kundtjanst", "teaterproducent", "skyddsvakt",
+    "skyddsvakter",
+    # ----------------------------------------------------------------------
+    # **Switzerland, from the same 19 clicks.** The German and French batches
+    # above were read off the board twice already and these are what the third
+    # frame -- the reader's own rejections -- still found. Two are large enough
+    # to be worth the line on their own: `elektroinstallateur` is 2,801 live
+    # titles and `reifenpraktiker` 1,847, both clean, both arriving through
+    # job-room.ch where there is no taxonomy to gate them.
+    "sommelier", "sommeliere", "barmaid", "boulanger", "patissier",
+    "taxichauffeur", "serrurier", "sertisseur", "spengler",
+    "flachdacharbeiter", "reifenpraktiker", "elektroinstallateur",
+    "tierpfleger", "hauswirtschaft", "restaurantfachangestellte",
+    "hotelfachfrau", "gouvernante",
 )
 
 # Deliberately absent, each after matching something real in the corpus:
