@@ -1829,11 +1829,12 @@ test verified by planting the failure. The Hong Kong link was verified end to
 end -- the board's own control captured mid-click, then the same POST replayed
 against the live portal, which answered with one row and it was ours.
 
-## Stage 46 -- every failing board, asked once; and the reports that could not see them
+## Stage 46 -- every failing source, asked once; and the reports that could not see them
 
-**The exit criterion:** every tier-A board's last answer is recorded rather
-than printed and dropped, no failing board is holding live postings, and every
-alert that fires is one a human can act on -- with the shortlist unmoved.
+**The exit criterion:** every tier-A board's and tier-B page's last answer is
+recorded rather than printed and dropped, nothing that fails is holding live
+postings, and every alert and every count that a report prints is one a human
+can act on and none of them is impossible.
 
 Prompted by a reader's report of *"a lot of APIs and endpoints that generate
 404s"* and *"no jobs from Handelsbanken"*. Both were true and neither was the
@@ -1930,3 +1931,52 @@ a shortlist that *fell*, and three cards arriving is the boards coming back.
 
 Every fix was committed and published on its own, which is the workflow this
 stage also wrote into `CLAUDE.md` at the reader's instruction.
+
+### And then the same question, one layer down
+
+Layer 3B had the identical silence on a population three times the size.
+`pages.snapshot` returned `None` for three unrelated reasons -- the fetch
+raised, a hostile host raised something else, or the page came back with no
+same-site links -- and `run` counted every one as a page polled. Measured over
+all 3,593 tier-B pages: **120 yield nothing, 69 of which have never once been
+read.** A page that cannot be fetched can never report a change, so it had
+left the watch while every report went on counting it.
+
+**Three numbers were counting the wrong thing and one was impossible.**
+`polled` incremented before the snapshot was tested; `baselined` counted every
+target with no previous row whether or not this run read one, so a page that
+has never been fetchable was reported as a new baseline *on every single run*;
+and `coverage` printed **3,873 of 3,593 -- 108%**. The excess is 318 pages
+since promoted to tier A, 276 of them yielding real postings, which is this
+layer succeeding rather than failing.
+
+**A failed poll writes no placeholder row, and that is the load-bearing
+decision.** `record`'s test is *stored fingerprint differs from this one*, so
+a row holding a fingerprint no page ever produced makes the first real read
+come back as **changed** -- the false hiring signal `snapshot` refuses an
+empty link set to avoid, arriving by the other door. No sentinel is needed:
+no row means never read, `failures > 0` means a dead baseline.
+
+**Then the failure sample said what was actually wrong.** The URLs stored as
+careers pages included `Careers.css`, a PDF, and
+`framerusercontent.com/images/aujhJOBjha04nI6uQdgvtKiq4.png` -- which matched
+because **`JOB` appears inside a content hash**. Measured: **54 of 4,805
+stored careers URLs point at an asset, 52 of them tier B**, and shortest-first
+ordering is what lets a terse CDN asset outrank the firm's own
+`/about/careers/`. This is the general case of a failure already written down
+-- the walk settling on a Cloudinary *image* for DRW and a *PDF* for Man
+Group, named in `CLAUDE.md` as the reason `discover.py` had to exist. The
+specific cases were worked around one firm at a time and the rule that
+produced them stayed.
+
+**Exit (met):** 1,099 tests pass. Tier-B reporting reads **3,480 read, 113
+grouped by cause, 3,524 of 3,593 watched with 69 never read and 44 dark** --
+no impossible number left. `data.js` came back **4,478 both sides** of the
+schema change, which is the assertion for a fix that must not touch posting
+data. `pages.run` and `pages.snapshot` had **no tests at all**, which is why
+changing their signatures broke nothing; they have eight now.
+
+Left deliberately: the 52 stored asset URLs correct themselves on the next
+`ats --reprobe`, which re-walks tier B by construction -- a full-population
+sweep whose ordering does not favour them, so it is worth running
+deliberately rather than as a side effect.
