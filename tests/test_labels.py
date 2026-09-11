@@ -15,6 +15,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from quantscraper import db, labels, tagging
 
@@ -71,6 +72,20 @@ class ChooseTest(unittest.TestCase):
         rows = self._rows([("keep", "a", 20), ("undecided", "b", 20)])
 
         self.assertEqual(labels.choose(rows, 10), labels.choose(rows, 10))
+
+    def test_rounding_does_not_shrink_small_samples(self):
+        rows = self._rows([(bucket, f"{bucket}{n}", 2)
+                           for bucket in ("keep", "undecided", "contested")
+                           for n in range(10)])
+        for limit in range(1, 20):
+            with self.subTest(limit=limit):
+                self.assertEqual(len(labels.choose(rows, limit)), limit)
+
+    def test_board_identity_includes_the_vendor(self):
+        rows = self._rows([("keep", "same", labels.MAX_PER_BOARD)])
+        rows += [dict(row, ats="workday") for row in rows]
+        self.assertEqual(len(labels.choose(rows, 2 * labels.MAX_PER_BOARD)),
+                         2 * labels.MAX_PER_BOARD)
 
 
 class FrameTest(unittest.TestCase):
@@ -158,6 +173,16 @@ class FrameTest(unittest.TestCase):
 
         self.assertEqual(self._titles(), set())
 
+    def test_audit_reaches_rows_the_focused_sample_cannot(self):
+        self._store("1", "Housekeeper", "Unrecognized evidence", url="")
+        self._store("2", "Quantitative Researcher")
+        self._store("3", "Removed job")
+        self.connection.execute("UPDATE jobs SET removed_at='2026-01-02' WHERE job_id='3'")
+        self.assertEqual(set(labels.audit_sample(self.connection, 10)),
+                         {("greenhouse", "firm", "1"), ("greenhouse", "firm", "2")})
+        self.assertEqual(labels.audit_sample(self.connection, 1),
+                         labels.audit_sample(self.connection, 1))
+
 
 class FileTest(unittest.TestCase):
     def setUp(self):
@@ -223,6 +248,27 @@ class FileTest(unittest.TestCase):
             ("greenhouse", "firm", "2"),
             {(row.ats, row.token, row.job_id) for row in labels.load(self.path)},
         )
+
+    def test_a_missing_labelled_posting_cannot_erase_the_label(self):
+        self._write([("greenhouse", "firm", "missing", "relevant", "", "keep")])
+        before = self.path.read_bytes()
+        with self.assertRaisesRegex(ValueError, "sheet left untouched"):
+            labels.draw(self.connection, 1, self.path)
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_a_correction_during_sampling_survives_the_redraw(self):
+        self._store("1", "Quantitative Researcher")
+        self._store("2", "Receptionist")
+        self._write([("greenhouse", "firm", "1", "relevant", "", "original")])
+
+        def sample(_connection):
+            labels.upsert(self.path, ("greenhouse", "firm", "2"),
+                          "relevance", "rejected", {})
+            return []
+
+        with patch.object(labels, "_candidates", side_effect=sample):
+            labels.draw(self.connection, 1, self.path)
+        self.assertEqual({row.job_id for row in labels.load(self.path)}, {"1", "2"})
 
     def test_the_sheet_does_not_show_the_taggers_verdict(self):
         """Agreeing with a tag that is already on the page measures nothing."""

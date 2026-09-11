@@ -1,36 +1,8 @@
-"""The fixture Layer 5 was missing, and the two commands around it.
+"""Human labels, focused development sampling, and independent audit sampling.
 
-`roster.csv` did this for coverage in Stage 2 and immediately found a false hit
-nobody suspected. Tagging had no equivalent, so "the lexicon improved" and "the
-market moved" were indistinguishable, and every false positive found so far was
-found by luck -- whatever happened to be on screen.
-
-    python -m quantscraper sample --limit 100     # draw postings to label
-    python -m quantscraper labels                 # score the lexicon on them
-
-## Two things the first attempt at this got wrong
-
-**The sample was drawn from the top of the shortlist.** `list --limit 100` sorts
-by fit, so the hundred postings offered for labelling were the hundred the
-tagger was most confident about. A sample like that can only ever find false
-*positives*, and the exit criterion in `TAGGING.md` is **no false rejection** --
-the one failure this project treats as expensive. It cannot be measured from
-rows the tagger already likes. `draw` therefore stratifies across every fit
-bucket, `out_of_scope` included, and caps how many rows one board may
-contribute so a single large Workday tenant cannot fill the page.
-
-**The sample carried no keys.** It printed fit, hub, seniority, a title
-truncated to 44 characters and a URL -- and the label format asks for
-`ats,token,job_id`, none of which were in the file. The rows written from it
-could not be joined back to `jobs` at all, and titles are not a substitute:
-two postings in that very sample were both called `Graduate Trader`.
-
-## And one it got right by accident, now on purpose
-
-The drawn file shows the posting and **not the tagger's verdict**. Seeing the
-machine's answer while labelling is how a fixture ends up measuring agreement
-with itself; `ACTION-REQUIRED.md` warned about it in prose and then handed over
-a file with `fit` in the first column.
+Sheets omit predictions and scatter order to avoid leaking verdicts. Posting
+keys preserve identity; atomic locked updates preserve human work. TAGGING.md
+explains the sampling frames and limits of the reported scores.
 """
 
 from __future__ import annotations
@@ -38,6 +10,7 @@ from __future__ import annotations
 import csv
 import difflib
 import hashlib
+import heapq
 import os
 import re
 import sqlite3
@@ -308,7 +281,7 @@ def choose(rows: list[dict], limit: int) -> list[tuple[str, str, str]]:
             key=lambda r: (-r["has_body"], -r["near"], r["job_id"], r["token"]))
 
     chosen: list[tuple[str, str, str]] = []
-    seen: dict[str, int] = {}
+    seen: dict[tuple[str, str], int] = {}
     taken: set[tuple[str, str, str]] = set()
 
     def fill(bucket: str, want: int) -> int:
@@ -317,9 +290,10 @@ def choose(rows: list[dict], limit: int) -> list[tuple[str, str, str]]:
             if want <= 0 or len(chosen) >= limit:
                 break
             key = (row["ats"], row["token"], row["job_id"])
-            if key in taken or seen.get(row["token"], 0) >= MAX_PER_BOARD:
+            board = key[:2]
+            if key in taken or seen.get(board, 0) >= MAX_PER_BOARD:
                 continue
-            seen[row["token"]] = seen.get(row["token"], 0) + 1
+            seen[board] = seen.get(board, 0) + 1
             taken.add(key)
             chosen.append(key)
             want -= 1
@@ -329,7 +303,9 @@ def choose(rows: list[dict], limit: int) -> list[tuple[str, str, str]]:
     # postings in the whole corpus -- so the shortfall is handed to the others
     # rather than silently shrinking the sheet. A 96-row sample against a
     # criterion written for 100 fails it on arithmetic.
-    short = sum(fill(bucket, round(limit * share)) for bucket, share in QUOTA.items())
+    for bucket, share in QUOTA.items():
+        fill(bucket, round(limit * share))
+    short = limit - len(chosen)
     while short and len(chosen) < limit:
         before = len(chosen)
         for bucket in QUOTA:
@@ -384,7 +360,22 @@ def pathlib_unlink(name: str) -> None:
         pass
 
 
-def draw(connection: sqlite3.Connection, limit: int, path: Path) -> tuple[int, int]:
+def audit_sample(connection: sqlite3.Connection, limit: int) -> list[tuple[str, str, str]]:
+    """Stable uniform audit of retained, not explicitly removed postings.
+
+    No classifier, geography, language, URL, or vocabulary filter: any of those
+    could be the reason a suitable job was hidden. Sampling only keys avoids
+    loading descriptions or tags for the entire corpus. Human review must flag
+    unavailable evidence; retained records are not proof of current vacancies.
+    """
+    keys = (tuple(row) for row in connection.execute(
+        "SELECT ats, token, job_id FROM jobs WHERE removed_at IS NULL"
+    ))
+    return heapq.nsmallest(max(0, limit), keys, key=_scatter)
+
+
+def draw(connection: sqlite3.Connection, limit: int, path: Path,
+         *, audit: bool = False) -> tuple[int, int]:
     """Write the labelling sheet. Returns (rows written, labels preserved).
 
     **Never destructive.** Hand-labelling is the one input here a machine
@@ -393,8 +384,16 @@ def draw(connection: sqlite3.Connection, limit: int, path: Path) -> tuple[int, i
     `sample` after the lexicon changes therefore tops the sheet up rather than
     resetting an afternoon's reading.
     """
+    drawn = (audit_sample(connection, limit) if audit
+             else choose(_candidates(connection), limit))
+    # The whole read-modify-write must hold the same lock as corrections.
+    # Compute the expensive sample first so a new correction is read afterwards.
+    with _SHEET_LOCK:
+        return _draw_sheet(connection, drawn, path)
+
+
+def _draw_sheet(connection, drawn, path):
     done = {(l.ats, l.token, l.job_id): l for l in load(path)}
-    drawn = choose(_candidates(connection), limit)
 
     # **Shuffled, and this is not cosmetic.** The draw is built bucket by
     # bucket, so writing it in that order leaks the tagger's verdict through
@@ -414,6 +413,8 @@ def draw(connection: sqlite3.Connection, limit: int, path: Path) -> tuple[int, i
             " FROM jobs WHERE ats = ? AND token = ? AND job_id = ?", key,
         ).fetchone()
         if row is None:
+            if key in done:
+                raise ValueError(f"labelled posting {key!r} is missing; sheet left untouched")
             continue
         label = done.get(key)
         written += 1
@@ -428,8 +429,7 @@ def draw(connection: sqlite3.Connection, limit: int, path: Path) -> tuple[int, i
             row["department"] or "",
             row["url"] or "",
         ] + list(key))
-    with _SHEET_LOCK:
-        _write_sheet(path, rows)
+    _write_sheet(path, rows)
     return written, len(done)
 
 

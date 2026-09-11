@@ -726,10 +726,13 @@ def _list(database: str, args) -> int:
     return 0
 
 
-def _sample(database: str, limit: int, out: str) -> int:
+def _sample(database: str, limit: int, out: str, audit: bool = False) -> int:
     connection = db.connect(database)
     path = Path(out)
-    written, kept = labels.draw(connection, limit, path)
+    try:
+        written, kept = labels.draw(connection, limit, path, audit=audit)
+    finally:
+        connection.close()
     print(f"wrote {written:,d} postings to {path}")
     if kept:
         print(f"  {kept} existing label(s) preserved")
@@ -781,7 +784,8 @@ def _labels(database: str, files: list[str] | None) -> int:
     print(f"scored {len(usable)} labelled posting(s) against tagger {tagging.TAGGER}")
     if len(per_file) > 1:
         for path, rows in per_file:
-            keep = [l for l in usable if l in set(rows)]
+            members = set(rows)
+            keep = [l for l in usable if l in members]
             sub, _ = labels.score(connection, keep)
             parts = " ".join(
                 f"{d}={h}/{t} {s:.1%}" for d, (h, t, s) in sub.items()
@@ -1448,6 +1452,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     sample_command.add_argument("--limit", type=int, default=100)
     sample_command.add_argument(
+        "--audit", action="store_true",
+        help="sample without classifier filters; use a separate --out sheet",
+    )
+    sample_command.add_argument(
         "--out", default=str(labels.PATH), help="where to write the sheet"
     )
 
@@ -1536,7 +1544,7 @@ def main(argv: list[str] | None = None) -> int:
         "jobstream": lambda: _jobstream(args.db, args.since),
         "tag": lambda: _tag(args.db, args.limit, args.dimension),
         "list": lambda: _list(args.db, args),
-        "sample": lambda: _sample(args.db, args.limit, args.out),
+        "sample": lambda: _sample(args.db, args.limit, args.out, args.audit),
         "labels": lambda: _labels(args.db, args.file),
         "prune": lambda: _prune(args.db, args.apply),
         "coverage": lambda: _coverage(args.db),
