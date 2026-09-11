@@ -3,6 +3,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
+
+
+# Workday's list endpoint publishes a count instead of the detail locations.
+# Remote is a real location policy and must never match this placeholder.
+UNRESOLVED_LOCATION = re.compile(r"^\s*\d+\s+locations?\s*$", re.IGNORECASE)
+
+
+def prefer_resolved_location(stored: str | None, incoming: str | None) -> str | None:
+    """Keep detail locations when a subsequent list poll only supplies a count."""
+    if (UNRESOLVED_LOCATION.fullmatch(incoming or "") and (stored or "").strip()
+            and not UNRESOLVED_LOCATION.fullmatch(stored)):
+        return stored
+    return incoming
 
 
 @dataclass(frozen=True, slots=True)

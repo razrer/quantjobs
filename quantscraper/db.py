@@ -18,7 +18,7 @@ from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .models import Employer
+from .models import Employer, Job, prefer_resolved_location
 
 DEFAULT_PATH = Path("employers.sqlite3")
 
@@ -175,6 +175,36 @@ def _migrate(connection: sqlite3.Connection) -> None:
                 connection.execute(
                     f"ALTER TABLE {table} ADD COLUMN {column} {kind}"
                 )
+    _install_tag_invalidation(connection)
+
+
+def _install_tag_invalidation(connection: sqlite3.Connection) -> None:
+    """Invalidate derived labels only when their source evidence changes.
+
+    A refreshed timestamp is not new evidence. A changed title or description
+    is: without this, a weekly poll leaves the previous classification current
+    forever. Install lazily because acquisition can precede the tagging schema.
+    """
+    if not connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='job_tags'"
+    ).fetchone():
+        return
+    connection.execute("""
+        CREATE TRIGGER IF NOT EXISTS jobs_invalidate_tags
+        AFTER UPDATE OF title, department, description, location, employer, category, domain
+        ON jobs
+        WHEN OLD.title IS NOT NEW.title
+          OR OLD.department IS NOT NEW.department
+          OR OLD.description IS NOT NEW.description
+          OR OLD.location IS NOT NEW.location
+          OR OLD.employer IS NOT NEW.employer
+          OR OLD.category IS NOT NEW.category
+          OR OLD.domain IS NOT NEW.domain
+        BEGIN
+            DELETE FROM job_tags
+            WHERE ats=NEW.ats AND token=NEW.token AND job_id=NEW.job_id;
+        END
+    """)
 
 
 def upsert_employers(
@@ -220,7 +250,7 @@ def upsert_employers(
 
 
 def upsert_jobs(
-    connection: sqlite3.Connection, domain: str | None, jobs: Iterable["object"]
+    connection: sqlite3.Connection, domain: str | None, jobs: Iterable[Job]
 ) -> int:
     """Insert or refresh postings. Returns the number of rows written.
 
@@ -228,6 +258,8 @@ def upsert_jobs(
     refreshed, the same rule `employers` follows: deleting is how a listing
     goes missing without anything announcing it.
     """
+    connection.create_function("prefer_resolved_location", 2, prefer_resolved_location)
+    _install_tag_invalidation(connection)
     timestamp = now()
     rows = [
         (
@@ -261,7 +293,9 @@ def upsert_jobs(
                 category    = COALESCE(excluded.category, jobs.category),
                 title       = excluded.title,
                 url         = excluded.url,
-                location    = excluded.location,
+                location    = CASE WHEN excluded.ats = 'workday'
+                    THEN prefer_resolved_location(jobs.location, excluded.location)
+                    ELSE excluded.location END,
                 department  = excluded.department,
                 posted_at   = excluded.posted_at,
                 -- An employer moving its closing date must move ours, so a new

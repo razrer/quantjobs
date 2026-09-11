@@ -2041,9 +2041,12 @@ def targets(connection: sqlite3.Connection, limit: int) -> list[sqlite3.Row]:
     placeholders = ",".join("?" * len(EXTRACTORS))
     return connection.execute(
         f"""
-        SELECT domain, ats, token FROM ats_resolution
-        WHERE tier = 'A' AND ats IN ({placeholders}) AND token IS NOT NULL
-        ORDER BY ats, domain
+        SELECT MIN(a.domain) AS domain, a.ats, a.token FROM ats_resolution a
+        LEFT JOIN board_polls p ON p.ats = a.ats AND p.token = a.token
+        WHERE a.tier = 'A' AND a.ats IN ({placeholders})
+          AND a.token IS NOT NULL AND a.token <> ''
+        GROUP BY a.ats, a.token
+        ORDER BY p.polled_at, a.ats, domain
         LIMIT ?
         """,
         (*EXTRACTORS, limit),

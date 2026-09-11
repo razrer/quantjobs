@@ -76,6 +76,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import NamedTuple
 
 from . import parsing, db, http, iesjobs, jobbsafari, tagging
+from .models import UNRESOLVED_LOCATION as _UNRESOLVED
 from .iesjobs import ORIGIN
 
 
@@ -106,7 +107,6 @@ class Fetched(NamedTuple):
 # it as a placeholder would pin a remote posting to a city nobody has to go to.
 # `N Locations` makes no such claim -- it is a count, and the names behind it
 # are strictly more than it says.
-_UNRESOLVED = re.compile(r"^\s*\d+\s+locations?\s*$", re.IGNORECASE)
 
 _TAGS = re.compile(r"<[^>]+>")
 
