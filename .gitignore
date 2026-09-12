@@ -22,3 +22,7 @@ __pycache__/
 # Transcripts from the Wednesday sweep (`weekly.ps1`). Derived, per-machine,
 # and rotated to the last twelve weeks by the script itself.
 logs/
+
+# Local evaluation sample and the imported personal planning reference.
+audit-labels.csv
+docs/history/original-methodology.md
