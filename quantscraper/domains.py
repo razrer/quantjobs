@@ -217,6 +217,11 @@ def _corroborators(normalized: str, needle: str) -> list[str]:
     return [t for t in distinctive if t not in used and len(t) > 2]
 
 
+# Public homepage checked 2026-09-12: an author's site, not the HKEX participant.
+# Keep the rejection scoped to this name; a rejected guess is not a rejected firm.
+REJECTED_MATCHES = {("starfish bay", "starfishbay.com")}
+
+
 def verify(candidate: str, normalized: str) -> tuple[str, str, str] | None:
     """Fetch `candidate` and decide whether it belongs to this firm.
 
@@ -224,6 +229,9 @@ def verify(candidate: str, normalized: str) -> tuple[str, str, str] | None:
     the firm -- a live host alone proves only that somebody owns the name.
     """
 
+    name = normalize_name(normalized)
+    if (name, domain_of(candidate)) in REJECTED_MATCHES:
+        return None
     for url in (f"https://{candidate}/", f"https://www.{candidate}/"):
         try:
             body, landed = http.get_with_url(url, timeout=8, retries=1)
@@ -232,6 +240,8 @@ def verify(candidate: str, normalized: str) -> tuple[str, str, str] | None:
         except Exception:  # noqa: BLE001 -- a hostile host must not stop the run
             continue
 
+        if (name, domain_of(landed)) in REJECTED_MATCHES:
+            continue
         text = _page_text(body)
         if not text or _PARKED.search(text):
             continue

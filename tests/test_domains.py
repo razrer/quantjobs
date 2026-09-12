@@ -21,6 +21,18 @@ def _page(text: str) -> bytes:
     return f"<html><body><p>{text}</p></body></html>".encode()
 
 
+class RejectedIdentityTest(unittest.TestCase):
+    def test_author_site_does_not_identify_hk_trading_firm(self):
+        with mock.patch.object(domains.http, "get_with_url") as fetch:
+            self.assertIsNone(domains.verify("starfishbay.com", "Starfish Bay Limited"))
+        fetch.assert_not_called()
+
+    def test_redirect_to_rejected_site_is_also_refused(self):
+        with mock.patch.object(domains.http, "get_with_url", return_value=(
+                _page("Starfish Bay"), "https://www.starfishbay.com/")):
+            self.assertIsNone(domains.verify("starfishbay.hk", "starfish bay"))
+
+
 class MalformedWebsiteTest(unittest.TestCase):
     """A registry's own website field, published wrong.
 
