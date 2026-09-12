@@ -54,12 +54,17 @@ SITE = "https://quantjobs.spawned.app"
 FILES = ("index.html", "data.js", "robots.txt")
 
 
-def _check(path: Path, floor: int) -> None:
+def _check(path: Path, floor: int, tagger: int | None = None) -> None:
     """Refuse to publish a board that is not one. See `main` for why."""
     if not path.exists():
         raise SystemExit(f"{path} is missing -- run `python web/build_data.py` first")
     text = path.read_text(encoding="utf-8")
     payload = json.loads(text[text.index("=") + 1:].rstrip().rstrip(";"))
+    if tagger is not None and payload.get("tagger") != tagger:
+        raise SystemExit(
+            f"REFUSED: {path.name} uses tagger {payload.get('tagger')}, expected "
+            f"{tagger}. Re-tag and rebuild before publishing; nothing was uploaded."
+        )
     cards = len(payload.get("jobs", ()))
     if cards < floor:
         raise SystemExit(
@@ -125,7 +130,7 @@ def main() -> int:
     # payload and reading it costs one parse of a 3 MB file. A publish that
     # ships an empty board is the failure this project is least able to notice,
     # because the page still loads.
-    _check(WEB / "data.js", build_data.MIN_CARDS)
+    _check(WEB / "data.js", build_data.MIN_CARDS, build_data.tagging.TAGGER)
 
     for name in FILES:
         _upload(name)

@@ -22,6 +22,30 @@ import build_data  # noqa: E402
 import publish  # noqa: E402
 
 
+class PostingDateTest(unittest.TestCase):
+    def test_relative_dates_use_the_source_observation(self):
+        for raw, expected, precision in (
+            ("Posted 3 Days Ago", "2026-09-01", "approx"),
+            ("Posted 30+ Days Ago", "2026-08-05", "atleast"),
+            ("Posted Today", "2026-09-04", "exact"),
+            ("Yesterday", "2026-09-03", "exact"),
+            ("2 months ago", "2026-07-06", "atleast"),
+        ):
+            with self.subTest(raw=raw):
+                self.assertEqual(build_data.posted(raw, "2026-08-01", "2026-09-04"),
+                                 (expected, precision))
+
+    def test_absolute_and_missing_dates_keep_their_meaning(self):
+        self.assertEqual(build_data.posted("2026-07-01", "2026-08-01", "2026-09-04"),
+                         ("2026-07-01", "exact"))
+        self.assertEqual(build_data.posted(None, "2026-08-01", "2026-09-04"),
+                         ("2026-08-01", "seen"))
+
+    def test_a_relative_date_without_poll_time_uses_first_observation(self):
+        self.assertEqual(build_data.posted("2 days ago", "2026-09-04"),
+                         ("2026-09-02", "approx"))
+
+
 def _database(rows) -> sqlite3.Connection:
     """`rows` is (employer, relevance, n) -- n postings at that verdict."""
     connection = sqlite3.connect(":memory:")
@@ -327,6 +351,11 @@ class TheBuildRefusesToShipNothingTest(unittest.TestCase):
     def test_a_full_board_passes(self):
         self.path.write_text(self._payload(build_data.MIN_CARDS), encoding="utf-8")
         publish._check(self.path, build_data.MIN_CARDS)  # does not raise
+
+    def test_a_full_board_at_an_old_tagger_is_refused(self):
+        self.path.write_text(self._payload(build_data.MIN_CARDS), encoding="utf-8")
+        with self.assertRaisesRegex(SystemExit, "expected 2"):
+            publish._check(self.path, build_data.MIN_CARDS, tagger=2)
 
     def test_an_empty_board_is_refused_before_anything_is_uploaded(self):
         self.path.write_text(self._payload(0), encoding="utf-8")

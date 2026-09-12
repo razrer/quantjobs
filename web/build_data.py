@@ -43,6 +43,7 @@ import json
 import re
 import sqlite3
 import sys
+from contextlib import closing
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -51,6 +52,7 @@ from quantscraper import (  # noqa: E402
     ats as ats_mod,
     dedup,
     extract,
+    files,
     labels as labels_mod,
     lexicon,
     tagging,
@@ -58,8 +60,6 @@ from quantscraper import (  # noqa: E402
 
 DB = Path(__file__).resolve().parent.parent / "employers.sqlite3"
 OUT = Path(__file__).resolve().parent / "data.js"
-
-TODAY = datetime.now(timezone.utc).date()
 
 # Legal forms, stripped only to make a display name readable. This is cosmetic
 # and deliberately separate from `resolve.py`'s normalizer, which decides
@@ -229,7 +229,7 @@ def unread_census(ats: str, relevance: str) -> bool:
 # `lexicon.board_profile` returns None. Kept as a name here because the gate
 # has to fail towards keeping when it cannot judge -- an unprofiled board is
 # not a non-markets one.
-def employer_profiles(connection, tagger: int) -> dict[str, str]:
+def employer_profiles(connection, tagger: int, table: str = "jobs") -> dict[str, str]:
     """`employer -> profile`, for the sources that publish under one token.
 
     `board_profiles` reads `(ats, token)` and that is right for a firm's own
@@ -240,7 +240,7 @@ def employer_profiles(connection, tagger: int) -> dict[str, str]:
     """
     counts: dict[str, list[int]] = {}
     for employer, value in connection.execute(
-        "SELECT j.employer, t.value FROM jobs j"
+        f"SELECT j.employer, t.value FROM {table} j"
         " JOIN job_tags t ON t.ats = j.ats AND t.token = j.token"
         "   AND t.job_id = j.job_id AND t.dimension = 'relevance' AND t.tagger = ?"
         " WHERE j.removed_at IS NULL AND TRIM(COALESCE(j.employer, '')) <> ''",
@@ -501,7 +501,8 @@ def _recase(word: str) -> str:
 _HUB_ORDER = tuple(tagging._HUBS)
 
 
-def posted(raw: str | None, first_seen: str) -> tuple[str, str]:
+def posted(raw: str | None, first_seen: str,
+           observed_at: str | None = None) -> tuple[str, str]:
     """(ISO date, precision). Precision is shown, never quietly discarded.
 
     exact   -- the ATS published a timestamp
@@ -522,19 +523,25 @@ def posted(raw: str | None, first_seen: str) -> tuple[str, str]:
     if iso:
         return date(*map(int, iso.groups())).isoformat(), "exact"
 
+    # A relative timestamp describes the source's last observation, not today.
+    # Rebuilding tomorrow must not make an unchanged posting one day newer.
+    try:
+        observed = date.fromisoformat((observed_at or first_seen)[:10])
+    except ValueError:
+        return seen, "seen"
     low = text.casefold()
     if "today" in low or "just posted" in low:
-        return TODAY.isoformat(), "exact"
+        return observed.isoformat(), "exact"
     if "yesterday" in low:
-        return (TODAY - timedelta(days=1)).isoformat(), "exact"
+        return (observed - timedelta(days=1)).isoformat(), "exact"
     days = re.search(r"(\d+)\+?\s*day", low)
     if days:
         n = int(days.group(1))
         precision = "atleast" if "+" in text else "approx"
-        return (TODAY - timedelta(days=n)).isoformat(), precision
+        return (observed - timedelta(days=n)).isoformat(), precision
     months = re.search(r"(\d+)\+?\s*month", low)
     if months:
-        return (TODAY - timedelta(days=30 * int(months.group(1)))).isoformat(), "atleast"
+        return (observed - timedelta(days=30 * int(months.group(1)))).isoformat(), "atleast"
 
     return seen, "seen"
 
@@ -597,7 +604,7 @@ def still_listed(row, last_read: dict, live_boards: set) -> str | None:
     return None
 
 
-def board_domains(connection) -> dict[tuple[str, str], str]:
+def board_domains(connection, table: str = "jobs") -> dict[tuple[str, str], str]:
     """The one domain each firm board belongs to.
 
     `jobs` upserts on `(ats, token, job_id)` and never moves `domain`, so
@@ -631,7 +638,7 @@ def board_domains(connection) -> dict[tuple[str, str], str]:
     """
     counts: dict[tuple[str, str], dict[str, int]] = {}
     for row in connection.execute(
-        "SELECT ats, token, domain, COUNT(*) AS n FROM jobs"
+        f"SELECT ats, token, domain, COUNT(*) AS n FROM {table}"
         " WHERE removed_at IS NULL AND domain IS NOT NULL AND token IS NOT NULL"
         " GROUP BY ats, token, domain"
     ):
@@ -690,8 +697,27 @@ def firm_key(domain: str | None, employer: str | None) -> str:
 
 
 def main() -> None:
-    connection = sqlite3.connect(DB)
-    connection.row_factory = sqlite3.Row
+    with closing(sqlite3.connect(DB)) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA temp_store=MEMORY")
+        # Metadata and deferred bodies must come from the same database snapshot.
+        connection.execute("BEGIN")
+        _build(connection)
+
+
+def _build(connection) -> None:
+    # The wide jobs table stores large bodies. Repeated joins/scans of it cost
+    # most of the build. Read metadata once into a build-local indexed table;
+    # keep bodies in the source table and fetch only surviving candidates.
+    connection.execute("""
+        CREATE TEMP TABLE board_jobs AS
+        SELECT ats, token, job_id, domain, employer, title, url, location,
+               department, posted_at, deadline, removed_at, first_seen, last_seen
+        FROM jobs
+    """)
+    connection.execute(
+        "CREATE UNIQUE INDEX temp.board_job_key ON board_jobs(ats, token, job_id)"
+    )
 
     names: dict[str, list[str]] = {}
     for row in connection.execute("SELECT domain, query FROM domain_lookups WHERE domain IS NOT NULL"):
@@ -719,10 +745,10 @@ def main() -> None:
     # The reader's own rejections, by key and by fingerprint. Read once: the
     # fingerprint of a rejected posting costs a row lookup each and there are
     # a few hundred of them at most.
-    by_employer = employer_profiles(connection, tagging.TAGGER)
+    by_employer = employer_profiles(connection, tagging.TAGGER, "board_jobs")
     # One firm per board, before anything reads `domain` -- `firm_key`, the
     # firm tile, the display name and the cross-source fold all hang off it.
-    one_domain = board_domains(connection)
+    one_domain = board_domains(connection, "board_jobs")
     # **Read after `one_domain`, and given it.** A fingerprint is keyed on the
     # firm, so the rejection side has to compute it from the same domain the
     # card does or the two stop meeting and a rejection quietly stops sticking
@@ -733,7 +759,7 @@ def main() -> None:
     last_read = {
         (row["ats"], row["token"]): row["read_at"]
         for row in connection.execute(
-            "SELECT ats, token, MAX(last_seen) AS read_at FROM jobs GROUP BY ats, token"
+            "SELECT ats, token, MAX(last_seen) AS read_at FROM board_jobs GROUP BY ats, token"
         )
     }
     live_boards = {
@@ -758,8 +784,8 @@ def main() -> None:
         # Withdrawn postings keep their row and stop being offered. The board
         # was showing them: `removed_at` was in the schema and not in this
         # query, so every ad JobStream had already retired still listed.
-        " department, posted_at, deadline, description, first_seen, last_seen"
-        " FROM jobs WHERE removed_at IS NULL"
+        " department, posted_at, deadline, first_seen, last_seen"
+        " FROM board_jobs WHERE removed_at IS NULL"
     ):
         mine = tags.get((row["ats"], row["token"], row["job_id"]))
 
@@ -882,6 +908,18 @@ def main() -> None:
             # of the top eight. The gate's own line above says everything there
             # is to say about it.
             hit = "unread_census_card"
+        # Already-gated postings need no company lookup or description hash.
+        # Keep this after all gate attribution, before the expensive folding.
+        if hit:
+            gated[hit] += 1
+            continue
+        # Read large descriptions only for candidates that need a fingerprint
+        # or a card. All preceding decisions use stored tags and metadata.
+        row = dict(row)
+        row["description"] = connection.execute(
+            "SELECT description FROM jobs WHERE ats=? AND token=? AND job_id=?",
+            (row["ats"], row["token"], row["job_id"]),
+        ).fetchone()[0]
         domain = one_domain.get((row["ats"], row["token"]), row["domain"])
         key = firm_key(domain, row["employer"])
 
@@ -911,7 +949,7 @@ def main() -> None:
             }
         firms[key]["n"] += 1
 
-        when, precision = posted(row["posted_at"], row["first_seen"])
+        when, precision = posted(row["posted_at"], row["first_seen"], row["last_seen"])
 
         job = {
             "id": f"{row['ats']}:{row['token']}:{row['job_id']}",
@@ -1089,14 +1127,13 @@ def main() -> None:
             " untouched."
         )
 
-    OUT.write_text(
+    files.write_text(OUT,
         "window.BOARD = " + json.dumps({
             "built": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "tagger": tagging.TAGGER,
             "firms": firms,
             "jobs": jobs,
         }, ensure_ascii=False, separators=(",", ":")) + ";\n",
-        encoding="utf-8",
     )
     print(f"        wrote {OUT.name}, {OUT.stat().st_size / 1e6:.1f} MB")
 
