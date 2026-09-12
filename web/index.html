@@ -837,6 +837,7 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
       <div class="picker">
         <label for="group">stack</label>
         <select id="group">
+          <option value="similar">similar postings</option>
           <option value="firm">by firm</option>
           <option value="firm+hub">by firm + place</option>
           <option value="role+hub">by role + place</option>
@@ -1317,7 +1318,7 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     // the first screen and the 60 postings worth reading below the fold.
     // Nothing is hidden by this -- `order()` still pins an approaching
     // deadline above every spine, which is the rule that actually matters.
-    q: "", sort: "fit", pin: 14, group: "firm",
+    q: "", sort: "fit", pin: 14, group: "similar",
     sel: Object.fromEntries(FACETS.map((f) => [f.key, []])),
     only: null,            // "saved" | "rejected" | null
     mute: [],              // keys of `exclude` presets currently hiding matches
@@ -1553,6 +1554,12 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
   };
 
   const GROUP_KEY = {
+    // Visual bundles, not identity merges. Keep titles, places and firm IDs
+    // conservative; filters run first and each underlying posting survives.
+    similar: (j) => [j.firm && j.title?.trim() && j.loc?.trim()
+      ? JSON.stringify([j.firm, j.title.trim().toLowerCase().replace(/\s+/g, " "),
+          j.loc.trim().toLowerCase().replace(/\s+/g, " ")])
+      : j.id],
     firm: (j) => [j.firm],
     "firm+hub": (j) => hubsOf(j).map((h) => j.firm + "|" + (h || j.loc || "—")),
     role: (j) => [j.role || "unknown"],
@@ -1564,6 +1571,7 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
   // Copenhagen pile led by a posting whose first hub is Stockholm would
   // otherwise be titled "Stockholm".
   const GROUP_NAME = {
+    similar: (j) => `${j.title} · ${j.firmName}`,
     firm: (j) => j.firmName,
     "firm+hub": (j, key) => `${j.firmName} · ${label(key.slice(j.firm.length + 1))}`,
     role: (j) => label(j.role || "unknown"),
@@ -1593,7 +1601,8 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
         }
       }
     }
-    return out.map((u) => (u.list.length >= STACK_AT ? u : u.list.map((job) => ({ job, key: u.key })))).flat();
+    const threshold = state.group === "similar" ? 2 : STACK_AT;
+    return out.map((u) => (u.list.length >= threshold ? u : u.list.map((job) => ({ job, key: u.key })))).flat();
   }
 
   // --- rendering -----------------------------------------------------------
@@ -1727,7 +1736,7 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
       <article class="card" tabindex="0" role="button" aria-expanded="false"
           ${soonest !== null ? `data-due="${level(soonest)}"` : ""}>
         <div class="card-top">
-          <span class="pill fit-${best}">${list.length} openings</span>
+          <span class="pill fit-${best}">${list.length} ${state.group === "similar" ? "similar postings" : "openings"}</span>
           ${soonest !== null ? `<span class="due" data-lvl="${level(soonest)}">${esc(dueText(soonest))}</span>` : ""}
           <span class="when">${esc(stamp(list[0].posted))}</span>
         </div>
@@ -1736,7 +1745,9 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
           ${hubs.slice(0, 3).map((h) => `<span class="hub">${esc(label(h))}</span>`).join("")}
           ${state.group.startsWith("firm") && list[0].firmDomain ? `<span class="loc">${esc(list[0].firmDomain)}</span>` : ""}
         </div>
-        <ul class="peek">${peek}</ul>
+        ${state.group === "similar"
+          ? '<p class="peek">May be reposts or separate openings. Open to compare every version.</p>'
+          : `<ul class="peek">${peek}</ul>`}
         <div class="tags">
           <span class="tag more">click to open</span>
           ${[...new Set(list.map((j) => j.role).filter(Boolean))].slice(0, 3)
@@ -1823,13 +1834,13 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
   function openStack(node) {
     const unit = queue.find((u) => u.list && u.key === node.dataset.key);
     if (!unit) return;
-    if (!node.querySelector(".member")) {
+    if (!node.querySelector(".members").children.length) {
       // Stacking by place alone puts fifty thousand postings in one group.
       // Opening that is not a slow render, it is a dead tab -- so a stack shows
       // its most urgent members and says how many it is holding back.
-      const shown = unit.list.slice(0, MEMBERS);
+      const shown = state.group === "similar" ? unit.list : unit.list.slice(0, MEMBERS);
       const rest = unit.list.length - shown.length;
-      node.querySelector(".members").innerHTML = shown.map(memberHTML).join("")
+      node.querySelector(".members").innerHTML = shown.map(state.group === "similar" ? cardHTML : memberHTML).join("")
         + (rest ? `<span class="member rest"><span class="t">+${rest.toLocaleString()} more —`
             + ` narrow the filters, or stack by something finer</span></span>` : "");
     }
@@ -2128,7 +2139,7 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     if (firm) { e.preventDefault(); state.sel.firm = [firm.dataset.firm]; commit(); return; }
 
     const stack = e.target.closest(".stack");
-    if (stack && !e.target.closest(".member")) {
+    if (stack && !e.target.closest(".members")) {
       e.preventDefault();
       stack.dataset.open === "1" ? closeStack(stack) : openStack(stack);
     }
@@ -2170,7 +2181,7 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     // `<select>` blank while the board sorts by the fallback -- the control
     // and the page then disagree. Read back what the browser accepted.
     $(id).value = state[key];
-    if (!$(id).value) { $(id).value = FRESH()[key]; state[key] = cast($(id).value); }
+    if ($(id).selectedIndex < 0) { $(id).value = FRESH()[key]; state[key] = cast($(id).value); }
     $(id).addEventListener("change", (e) => { state[key] = cast(e.target.value); opened.clear(); commit(); });
   }
 
