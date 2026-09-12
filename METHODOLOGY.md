@@ -44,6 +44,14 @@ tag → alerts → build/publish. The two tagging passes have different inputs.
 Robots exclusions are read past only under the standing slow weekly policy;
 CAPTCHAs, WAF refusals, and 429 responses retain the existing restrictions.
 
+Discovery must recur alongside polling existing jobs. Use corporate snapshots,
+exchange activity and evidenced affiliate/adviser relationships to investigate
+unlicensed or unfamiliar names; keep relationships separate from entity identity.
+Audit unresolved careers channels, including vacancies embedded directly in prose.
+Verified firms without advertised vacancies belong in the local outreach file,
+not on the board. See [the measured discovery strategy](docs/DISCOVERY-STRATEGY.md)
+for the Hong Kong, Singapore and Stockholm pilot and proposed refresh cadence.
+
 ## Classification and evaluation
 
 Use deterministic multilingual rules with separate dimensions, explicit uncertainty,

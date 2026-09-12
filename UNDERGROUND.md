@@ -1,5 +1,10 @@
 # The firms with no recruiting pipeline
 
+Historical notes below. The [September 2026 investigation](docs/DISCOVERY-STRATEGY.md)
+tests additional public routes: corporate snapshots, affiliate disclosures and
+fund-platform relationships. Sparse recruiting evidence does not make a firm
+undiscoverable. Verified outreach leads are in local `docs/OUTREACH-FIRMS.md`.
+
 Notes for curiosity. **Nothing here is read by any code** — `seed.py` reads
 `registries/seed_firms.csv` and nothing else, so a name can sit in this file
 indefinitely without touching the employer universe. That is the point: these
@@ -23,8 +28,8 @@ employer) return zero for all four.
 returns zero for *Headlands Technologies*, *Aquatic Capital* and *Domeyard* —
 all three unambiguously real and in our own database. A firm that hires only
 citizens and green-card holders never files. So the honest reading is not "these
-four do not exist"; it is **"if they exist, they leave no trace any tool can
-follow"**, which for a job hunt amounts to the same thing. Two of the four read
+four do not exist"; it is **"these checks did not verify their identity"**.
+Corporate and affiliate evidence remains worth investigating. Two of the four read
 like internal initialisms, which would explain a name that circulates verbally
 and appears nowhere else.
 
@@ -59,21 +64,21 @@ of 14,000 in the East Bay hills with no financial district anywhere near it,
 which is the clearest illustration of what this tier looks like. And **Radix's
 17 filings across three cities make it the most visible firm on the list**,
 which is the calibration: if 17 is "visible", the shops filing one or two are
-effectively invisible and the ones filing zero are beyond reach entirely.
+less visible through this particular source. Zero filings does not establish
+that other public sources cannot identify them.
 
 ## Why this tier is structurally hard to find
 
 The same reason the scraper needs a hand-written seed file at all. A firm
-becomes enumerable when something forces it into a public list — a licence, an
-exchange membership, a securities registration. A small partnership trading its
-own capital triggers none of those: no clients, so no regulator registers it; it
-trades through someone else's membership, so no exchange names it; it hires by
-referral, so no job board indexes it.
+becomes easier to enumerate when it appears in a public list — a licence, an
+exchange membership, a corporate registration. A small partnership trading its
+own capital may be absent from the financial-register and exchange lists we
+collect, especially with sponsored access. Referral-only hiring can also leave
+no job-board evidence. None of these absences proves it leaves no other trace.
 
-The practical consequence: **this tier is reached through people, not through
-search.** Every automated route including this scraper is structurally blind to
-it, which is what makes exhaustive coverage of the *reachable* firms worth the
-effort — so that whatever time goes on networking goes on the ones that are not.
+Referrals can help, but public corporate records, group disclosures and service
+relationships can reveal firms absent from licensing and job-board searches.
+Those routes are incomplete too; record what was checked and what remains unknown.
 
 If you want to chase the four, the one route that might work is asking someone
 who would know, in the same forums the names came from. A reply naming the

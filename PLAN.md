@@ -41,4 +41,33 @@ Exit criteria:
   once. The task's final confirmation records the external delivery outcome.
 
 Details and limitations: [refactor results](docs/REFACTOR-RESULTS.md).
-No additional implementation stage is queued.
+Stage 49 was pushed and published; the subsequent investigation is below.
+
+## Stage 50 — niche-employer discovery and duplicate display
+
+Requested: improve exhaustiveness in Hong Kong, Singapore and Stockholm; provide
+a separate Markdown outreach list without adding it to the website; then reduce
+duplicate posts. Preserve free local execution and coverage before compression.
+
+Exit criteria: test public discovery routes against local coverage, distinguish
+new employers from affiliates/channel gaps, document an actionable strategy,
+fix verified collection/identity gaps, and reduce repeated display cards without
+losing underlying opportunities. Test, then push and publish once at the end.
+
+- [Discovery strategy and evidence](docs/DISCOVERY-STRATEGY.md) records the HKEX,
+  ACRA, cross-border affiliate and Stockholm fund-platform probes. Bulk ACRA
+  ingestion and a recurring discovery refresh remain proposed, not implemented.
+- Local-only `docs/OUTREACH-FIRMS.md` holds four verified outreach candidates and
+  two affiliate cautions; gitignored and excluded from the board.
+- UTR8's inline Hong Kong/Utrecht Graduate Trader now has a live-tested reader.
+  One posting ingested and tagged `strong`; missing layout fails loudly.
+- Rejected the unrelated author domain for Starfish Bay; local cached match reset.
+- Similar-posting bundles retain independent links, filtering, save/correction
+  controls and eligibility. Baseline: 91 cards in 40 bundles, 51 fewer repeated
+  card slots versus stacking off; no card IDs or shortlist entries removed.
+- Verification: 1,135 Python tests and four JavaScript tests pass. Expanded
+  three-version Hong Kong bundle verified in the browser.
+- Rebuild: 4,855 cards and 217 shortlisted. All 4,854 previous card payloads
+  remain identical; UTR8 is the sole addition. Stacking-off survives reload.
+- Release artifacts verified locally; the task's final confirmation records
+  the final push, publication and external verification outcome.
