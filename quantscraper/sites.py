@@ -9,7 +9,7 @@ its careers page, and Nordea serves 110 through a JSON endpoint on its own
 domain. There is no vendor to fingerprint and no feed to guess, so the answer
 is a per-firm reader -- opened by a measurement rather than by enthusiasm.
 
-**A firm earns a reader here only by being on the roster and having no ATS.**
+**A verified coverage gap earns a reader here; roster membership is not required.**
 The moment a firm migrates to a vendor `ats.py` recognises, its `ats_resolution`
 row should go back to that vendor and its entry here should be deleted -- a
 hand-written scraper is a liability with a maintenance cost, not an asset. The
@@ -936,7 +936,37 @@ class Site:
     ats: str = "site"
 
 
+def utr8() -> list[Job]:
+    """Inline vacancies have no job links for the generic page watcher to follow."""
+    url = "https://utr8-group.com/"
+    page = _soup(http.get_text(url))
+    careers = page.select_one("#careers")
+    if careers is None:
+        raise SiteChanged("UTR8 careers section missing")
+    roles = careers.select("details.role")
+    if not roles and not _NO_VACANCIES.search(careers.get_text(" ", strip=True)):
+        raise SiteChanged("UTR8 vacancy layout missing")
+    jobs = []
+    seen = set()
+    for role in roles:
+        title = role.select_one(".r-title")
+        location = role.select_one(".r-facts span")
+        body = role.select_one(".role-body")
+        if not title or not location or not body or not body.select_one('a[href^="mailto:"]'):
+            raise SiteChanged("UTR8 vacancy fields missing")
+        title, location = title.get_text(" ", strip=True), location.get_text(" ", strip=True)
+        job_id = urllib.parse.quote(title.casefold() + "|" + location.casefold(), safe="")
+        if not title or not location or job_id in seen:
+            raise SiteChanged("UTR8 empty or ambiguous vacancy identity")
+        seen.add(job_id)
+        jobs.append(Job(ats="site", token="utr8", job_id=job_id, title=title,
+                        url=url + "#careers", location=location,
+                        description=body.get_text(" ", strip=True)))
+    return jobs
+
+
 SITES: tuple[Site, ...] = (
+    Site("utr8", "utr8-group.com", "UTR8 Group", utr8),
     Site("nordea", "nordea.com", "Nordea", nordea),
     Site("ap4", "ap4.se", "AP4", ap4),
     Site("ap7", "ap7.se", "AP7", ap7),

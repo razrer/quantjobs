@@ -33,6 +33,33 @@ def _nordea_row(nid, title="Quantitative Analyst", **extra):
     return row
 
 
+class Utr8Test(unittest.TestCase):
+    HTML = '''<section id="careers"><details class="role"><summary>
+      <div class="r-title">Graduate Trader</div>
+      <div class="r-facts"><span>Utrecht &amp; Hong Kong</span></div></summary>
+      <div class="role-body">Recent graduate, 0–3 years. Research trading models.
+      <a href="mailto:recruitment@utr8-group.com">Apply</a></div></details></section>'''
+
+    def test_inline_role_retains_both_locations_and_eligibility(self):
+        with mock.patch.object(sites.http, "get_text", return_value=self.HTML):
+            job, = sites.utr8()
+        self.assertEqual(job.location, "Utrecht & Hong Kong")
+        self.assertIn("0–3 years", job.description)
+        self.assertEqual(job.url, "https://utr8-group.com/#careers")
+
+    def test_missing_layout_or_fields_is_loud(self):
+        for page in ["<html></html>", '<section id="careers">Welcome</section>',
+                     self.HTML.replace('class="r-title"', 'class="new-title"'),
+                     self.HTML.replace('class="role-body"', 'class="new-body"')]:
+            with self.subTest(page=page), mock.patch.object(sites.http, "get_text", return_value=page):
+                with self.assertRaises(sites.SiteChanged):
+                    sites.utr8()
+
+    def test_explicit_empty_careers_is_understood(self):
+        with mock.patch.object(sites.http, "get_text", return_value='<section id="careers">No open positions</section>'):
+            self.assertEqual(sites.utr8(), [])
+
+
 class RegistrationTest(unittest.TestCase):
     def test_every_site_is_reachable_through_the_layer_3_dispatch(self):
         """A reader nothing dispatches to is a reader that never runs.
