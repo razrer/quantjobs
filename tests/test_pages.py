@@ -173,6 +173,18 @@ class FailedPollTest(unittest.TestCase):
         )
         self.assertIsNone(self._row("never.com"))
 
+    def test_a_failed_first_read_does_not_starve_the_next_page(self):
+        self.connection.executescript("""
+            CREATE TABLE ats_resolution(domain TEXT, careers_url TEXT, tier TEXT);
+            INSERT INTO ats_resolution VALUES
+                ('a.com', 'https://a.com/jobs', 'B'),
+                ('b.com', 'https://b.com/jobs', 'B');
+        """)
+        self.assertEqual(pages.targets(self.connection, 1)[0]['domain'], 'a.com')
+        pages.record_failures(self.connection, [pages.Poll('a.com', error='DNS failure')])
+        self.assertEqual(pages.targets(self.connection, 1)[0]['domain'], 'b.com')
+        self.assertIsNone(self._row('a.com'))
+
     def test_the_first_read_after_a_failure_is_not_reported_as_a_change(self):
         pages.record(self.connection, [self._shot(["/a"])])
         pages.record_failures(

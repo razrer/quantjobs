@@ -3826,7 +3826,12 @@ def drifted(connection: sqlite3.Connection) -> str | None:
 
 
 def _stamp(connection: sqlite3.Connection) -> None:
-    """Record which lexicon wrote this version's tags. Idempotent."""
+    """Record which lexicon wrote this version; never erase evidence of drift."""
+    if drifted(connection) is not None:
+        raise ValueError(
+            f"lexicon changed without a TAGGER bump (version {TAGGER}); "
+            "bump TAGGER and re-run tag before publishing"
+        )
     with connection:
         connection.execute(
             "INSERT INTO tagger_state (tagger, lexicon, stamped_at) VALUES (?, ?, ?)"
@@ -3855,14 +3860,14 @@ def run(
     verdicts would move.
     """
     connection.executescript(SCHEMA)
-    boards = load_quant_boards(connection)
-    rows = postings(connection, limit)
     # Stamped whether or not there is anything to do. A run that tags nothing
     # is the *normal* shape of the failure this guards -- after an unbumped
     # edit `postings` returns an empty list, because every posting already has
     # a row at this version -- so returning early without stamping would leave
     # the one case it exists for unrecorded.
     _stamp(connection)
+    boards = load_quant_boards(connection)
+    rows = postings(connection, limit)
     if not rows:
         return 0, 0
 

@@ -353,6 +353,15 @@ class AnUnbumpedLexiconIsLoudTest(unittest.TestCase):
                                (tagging.TAGGER,)).fetchone()["lexicon"],
             tagging.fingerprint())
 
+    def test_a_tag_run_cannot_erase_the_evidence_of_lexicon_drift(self):
+        connection = _memory(self)
+        connection.executescript(tagging.SCHEMA)
+        tagging._stamp(connection)
+        connection.execute("UPDATE tagger_state SET lexicon='previous-rules'")
+        with self.assertRaisesRegex(ValueError, "TAGGER bump"):
+            tagging.run(connection, 10)
+        self.assertEqual(tagging.drifted(connection), "previous-rules")
+
 
 class BoardPollsTest(unittest.TestCase):
     """Layer 3 polls a thousand boards under no source name, so `runs` could

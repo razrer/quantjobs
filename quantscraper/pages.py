@@ -37,6 +37,10 @@ from dataclasses import dataclass
 from . import db, http
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS page_attempts (
+    domain TEXT PRIMARY KEY,
+    polled_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS page_watch (
     domain      TEXT PRIMARY KEY,
     url         TEXT NOT NULL,
@@ -155,18 +159,28 @@ def snapshot(row: sqlite3.Row) -> Poll:
 
 
 def targets(connection: sqlite3.Connection, limit: int) -> list[sqlite3.Row]:
-    """Tier-B pages, least recently seen first, unseen pages before those."""
+    """Tier-B pages, oldest attempt first, including failed first reads."""
     return connection.execute(
         """
         SELECT a.domain, a.careers_url
         FROM ats_resolution a
         LEFT JOIN page_watch w ON w.domain = a.domain
+        LEFT JOIN page_attempts p ON p.domain = a.domain
         WHERE a.tier = 'B' AND a.careers_url IS NOT NULL
-        ORDER BY w.last_seen IS NOT NULL, w.last_seen, a.domain
+        ORDER BY COALESCE(p.polled_at, w.polled_at, w.last_seen), a.domain
         LIMIT ?
         """,
         (limit,),
     ).fetchall()
+
+
+def _record_attempts(connection, domains, timestamp):
+    # Separate from successful snapshots: a failed first read has no fingerprint.
+    connection.executemany(
+        "INSERT INTO page_attempts VALUES (?, ?) ON CONFLICT(domain) "
+        "DO UPDATE SET polled_at=excluded.polled_at",
+        [(domain, timestamp) for domain in domains],
+    )
 
 
 def record(connection: sqlite3.Connection, shots: list[Snapshot]) -> int:
@@ -179,6 +193,7 @@ def record(connection: sqlite3.Connection, shots: list[Snapshot]) -> int:
     timestamp = db.now()
     changed = 0
     with connection:
+        _record_attempts(connection, (shot.domain for shot in shots), timestamp)
         for shot in shots:
             previous = connection.execute(
                 "SELECT fingerprint FROM page_watch WHERE domain = ?", (shot.domain,)
@@ -242,6 +257,7 @@ def record_failures(connection: sqlite3.Connection, polls: list[Poll]) -> int:
     """
     timestamp = db.now()
     with connection:
+        _record_attempts(connection, (poll.domain for poll in polls), timestamp)
         cursor = connection.executemany(
             "UPDATE page_watch SET polled_at = ?, failures = failures + 1,"
             " error = ? WHERE domain = ?",
