@@ -49,9 +49,13 @@ class RoleScopeTest(unittest.TestCase):
         self.assertIsNone(exclusion("Software Engineer", "Responsibilities: <ul><li><b>Develop</b> trading platforms and execution algorithms.</li></ul> Requirements: Python."))
 
     def test_missing_evidence_and_unrelated_unknown_titles_are_not_rejections(self):
-        for title in ("Software Developer", "Applied AI Engineer", "Risk Analyst", "Analyst"):
+        for title in ("Software Developer", "Applied AI Engineer", "Risk Analyst", "Analyst", "Systemutvecklare Kapitalförvaltning"):
             with self.subTest(title=title):
                 self.assertIsNone(exclusion(title))
+
+    def test_aggregator_navigation_teaser_is_not_a_full_body(self):
+        body = "Fejlmeld annonce. Join our innovative fintech company. " * 6
+        self.assertIsNone(exclusion("Software Engineer Valuation Product Area", body))
 
     def test_action_applies_to_following_noun_bullets(self):
         body = "<p>Your Role</p><p>You will build our:</p><ul><li>Model computation and signal generation pipeline</li></ul><p>What You’ll Bring</p><p>Python experience</p>"
@@ -74,6 +78,7 @@ class RoleScopeTest(unittest.TestCase):
             "At our company, our Software Engineer Interns work directly with engineers to develop low latency proprietary trading systems.",
             "Responsibilities: Design and maintain HPC compute and storage infrastructure. Qualifications: Linux.",
             "Role Summary: You will build a real time data distribution system. Responsibilities: Develop components. Qualifications: Python.",
+            "Role Summary: We are seeking a software engineer for our real time data distribution system. Responsibilities: Build components. Qualifications: Python.",
         ):
             with self.subTest(body=body):
                 self.assertIsNone(exclusion("Portfolio Management Engineer", body))

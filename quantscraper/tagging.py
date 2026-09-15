@@ -42,7 +42,7 @@ from . import db, lexicon, role_scope
 # classifier improved" from "the market moved". **Forgetting is now loud** --
 # see `fingerprint`, which records what wrote each version's tags so that
 # `alerts` can say when the two have parted company.
-TAGGER = 65
+TAGGER = 66
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS job_tags (

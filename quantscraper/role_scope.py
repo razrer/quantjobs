@@ -138,6 +138,7 @@ RESEARCH_DATA = ("data pipelines", "features", "feature engineering", "datasets"
 RESEARCH_PURPOSE = ("systematic portfolio managers", "predictive modelling in finance",
                     "quantitative research", "systematic strategies", "alpha signals")
 BODY_WORK = MODEL_WORK + TRADING_TECH + RESEARCH_PURPOSE
+TEASER_MARKERS = ("fejlmeld annonce", "tjek jobglaeden")
 
 
 def _hit(text: str, terms: tuple[str, ...]) -> str | None:
@@ -164,7 +165,8 @@ def _duties(description: str) -> tuple[list[str], str]:
                               or re.search(r"\bour (?:\w+ ){0,4}(?:engineers|developers|interns) (?:work|build|develop)\b", normalized)
                               or any(normalized.lstrip().startswith(v + " ") for v in WORK_VERBS)):
             continue
-        if _hit(normalized, WORK_VERBS) or inherited_action:
+        if (_hit(normalized, WORK_VERBS) or inherited_action
+                or (start and re.match(r"\s*we are (?:seeking|looking for)\b", normalized))):
             statements.append(normalized)
         # A duty such as "you will build our:" assigns the following noun
         # bullets to the applicant too. Scope already ends at skill headings.
@@ -195,7 +197,9 @@ def exclusion(title: str, body: str, description: str) -> tuple[str, str] | None
     # Missing descriptions are an enrichment gap, not proof that an otherwise
     # ambiguous developer/data-science seat is enterprise IT. Named enterprise
     # specialties still decide on their own title.
-    if tech and not finance and len(body.strip()) < lexicon.MIN_BODY and not _hit(title, ENTERPRISE_IT):
+    missing_body = (len(body.strip()) < lexicon.MIN_BODY
+                    or (len(body) < 1000 and _hit(body, TEASER_MARKERS)))
+    if tech and missing_body and not _hit(title, ENTERPRISE_IT):
         return None
     # Only parse sentences when a relevant phrase exists somewhere in the body.
     if _hit(body, BODY_WORK):
