@@ -36,6 +36,29 @@ def _tags(**kwargs) -> dict[str, set[str]]:
     return grouped
 
 
+class SwedishNoiseRegressionTest(unittest.TestCase):
+    def test_observed_service_occupations_are_gated(self):
+        for title in (
+            "Städpersonal sökes", "Uppdrag: Åklagare till UC i Stockholm",
+            "Erfaren konferensvärd", "Receptionister med kunskap i MEWS",
+            "Heltid till lager inom E-handel", "Front Office Ambassador - Extra",
+            "Sjukskötare sökes", "Sonograf/Ultraljudsbarnmorska",
+            "Avdelningsansvarig på frukt&grönt", "Butik extra",
+        ):
+            with self.subTest(title=title):
+                self.assertIn("off_industry", _tags(title=title)["exclusion_reason"])
+
+    def test_ambiguous_swedish_words_and_finance_roles_survive(self):
+        for title in (
+            "Kvantitativ analytiker", "Risk Analyst - Swedbank Robur",
+            "Statistiker till Stockholm", "Front Office Quantitative Analyst",
+            "Data Scientist, Stockholms stad", "Forskningsassistent",
+            "Student Analyst SEB Funds", "Portfolio Value Analyst",
+        ):
+            with self.subTest(title=title):
+                self.assertNotIn("off_industry", _tags(title=title).get("exclusion_reason", set()))
+
+
 class TokenBoundaryTest(unittest.TestCase):
     def test_administrator_is_not_a_strat(self):
         """admini*strat*or contains "strat", and this corpus is full of them.

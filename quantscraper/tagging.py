@@ -42,7 +42,7 @@ from . import db, lexicon
 # classifier improved" from "the market moved". **Forgetting is now loud** --
 # see `fingerprint`, which records what wrote each version's tags so that
 # `alerts` can say when the two have parted company.
-TAGGER = 63
+TAGGER = 64
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS job_tags (
@@ -1911,6 +1911,19 @@ _OFF_INDUSTRY = _terms(
     # cleaning, in the compounds that do not collide with `stad`
     "hemstad", "staderska", "stadfirma", "flyttstad", "kontorsstad",
     "fonsterputs",
+    # Visible Swedish false positives, September 2026. Match occupations,
+    # not bare `stad` (city), `vard` (value), or generic analyst/research titles.
+    "stadpersonal", "konferensvard", "museivard", "aklagare", "tullrevisor",
+    "kyrkomusiker", "vikariesamordnare", "biltransportorer", "biluthyrning",
+    "hyrlakaruppdrag", "lager", "delikatessdisk", "avlosare", "butik",
+    "frukt gront", "frukt och gront", "sprakutbildare", "tradfallare",
+    "treeworker", "sonograf", "ultraljudsbarnmorska", "skraddare",
+    "sjukskotare", "servering", "serveringsstjarnor", "fatservering",
+    "receptionister", "tatueringsstudio", "industriplatslagare", "friidrott",
+    "cheerleading", "parkourutovare", "gymnastik", "livsmedelsproduktion",
+    "barnansvarig", "rlc befal", "polisomradeskansli", "skogsservice",
+    "forest clearer", "front office ambassador", "lymfmassageutbildad",
+    "souschef", "skadeberaknare",
     # grounds, garden and groundworks -- the family behind `Plog,Trädgård
     # skötsel,Handskottning,odling, plock,hakklippning utemiljö`, a title that
     # names five trades and matched nothing
