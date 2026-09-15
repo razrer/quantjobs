@@ -71,3 +71,25 @@ losing underlying opportunities. Test, then push and publish once at the end.
   remain identical; UTR8 is the sole addition. Stacking-off survives reload.
 - Release artifacts verified locally; the task's final confirmation records
   the final push, publication and external verification outcome.
+
+## Stage 51 — Swedish noise and repeated cards
+
+Requested: remove unrelated Swedish jobs and reduce duplicate display.
+Preserve uncertain markets/research opportunities, underlying records, human
+labels, employer identities, and individual links inside visual stacks.
+
+Exit criteria: regressions pass, re-tag with the new classifier version,
+compare every board card and shortlist ID, then commit, push and publish once.
+
+- Added explicit service-occupation vocabulary for observed Swedish leaks;
+  classifier version 64. No blanket Sweden or unknown-relevance exclusion.
+- Visual stacks now recognize corroborated employer aliases, existing Unicode
+  folding, and narrowly documented location variants. Every card survives.
+- Full re-tag and rebuild complete: 4,810 cards, exactly 45 identified removals,
+  and all 217 shortlist IDs preserved. Every surviving card payload is unchanged
+  apart from visual grouping. Stacking saves 60 card slots versus 51 previously.
+- Verification: 1,140 Python tests and five JavaScript tests pass. The Swedish
+  cross-source stack opens both original application links in the browser.
+- Release verified locally; the task's final confirmation records the push,
+  publication and external verification outcome. Details are in
+  [the incident record](docs/history/engineering.md#september-2026-swedish-noise-and-visual-duplicate-stacks).

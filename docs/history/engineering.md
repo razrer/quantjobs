@@ -3614,3 +3614,41 @@ years).
 **Never filter on job title alone.** Goldman says "Strat", Jane Street says
 "Trader", Swedish postings say "kvantitativ analytiker". Classify on the full
 description, multilingually.
+# September 2026: Swedish noise and visual duplicate stacks
+
+The visible board still contained Swedish service occupations that token and
+compound-head rules could not read: `Städpersonal`, `Åklagare`, `Konferensvärd`,
+`Receptionister`, `Sjukskötare`, retail, catering and several named manual
+trades. `Front Office Ambassador` at Nordic Choice was incorrectly adjacent
+because hotel reception borrowed a markets phrase. Tagger 64 adds explicit
+occupation vocabulary. It does not reject unknown Swedish postings as a class:
+Swedbank's Risk Analyst, SEB Funds' Student Analyst and a statistician were
+counterexamples to that shortcut. Bare `stad`, generic research titles and
+generic analyst titles remain outside the new occupation rules.
+
+The fixed 4,855-card board identifies 45 removals, all from Jobbsafari, with
+zero losses from the 217-card shortlist. Regression cases protect both the
+observed service occupations and uncertain finance/research titles.
+
+Visual stacks previously required identical firm IDs and lowercased title and
+location strings. Additional repeats differed only by corroborated employer
+names, Stockholm county suffixes, Geneva/Genève, Singapore postal districts,
+or look-alike Unicode title characters. `dedup.mark_similar` marks groups after
+identity deduplication using existing conservative name and Unicode matching.
+All members must corroborate each other, avoiding transitive alias chains.
+The new field is a display hint; no job, employer, link, eligibility tag or
+human verdict is merged or removed. Filters run before stacking.
+
+The same fixed board yields 48 stacks containing 108 cards, saving 60 slots
+instead of 51. Different cities, seniority levels and missing locations stay
+split. Solna/Stockholm and New York/Toronto were inspected and deliberately
+left separate. Python and JavaScript regressions cover these boundaries,
+metadata preservation, filtered representatives and stacking off.
+
+Release verification: all retained postings were re-tagged at version 64,
+using bounded batches of the existing classifier to limit local memory use.
+The resulting 4,810-card build removed exactly the 45 inspected cards; no
+surviving payload changed except the visual grouping hint, and all 217
+shortlist IDs remained. 1,140 Python tests and five JavaScript tests passed.
+The Swedish SJR cross-source stack was opened in the browser and retained
+both Platsbanken and Jobbsafari application links.
