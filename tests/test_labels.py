@@ -147,14 +147,13 @@ class FrameTest(unittest.TestCase):
 
         self.assertEqual(self._titles(), set())
 
-    def test_a_contested_rejection_does_reach_the_sheet(self):
-        """`Equity Research Analyst` is where a false rejection hides, and the
-        reader overturned exactly this one by hand."""
+    def test_conventional_equity_research_is_outside_updated_user_scope(self):
+        """The user now explicitly excludes conventional equity research."""
         self._store("1", "Equity Research Analyst",
                     "Cover listed equities and publish research on capital "
                     "markets for institutional clients. " * 6)
 
-        self.assertEqual(self._titles(), {"Equity Research Analyst"})
+        self.assertEqual(self._titles(), set())
 
     def test_a_posting_written_in_another_language_is_left_out(self):
         swedish = "Vi söker dig som vill arbeta med kvantitativ analys och handel. " * 6

@@ -35,14 +35,14 @@ from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 
-from . import db, lexicon
+from . import db, lexicon, role_scope
 
 # Bump on every lexicon change: the diff between two versions over the same
 # corpus is a free regression test, and it is the only way to tell "the
 # classifier improved" from "the market moved". **Forgetting is now loud** --
 # see `fingerprint`, which records what wrote each version's tags so that
 # `alerts` can say when the two have parted company.
-TAGGER = 64
+TAGGER = 65
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS job_tags (
@@ -2453,10 +2453,11 @@ BOARD_HUBS = _FOCUS_HUBS | {"us_other", "deprioritized", "unknown"}
 # Deleting a line here puts those postings back on the next build with no
 # re-tag: the tags are written either way.
 GATES = {
+    "non_quant_finance": "conventional finance or support outside quantitative work",
+    "generic_it": "technology without quantitative research or trading duties",
     "off_industry": "another profession entirely",
     "off_location": "outside the target and semi-target geography",
     "out_of_reach": "a rank unreachable from under a year of experience",
-    # The only gate that removes a posting whose *relevance* is `relevant`.
     # A compulsory doctorate cannot be acquired between now and the
     # application, so the fit does not matter -- see where it is set, for why
     # this is a gate rather than a rejection.
@@ -3372,6 +3373,8 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
     # so that `list --exclude different_field` audits it like any other.
     if reason := _buried(just_title, certain_in_title, software):
         add("exclusion_reason", "different_field", reason)
+    if scope := role_scope.exclusion(just_title, just_body, body):
+        add("exclusion_reason", scope[0], scope[1])
 
     # **A rank nobody reaches from under a year of experience.** Title only,
     # like `seniority`, and gated on a *positive* reading: a title carrying no
@@ -3521,7 +3524,7 @@ def _fit(tags: list[Tag]) -> Tag:
     # pass, not a grade they might grow into.
     if "student_only" in hard:
         return make("out_of_scope", "requires a future graduation date")
-    if relevance == "rejected":
+    if relevance == "rejected" or gates.intersection({"non_quant_finance", "generic_it"}):
         return make("out_of_scope", f"excluded: {'/'.join(sorted(gates)) or 'no quant signal'}")
     # **Below every reading and above nothing.** The card stays on the board,
     # keeps its relevance verdict and stays filterable; it simply sorts last,
@@ -3805,7 +3808,7 @@ def fingerprint() -> str:
     refactor is free and a word list is not.
     """
     digest = hashlib.blake2b(digest_size=16)
-    for module in (lexicon, sys.modules[__name__]):
+    for module in (lexicon, role_scope, sys.modules[__name__]):
         for name in sorted(vars(module)):
             value = getattr(module, name)
             if isinstance(value, dict):

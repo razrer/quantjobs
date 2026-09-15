@@ -18,6 +18,17 @@ acquired records regardless of geography; user-specific display gates are revers
 The target is a graduate with under one year of experience, oriented toward
 Python and research. Work authorization is not an ingestion filter.
 
+Display quantitative finance and actual trading seats, including discretionary
+trading. Keep systematic portfolio work, mathematical pricing, risk-model
+development and validation, and engineering for trading or quantitative research
+(including research datasets and features). Hide conventional portfolio management,
+treasury, investment banking, equity research, accounting, legal and other support
+occupations. Generic IT and support automation are outside scope. A finance employer,
+Python requirement or ordinary valuation spreadsheet does not prove quantitative
+work: use the role's title and actual duties, excluding employer introductions and
+qualification lists. Ambiguous developer roles with missing bodies remain unknown.
+These reversible display gates preserve raw records and human relevance labels.
+
 ## Collection
 
 1. Enumerate employers from registries and exchange lists. Keep source IDs and

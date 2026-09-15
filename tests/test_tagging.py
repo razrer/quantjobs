@@ -3092,27 +3092,24 @@ class ParallelTaggingAgreesTest(unittest.TestCase):
 
 
 class BuriedRatherThanRejectedTest(unittest.TestCase):
-    """**Four families the reader asked to be rid of, and two ways of being
-    rid.** Legal and audit are a *pass* -- they leave the board. Sell-side
-    research, enterprise IT and non-quant development are real work in a real
-    industry that this reader does not want, so they keep their relevance
-    verdict and their evidence and sort last, under `unknown`. `fit` is the
-    dimension that encodes the reader's profile, which is why the burial
-    happens there and not in `relevance`.
+    """Legacy down-ranking and the user's stricter finance display scope.
+
+    Conventional sell-side research now leaves the board. Ambiguous technology
+    roles without bodies retain the earlier down-ranking and their evidence.
     """
 
-    def test_sell_side_research_is_buried(self):
+    def test_sell_side_research_is_outside_updated_scope(self):
         for title in ("Equity Research Associate",
                       "Equity Research Associate - Large Cap Banks",
                       "Credit Research Analyst", "Senior Investment Research Analyst"):
-            self.assertEqual(_tags(title=title)["fit"], {"background"}, title)
+            self.assertEqual(_tags(title=title)["fit"], {"out_of_scope"}, title)
 
     def test_a_markets_word_does_not_rescue_sell_side_research(self):
         """`equity research` is itself on `MARKETS`, so a guard that spared any
         title carrying a markets word would spare every one of these -- it would
         read the words naming the thing being buried as a reason to keep it."""
         tags = _tags(title="Equity Research Associate - Large Cap Banks")
-        self.assertEqual(tags["fit"], {"background"})
+        self.assertEqual(tags["fit"], {"out_of_scope"})
 
     def test_enterprise_it_and_generic_development_are_buried(self):
         # `out_of_scope` where `judge` also rejects the title outright, which
