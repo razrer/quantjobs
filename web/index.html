@@ -1556,10 +1556,10 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
   const GROUP_KEY = {
     // Visual bundles, not identity merges. Keep titles, places and firm IDs
     // conservative; filters run first and each underlying posting survives.
-    similar: (j) => [j.firm && j.title?.trim() && j.loc?.trim()
+    similar: (j) => [j.similar || (j.firm && j.title?.trim() && j.loc?.trim()
       ? JSON.stringify([j.firm, j.title.trim().toLowerCase().replace(/\s+/g, " "),
           j.loc.trim().toLowerCase().replace(/\s+/g, " ")])
-      : j.id],
+      : j.id)],
     firm: (j) => [j.firm],
     "firm+hub": (j) => hubsOf(j).map((h) => j.firm + "|" + (h || j.loc || "—")),
     role: (j) => [j.role || "unknown"],

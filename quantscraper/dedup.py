@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import difflib
 import hashlib
+import re
 
 from .tagging import fold
 
@@ -31,6 +32,51 @@ PORTALS = frozenset({
     "mycareersfuture", "jobbsafari", "jobroom", "jobindex", "jobtech",
     "iesjobs",
 })
+
+
+def bundle_place(location: str) -> str:
+    """Normalize documented place variants for reversible visual stacks only."""
+    place = fold(location or "").strip()
+    if place in {"stockholm", "stockholm stockholms lan", "stockholm sverige",
+                 "stockholm sweden"}:
+        return "stockholm"
+    if place in {"geneva ge", "geneve ge"}:
+        return "geneve ge"
+    if place == "singapore" or re.fullmatch(r"singapore d\d\d .+", place):
+        return "singapore"
+    return place
+
+
+def mark_similar(cards: list[dict], firms: dict) -> None:
+    """Mark visual bundles without removing cards or changing firm identities.
+
+    Require the same complete title and place, then corroborate employer names.
+    Every member must match every other member; aliases cannot form a chain
+    joining two employers that do not match directly. Missing places stay split.
+    """
+    groups: dict[tuple[str, str], list[list[dict]]] = {}
+    for card in cards:
+        card.pop("similar", None)
+        place = bundle_place(card.get("loc", ""))
+        title = fold(card.get("title", "")).strip()
+        if not place or not title or not card.get("firm"):
+            continue
+        clusters = groups.setdefault((title, place), [])
+        names = [firms.get(card["firm"], {}).get("name")]
+        for cluster in clusters:
+            if all(card["firm"] == other["firm"] or same_company(
+                names, [firms.get(other["firm"], {}).get("name")])
+                for other in cluster):
+                cluster.append(card)
+                break
+        else:
+            clusters.append([card])
+    for clusters in groups.values():
+        for cluster in clusters:
+            if len(cluster) > 1:
+                key = min(card["id"] for card in cluster)
+                for card in cluster:
+                    card["similar"] = key
 
 # The tail of a company name that says what kind of company it is rather than
 # which one. A portal prints the legal name and a firm's own board prints the

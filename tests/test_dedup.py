@@ -18,6 +18,37 @@ BODY = (
 ) * 4
 
 
+class VisualBundleTest(unittest.TestCase):
+    def test_aliases_and_administrative_places_preserve_every_card(self):
+        cards = [
+            dict(id="a", firm="a", title="Researcher", loc="Stockholm"),
+            dict(id="b", firm="b", title="RESEARCHER", loc="Stockholm, Stockholms län"),
+        ]
+        firms = {"a": {"name": "Distinctive AB"}, "b": {"name": "Distinctive"}}
+        before = [dict(c) for c in cards]
+        dedup.mark_similar(cards, firms)
+        self.assertEqual([c["similar"] for c in cards], ["a", "a"])
+        self.assertEqual([{k: v for k, v in c.items() if k != "similar"} for c in cards], before)
+
+    def test_generic_employers_different_cities_and_seniority_stay_split(self):
+        cards = [
+            dict(id="a", firm="a", title="Researcher", loc="Stockholm"),
+            dict(id="b", firm="b", title="Researcher", loc="Stockholm"),
+            dict(id="c", firm="a", title="Researcher", loc="Solna"),
+            dict(id="d", firm="a", title="Senior Researcher", loc="Stockholm"),
+            dict(id="e", firm="a", title="Researcher", loc=""),
+            dict(id="f", firm="a", title="Researcher", loc=""),
+        ]
+        dedup.mark_similar(cards, {"a": {"name": "Capital One"}, "b": {"name": "Capital Two"}})
+        self.assertTrue(all("similar" not in c for c in cards))
+
+    def test_place_variants_do_not_erase_multicity_posts(self):
+        self.assertEqual(dedup.bundle_place("Genève, GE"), dedup.bundle_place("Geneva, GE"))
+        self.assertEqual(dedup.bundle_place("Singapore, D04 Harbourfront"), "singapore")
+        self.assertNotEqual(dedup.bundle_place("Singapore; Hong Kong"), "singapore")
+        self.assertNotEqual(dedup.bundle_place("New York; Toronto"), dedup.bundle_place("New York"))
+
+
 class FingerprintTest(unittest.TestCase):
     def test_the_same_advertisement_twice_is_one_key(self):
         """Anradus reposts `Quant Researcher #77900` every five days under a

@@ -1065,6 +1065,7 @@ def _build(connection) -> None:
             card["posted"],
         ))
     folded_near = near - len(jobs)
+    dedup.mark_similar(jobs, firms)
 
     # **The diagnostics print before anything is written and before anything
     # can fail**, because they are what says *which* gate ate the board -- and

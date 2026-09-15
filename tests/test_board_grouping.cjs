@@ -47,3 +47,11 @@ test('stacking off restores individual cards in the supplied sort order', () => 
   assert.deepEqual(Array.from(ids(group([card('b'), card('a')]))), ['b', 'a']);
   context.state.group = 'similar';
 });
+
+test('verified aliases share a stack and filtering preserves the matching version', () => {
+  const jobs = [card('a', { similar: 'a', fit: 'experienced' }),
+    card('b', { similar: 'a', firm: 'alias.com', loc: 'Hong Kong SAR', fit: 'apply_now' })];
+  assert.equal(group(jobs).length, 1);
+  assert.deepEqual(Array.from(ids(group(jobs))), ['a', 'b']);
+  assert.equal(group(jobs.filter(j => j.fit === 'apply_now'))[0].job.id, 'b');
+});
