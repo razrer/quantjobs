@@ -93,3 +93,30 @@ compare every board card and shortlist ID, then commit, push and publish once.
 - Release verified locally; the task's final confirmation records the push,
   publication and external verification outcome. Details are in
   [the incident record](docs/history/engineering.md#september-2026-swedish-noise-and-visual-duplicate-stacks).
+
+## Stage 52 — Quantitative-finance role scope
+
+Requested: substantially reduce conventional finance and generic IT, preserving
+actual trading, quantitative portfolio work, pricing/risk models and validation.
+Exit criteria: inspect real ads with Luna reviewers, protect genuine quantitative
+counterexamples, pass regressions, re-tag all retained jobs, compare every board
+and shortlist ID, then push and publish once.
+
+- Scope decisions are recorded in METHODOLOGY. Reversible gates preserve source
+  records and human labels. Missing developer descriptions remain unknown.
+- Three Luna reviews and follow-up counterexamples informed the rules; these are
+  development evidence, not independent accuracy or recall measurements.
+- Classifier version 66; 1,153 Python and five JavaScript tests pass.
+- Controlled re-tag of 602,025 records complete. Board: 4,810 → 3,618 cards; exactly
+  1,192 reviewed removals (585 finance/support, 607 generic technology), no added
+  or unexpectedly removed IDs. Shortlist: 217 → 215; the two removed roles are
+  network reliability and ML support automation.
+- Surviving card content and human labels are unchanged. One duplicate count
+  drops from two to one after a matching source variant is gated.
+- While release was paused by the account limit, the September 16 scheduled
+  refresh acquired newer evidence and published version 66: 3,496 cards and
+  238 shortlisted. Live index/data/robots match the refreshed local files.
+  Preserve that newer output; the older controlled comparison is historical.
+- Scheduled correction sync and a manual retry hit Windows access denial on
+  labels.csv. Existing labels remain unchanged; see ACTION-REQUIRED.
+- Details: [scope incident record](docs/history/engineering.md#september-2026-quantitative-finance-display-scope).

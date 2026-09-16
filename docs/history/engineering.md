@@ -3652,3 +3652,65 @@ surviving payload changed except the visual grouping hint, and all 217
 shortlist IDs remained. 1,140 Python tests and five JavaScript tests passed.
 The Swedish SJR cross-source stack was opened in the browser and retained
 both Platsbanken and Jobbsafari application links.
+
+## September 2026: quantitative-finance display scope
+
+The user explicitly excluded conventional portfolio management, treasury,
+investment banking/equity research, accounting, legal and generic IT. Actual
+trading stays, as do quantitative portfolio work, mathematical pricing, risk-model
+development/validation and specialized research/trading engineering. This supersedes
+the earlier policy of merely sending conventional finance to the board's bottom.
+
+`role_scope.py` adds reversible `non_quant_finance` and `generic_it` display gates;
+it does not filter acquisition, remove employers, change raw descriptions or write
+human labels. General markets relevance remains a separate dimension. Missing
+bodies preserve ambiguous developer roles; explicit support occupations can be
+decided from their titles. Research datasets/features remain in scope; support
+automation does not become quantitative work merely because it uses ML.
+
+Three Luna agents reviewed 100 ads each across investment, risk/support and
+trading/technology, with additional targeted exclusion reviews. These are focused
+development judgments, not independent human labels or a recall estimate. Root
+review checked disputed actual duties, including cases where agent judgments relied
+on employer branding. Airwallex payment/fraud platform engineering and RBC climate
+data/reporting engineering did not demonstrate the requested quantitative work.
+
+Protected counterexamples include AQR model-computation/signal pipelines, Cubist
+research datasets/features, Voleon research-to-live-trading systems, Jane Street
+OCaml trading infrastructure, Belvedere trading-software internships, HPC research
+infrastructure, and LSEG's role-specific real-time data distribution assignment.
+Regressions cover noun bullets inheriting an introductory action, the ordinary
+word "requirements" within duties, qualification headings, and role summaries.
+Company introductions and skill lists alone cannot rescue conventional work.
+
+The re-tag uses bounded batches through the existing classifier and record writer.
+An intermediate version 65 run was stopped to incorporate the final role-summary
+counterexample; version 66 reclassifies the complete corpus before publication.
+Aggregator navigation teasers and missing bodies on capital-management developer
+roles remain unknown, rather than being treated as evidence of generic IT.
+
+Final verification: 1,153 Python and five JavaScript tests pass. All 602,025
+postings were re-tagged. The board changes from 4,810 to 3,618 cards: exactly
+1,192 reviewed removals (585 finance/support and 607 technology), no added IDs,
+no unexpected removals. Shortlist changes from 217 to 215: D.E. Shaw Network
+Reliability Engineer and Cubist ML support automation leave it. The latter's
+mathematical-model wording is a qualification, not a stated modelling duty.
+
+Every surviving card's content remains unchanged. The Murex FO card
+`mycareersfuture:singapore:80058efd9c22e20e302c4a0e796d6e3d` loses its duplicate
+count of two because the matching Murex FO Engineer source variant is gated;
+the survivor and application link remain. Firm indexes and visual-stack
+membership are rebuilt normally. The human-label file's SHA-256 is unchanged.
+The first build waited for the final SQLite checkpoint after a temporary lock;
+the subsequent complete build passed normal size and freshness safeguards.
+
+Release was paused by an account usage-limit rejection. Before resumption, the
+September 16 scheduled refresh finished at 04:33 and published newer source data
+using classifier 66: 3,496 cards and 238 shortlisted. All three live files match
+that refreshed local build. Its ID changes must not be compared as classifier-only
+changes against the September 15 snapshot. The controlled figures above describe
+the earlier fixed-corpus build; the fresher publication was retained.
+
+The scheduled correction sync and a subsequent manual retry both failed with
+Windows access denial during atomic replacement of labels.csv. Its hash remained
+unchanged. This separate operational issue is recorded in ACTION-REQUIRED.
