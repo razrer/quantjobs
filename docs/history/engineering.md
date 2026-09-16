@@ -3714,3 +3714,27 @@ the earlier fixed-corpus build; the fresher publication was retained.
 The scheduled correction sync and a subsequent manual retry both failed with
 Windows access denial during atomic replacement of labels.csv. Its hash remained
 unchanged. This separate operational issue is recorded in ACTION-REQUIRED.
+
+## September 2026: Windows correction-sheet replacement
+
+The failure was not a read-only file, directory ACL problem, or open spreadsheet.
+Python's `os.replace` (MoveFileEx on Windows) was denied only when replacing the
+versioned `labels.csv`; creating and renaming ordinary files still worked. Windows'
+purpose-built ReplaceFile operation succeeded against the same real destination.
+
+The shared atomic-file helper now uses ReplaceFile for an existing Windows target,
+preserving its ACL and metadata, and uses `os.replace` for a new target or another
+platform. The label writer uses that helper. Failed writes still leave the prior
+sheet intact and clean their temporary file; concurrent updates remain protected
+by the existing process lock. Regression tests cover native replacement selection,
+new-file fallback, failed-write preservation and concurrent corrections.
+
+The repaired command processed all 310 remote corrections. Most were already in
+the sheet; thirteen new rejections were appended. The rebuilt board changed from
+3,496 to 3,492 cards. The four removed live cards were a Microsoft 365 specialist,
+a public-sector banking relationship associate, a capital-markets internship and
+a business-services/transport analyst. The other nine were already hidden or
+collapsed. No card was added, no shortlist entry changed, and every surviving
+card payload remained identical apart from display-only grouping fields excluded
+from the comparison. The full 1,155-test Python suite and five JavaScript board
+tests passed.

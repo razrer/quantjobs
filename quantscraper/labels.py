@@ -19,7 +19,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import lexicon, tagging
+from . import files, lexicon, tagging
 
 PATH = Path(__file__).with_name("labels.csv")
 AUTO_PATH = Path(__file__).with_name("auto_labels.csv")
@@ -329,7 +329,8 @@ def choose(rows: list[dict], limit: int) -> list[tuple[str, str, str]]:
 # leaves an empty `labels.csv` -- the project's own exit criterion, gone, and
 # the failure looks like "the sheet has no rows in it" rather than like a
 # crash. Writing beside it and renaming means the old file survives until the
-# new one is complete; `os.replace` is atomic on Windows as well as POSIX.
+# new one is complete; `files.atomic_replace` uses the native Windows replacement
+# operation and `os.replace` elsewhere.
 _SHEET_LOCK = threading.Lock()
 
 
@@ -347,7 +348,7 @@ def _write_sheet(path: Path, rows) -> None:
     try:
         with handle:
             csv.writer(handle).writerows(rows)
-        os.replace(handle.name, path)
+        files.atomic_replace(handle.name, path)
     except BaseException:
         pathlib_unlink(handle.name)
         raise

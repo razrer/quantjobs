@@ -120,3 +120,17 @@ and shortlist ID, then push and publish once.
 - Scheduled correction sync and a manual retry hit Windows access denial on
   labels.csv. Existing labels remain unchanged; see ACTION-REQUIRED.
 - Details: [scope incident record](docs/history/engineering.md#september-2026-quantitative-finance-display-scope).
+
+## Stage 53 — Windows correction-sheet replacement
+
+Requested: fix the access-denied failure that prevented live corrections from
+reaching `labels.csv`.
+
+- Windows now uses its native atomic file-replacement operation for existing
+  files; new files and other platforms retain the portable rename path. The
+  destination ACL and crash-safe read/modify/write behavior are preserved.
+- Pulled all 310 pending remote entries. Thirteen were new rejections; the rest
+  were idempotent. Rebuild: 3,496 → 3,492 cards, exactly four current cards
+  removed, no additions, no shortlist change, and no surviving-card changes.
+- Verification: 1,155 Python and five JavaScript tests pass. The correction-file
+  action item is resolved; final release verification is recorded in the task.
