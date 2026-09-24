@@ -35,7 +35,10 @@ paid services are required for this refactor.
 
 Wednesdays at 03:00, Windows Task Scheduler runs `weekly.ps1`. It uses the user's
 logged-in profile and catches up when available. `install-weekly.ps1` manages
-registration; logs are in `logs/`, with the last twelve weekly transcripts kept.
+registration and enables wake timers on AC and battery power. Logs are in
+`logs/`, with the last twelve weekly transcripts kept. The PC must have power;
+an interrupted run leaves its partial output in `weekly-<date>.out.tmp` and
+`weekly-<date>.err.tmp`.
 The full sweep includes Singapore and Hong Kong. Never move the build into CI:
 only this machine has the database.
 

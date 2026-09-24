@@ -103,6 +103,19 @@ uses — and no password is stored anywhere. The cost is that a fully logged-out
 machine skips the week, which `StartWhenAvailable` then makes up at the next
 opportunity.
 
+On September 23, 2026, the laptop slept through the Wednesday trigger and did
+not wake until September 24. The task had `WakeToRun`, but the active Samsung
+power plan allowed wake timers on AC and disabled them on battery. The catch-up
+run started on wake, then ended with Windows code `0xC000013A` before a publish;
+Task Scheduler's Operational log was disabled, so the exact interruption source
+was not recorded. `install-weekly.ps1` now enables wake timers for both power
+sources. The task still requires an interactive user session and a powered PC.
+The resulting nine-day Swiss gap exceeded the 20,000-row single-query reach.
+Nested `onlineSince` windows on the portal supplied the missing middle while a
+distinct-ID total check guarded completion. The September 24 recovery found
+28,825 distinct postings against 28,823 advertised; two ads changed while the
+walk was running. The original failed poll did not advance the cursor.
+
 `--full` sweeps every Jobindex category and **both national portals** —
 MyCareersFuture and Hong Kong's Interactive Employment Service — and widens the
 page and body queues. Those two are weekly rather than daily for one reason

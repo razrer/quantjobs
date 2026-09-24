@@ -134,3 +134,19 @@ reaching `labels.csv`.
   removed, no additions, no shortlist change, and no surviving-card changes.
 - Verification: 1,155 Python and five JavaScript tests pass. The correction-file
   action item is resolved; final release verification is recorded in the task.
+
+## Stage 54 — missed Wednesday refresh
+
+- The September 23 run was missed while the laptop slept from September 22
+  through September 24. The task had `WakeToRun`, but the active Samsung power
+  plan disabled wake timers on battery. Windows started a catch-up run on
+  September 24; it was interrupted before publication.
+- Enabled battery wake timers and made `install-weekly.ps1` enforce wake timers
+  on AC and battery when registering the task. The task remains set for
+  Wednesdays at 03:00 with catch-up enabled.
+- The missed interval overflowed job-room.ch's 20,000-result two-ended window.
+  Its collector now bridges nested day windows and verifies distinct IDs against
+  the largest advertised total. A targeted recovery collected 28,825 Swiss ads
+  against 28,823 advertised (two changed during the walk); the source cursor
+  advanced only after this complete read. All 1,158 Python tests pass.
+- A full September 24 refresh and live publication are in progress.

@@ -156,20 +156,66 @@ class ResultWindowTest(unittest.TestCase):
         # Only the shortfall is read backwards, not another full 10,000.
         self.assertEqual(seen.count("date_asc"), 3)
 
+    def test_nested_windows_bridge_a_missed_week(self):
+        ids = list(range(1, 12))
+        windows = {3: ids, 2: ids[-7:], 1: ids[-3:]}
+
+        def fake(days, page, sort):
+            values = windows[days]
+            if sort == "date_desc":
+                values = values[::-1]
+            start = page * jobroom_ch.PAGE_SIZE
+            return [_ad(str(i)) for i in values[start:start + jobroom_ch.PAGE_SIZE]], len(values)
+
+        with mock.patch.multiple(jobroom_ch, PAGE_SIZE=2, WINDOW=4, REACH=8), \
+                mock.patch.object(jobroom_ch, "_page", fake):
+            rows, pages, total = jobroom_ch.walk(3)
+
+        found = {row["jobAdvertisement"]["id"] for row in rows}
+        self.assertEqual(found, {str(i) for i in ids})
+        self.assertEqual(total, len(ids))
+        self.assertGreater(pages, 4)
+
+    def test_nested_windows_still_report_an_unreachable_gap(self):
+        ids = list(range(1, 16))
+        windows = {3: ids, 2: ids[-6:], 1: ids[-3:]}
+
+        def fake(days, page, sort):
+            values = windows[days]
+            if sort == "date_desc":
+                values = values[::-1]
+            start = page * jobroom_ch.PAGE_SIZE
+            return [_ad(str(i)) for i in values[start:start + jobroom_ch.PAGE_SIZE]], len(values)
+
+        with mock.patch.multiple(jobroom_ch, PAGE_SIZE=2, WINDOW=4, REACH=8), \
+                mock.patch.object(jobroom_ch, "_page", fake):
+            rows, pages, total = jobroom_ch.walk(3)
+
+        found = {row["jobAdvertisement"]["id"] for row in rows}
+        self.assertLess(len(found), total)
+        self.assertGreater(pages, 4)
+
 
 class TruncationTest(unittest.TestCase):
     """A short walk must announce itself. A quiet day and a truncated poll look
     identical from the outside, and only the advertised total tells them apart.
     """
 
-    def test_a_slice_too_big_for_a_two_ended_walk_is_a_problem(self):
+    def test_an_unbridged_oversized_slice_is_a_problem(self):
         swept = jobroom_ch.Sweep(
             days=7, pages=10, seen=jobroom_ch.REACH, written=0,
             advertised=27_403, repeats=0,
         )
 
         self.assertIsNotNone(swept.problem)
-        self.assertIn("27,403", swept.problem)
+        self.assertIn("7,403 short", swept.problem)
+
+    def test_a_bridged_oversized_slice_is_sound(self):
+        swept = jobroom_ch.Sweep(
+            days=7, pages=30, seen=27_403, written=0,
+            advertised=27_403, repeats=12_000,
+        )
+        self.assertIsNone(swept.problem)
 
     def test_a_short_walk_is_a_problem(self):
         swept = jobroom_ch.Sweep(

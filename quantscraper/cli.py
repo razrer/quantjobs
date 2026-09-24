@@ -1129,10 +1129,9 @@ def _gather(steps: list[tuple[str, Callable[[], int]]]) -> list[str]:
 def _daily(database: str, full: bool, publish: bool) -> int:
     """Run the standing sequence end to end, so a refresh is one command.
 
-    **This is the compute-intensive half and it runs here, on demand.** Nothing
-    schedules it: the national boards are a few hundred requests, the re-tag is
-    minutes of CPU, and both are free on this machine and billable on anybody
-    else's. What gets deployed is the *output* -- see `web/publish.py`.
+    **This is the compute-intensive half and it runs on this machine.** The
+    Wednesday task calls it with `--full --publish`; what gets deployed is the
+    output -- see `web/publish.py`.
 
     A step that fails does not stop the run. The sources are independent, and a
     board that has been redesigned underneath us should cost its own postings

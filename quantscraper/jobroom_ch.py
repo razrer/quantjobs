@@ -34,8 +34,11 @@ last `T - 10,000` backwards. That doubles the reachable slice to 20,000 for
 fifteen lines and no extra request on the common path, which is what makes a
 daily poll safe: a single day is ~9,400, only 6% under the ceiling.
 
-**Above 20,000 this fails loudly rather than returning most of the answer**,
-because a round number in the output is what a cap looks like from outside.
+**A missed poll can put more than 20,000 in the window.** Smaller
+`onlineSince` windows are nested within larger ones. Re-reading them from
+both ends bridges the gap, and the final distinct-ID count must still match
+the largest window's advertised total. A gap that cannot be bridged fails
+loudly rather than moving the cursor past unread jobs.
 
 **A cold start reaches the last few days, not the whole board, and that is the
 source's shape rather than a shortfall.** `onlineSince` is nested, so the slices
@@ -153,12 +156,6 @@ class Sweep:
                 f"the portal stated no total, so the {self.seen:,d} postings "
                 f"collected cannot be checked for truncation"
             )
-        if self.advertised > REACH:
-            return (
-                f"the last {self.days} day(s) hold {self.advertised:,d} postings, "
-                f"more than the {REACH:,d} a two-ended walk can reach -- poll more "
-                f"often, or slice the query further"
-            )
         if self.shortfall:
             return (
                 f"collected {self.seen:,d} of the {self.advertised:,d} the portal "
@@ -199,23 +196,44 @@ def _walk_end(days: int, sort: str, wanted: int) -> tuple[list[dict], int, int]:
     return rows, pages, advertised
 
 
+def _walk_window(days: int) -> tuple[list[dict], int, int]:
+    """Read both ends of one nested `onlineSince` window."""
+    rows, pages, advertised = _walk_end(days, "date_desc", WINDOW)
+    remaining = advertised - len(rows)
+    if remaining > 0:
+        tail, tail_pages, _ = _walk_end(days, "date_asc", min(remaining, WINDOW))
+        rows += tail
+        pages += tail_pages
+    return rows, pages, advertised
+
+
 def walk(days: int) -> tuple[list[dict], int, int]:
-    """Every posting online in the last `days`. Returns (rows, pages, total).
+    """Every reachable posting in the last `days`. Returns (rows, pages, total).
 
     Forwards for the first 10,000, then backwards for whatever the window left
     behind. The backwards leg is skipped entirely on the common path, so a
     daily poll costs exactly the ten requests it looks like it should.
     """
-    rows, pages, advertised = _walk_end(days, "date_desc", WINDOW)
-    remaining = advertised - len(rows)
-    if remaining > 0:
-        # Reading the far end of the same ordering. `date_asc` is the exact
-        # reverse, so these are the rows the forward leg could not reach --
-        # and a slice under `REACH` overlaps in the middle rather than
-        # leaving a hole, which is what `Sweep.repeats` then counts.
-        tail, tail_pages, _ = _walk_end(days, "date_asc", min(remaining, WINDOW))
-        rows += tail
-        pages += tail_pages
+    rows, pages, advertised = _walk_window(days)
+    if advertised > REACH:
+        # A long absence may exceed one query's two-ended 20,000-row reach.
+        # Each shorter window drops the oldest day's rows, moving its first
+        # 10,000 towards the middle of the original gap. Count distinct IDs,
+        # not rows: the two ends and nested windows overlap by construction.
+        seen = {
+            ad["jobAdvertisement"]["id"] for ad in rows
+            if (ad.get("jobAdvertisement") or {}).get("id")
+        }
+        for nested_days in range(days - 1, 0, -1):
+            if len(seen) >= advertised:
+                break
+            more, more_pages, _ = _walk_window(nested_days)
+            rows += more
+            pages += more_pages
+            seen.update(
+                ad["jobAdvertisement"]["id"] for ad in more
+                if (ad.get("jobAdvertisement") or {}).get("id")
+            )
     return rows, pages, advertised
 
 
