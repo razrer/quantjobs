@@ -1174,8 +1174,9 @@ def _daily(database: str, full: bool, publish: bool) -> int:
         ("corrections", lambda: _corrections(CORRECTIONS_ENDPOINT)),
     ]
 
-    # Every one of these is a different host, which is the precondition for
-    # running them together and the thing to re-check before adding a fourth.
+    # The portal sweeps use distinct hosts. Employer boards, pages and
+    # registries may overlap them or each other, so all source reads share
+    # one process-wide per-host throttle.
     gathered: list[tuple[str, Callable[[], int]]] = [
         ("sweden", lambda: _sweden(database, None)),
         ("denmark", lambda: _denmark(database, since, None)),
@@ -1211,6 +1212,11 @@ def _daily(database: str, full: bool, publish: bool) -> int:
         # the two and everything else hides underneath them.
         gathered.insert(0, ("singapore", lambda: _singapore(database, None)))
         gathered.insert(1, ("hongkong", lambda: _hongkong(database, iesjobs.MAX_PAGES)))
+        # Registry alerts use a 30-day freshness limit. A weekly sweep that
+        # never reads registries lets every employer source go stale even
+        # while the job board itself is fresh. Refresh the established sources
+        # alongside the independent job feeds, under the same shared throttle.
+        gathered.append(("registries", lambda: _fetch(list(REGISTRIES), database)))
 
     failed: list[str] = []
 

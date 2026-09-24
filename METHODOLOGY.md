@@ -50,7 +50,8 @@ These reversible display gates preserve raw records and human relevance labels.
    overwrite resolved Workday locations. Changed evidence invalidates derived tags;
    unchanged polls do not need reclassification.
 
-The weekly sequence is corrections → concurrent source reads → tag → bodies →
+The weekly sequence is corrections → concurrent source reads (including the
+employer registries) → tag → bodies →
 tag → alerts → build/publish. The two tagging passes have different inputs.
 Robots exclusions are read past only under the standing slow weekly policy;
 CAPTCHAs, WAF refusals, and 429 responses retain the existing restrictions.

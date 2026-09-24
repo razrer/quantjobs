@@ -47,6 +47,15 @@ class Utr8Test(unittest.TestCase):
         self.assertIn("0–3 years", job.description)
         self.assertEqual(job.url, "https://utr8-group.com/#careers")
 
+    def test_obfuscated_application_buttons_still_identify_an_open_role(self):
+        page = self.HTML.replace(
+            '<a href="mailto:recruitment@utr8-group.com">Apply</a>',
+            '<div class="apply"><a data-m="encoded" data-subject="Graduate Trader - Utrecht">Apply</a></div>',
+        )
+        with mock.patch.object(sites.http, "get_text", return_value=page):
+            job, = sites.utr8()
+        self.assertEqual(job.title, "Graduate Trader")
+
     def test_missing_layout_or_fields_is_loud(self):
         for page in ["<html></html>", '<section id="careers">Welcome</section>',
                      self.HTML.replace('class="r-title"', 'class="new-title"'),

@@ -149,9 +149,25 @@ reaching `labels.csv`.
   the largest advertised total. A targeted recovery collected 28,825 Swiss ads
   against 28,823 advertised (two changed during the walk); the source cursor
   advanced only after this complete read. All 1,158 Python tests pass.
-- A full September 24 refresh and live publication are in progress.
+- The full September 24 refresh published 3,743 cards and 245 shortlisted.
+  Live `data.js` matches the local file byte-for-byte. Against the September 16
+  build: 3,143 card IDs retained, 600 added, 349 removed; 220 shortlist IDs
+  retained, 25 added, 18 removed. The source and tag evidence for removed
+  shortlist entries was checked.
 - The active refresh later paused when the lid closed and Windows entered
   Modern Standby, then hibernation on battery. `weekly.ps1` now requests an
   awake system during execution to prevent ordinary idle sleep; forced lid
   closure still suspends the laptop. A temporary awake request protects the
   currently running process while the laptop remains open.
+- The run exited nonzero because it had loaded the old Swiss reader before the
+  separate successful recovery, and because alerts found all 14 employer
+  registries stale after 33 days plus Ashby/finvest's repeated 404. The full
+  weekly sweep now includes the established registry reads. A one-time refresh
+  completed successfully for all 14 registries; the stale registry alerts
+  cleared. The Finvest failure remains visible while its public feed returns
+  404, with its last five acquired postings preserved.
+- UTR8's public careers page changed application links to buttons carrying
+  application attributes. The reader now accepts both page formats and a live
+  re-poll recovered its one Graduate Trader posting. The UTR8 alert cleared.
+  All 1,160 Python tests pass. The rebuilt board's job and firm data exactly
+  matches the already published copy; only its build timestamp differs.

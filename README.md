@@ -40,7 +40,8 @@ registration and enables wake timers on AC and battery power. Logs are in
 an interrupted run leaves its partial output in `weekly-<date>.out.tmp` and
 `weekly-<date>.err.tmp`. The launcher prevents idle sleep while running;
 closing the lid or explicitly sleeping the laptop pauses it until wake.
-The full sweep includes Singapore and Hong Kong. Never move the build into CI:
+The full sweep includes Singapore, Hong Kong, and the employer registries.
+Never move the build into CI:
 only this machine has the database.
 
 For a local board, run `web/build_data.py`, then `web/serve.py` with Windows

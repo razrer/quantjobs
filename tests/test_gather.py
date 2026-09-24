@@ -17,6 +17,7 @@ import threading
 import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from unittest import mock
 
 import argparse
 import contextlib
@@ -24,6 +25,34 @@ import re
 from pathlib import Path
 
 from quantscraper import cli, http
+
+
+class WeeklySourcesTest(unittest.TestCase):
+    def test_full_sweep_refreshes_registries_but_small_top_up_does_not(self):
+        gathered = []
+
+        def capture(steps):
+            gathered.append(dict(steps))
+            return []
+
+        with mock.patch.object(cli.db, "connect"), \
+                mock.patch.object(cli, "_denmark_since", return_value=None), \
+                mock.patch.object(cli, "_corrections", return_value=0), \
+                mock.patch.object(cli, "_gather", side_effect=capture), \
+                mock.patch.object(cli, "_tag", return_value=0), \
+                mock.patch.object(cli, "_bodies", return_value=0), \
+                mock.patch.object(cli, "_alerts", return_value=0), \
+                mock.patch.object(cli, "_fetch", return_value=0) as fetch, \
+                mock.patch.object(cli.subprocess, "run", return_value=mock.Mock(returncode=0)), \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(cli._daily("test.db", True, False), 0)
+            gathered[0]["registries"]()
+            self.assertEqual(cli._daily("test.db", False, False), 0)
+
+        fetch.assert_called_once_with(list(cli.REGISTRIES), "test.db")
+        self.assertIn("singapore", gathered[0])
+        self.assertIn("hongkong", gathered[0])
+        self.assertNotIn("registries", gathered[1])
 
 
 class ThrottleIsPerHostTest(unittest.TestCase):

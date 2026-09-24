@@ -952,7 +952,8 @@ def utr8() -> list[Job]:
         title = role.select_one(".r-title")
         location = role.select_one(".r-facts span")
         body = role.select_one(".role-body")
-        if not title or not location or not body or not body.select_one('a[href^="mailto:"]'):
+        apply_link = body.select_one('a[href^="mailto:"], .apply a[data-m][data-subject]') if body else None
+        if not title or not location or not body or not apply_link:
             raise SiteChanged("UTR8 vacancy fields missing")
         title, location = title.get_text(" ", strip=True), location.get_text(" ", strip=True)
         job_id = urllib.parse.quote(title.casefold() + "|" + location.casefold(), safe="")
