@@ -150,3 +150,8 @@ reaching `labels.csv`.
   against 28,823 advertised (two changed during the walk); the source cursor
   advanced only after this complete read. All 1,158 Python tests pass.
 - A full September 24 refresh and live publication are in progress.
+- The active refresh later paused when the lid closed and Windows entered
+  Modern Standby, then hibernation on battery. `weekly.ps1` now requests an
+  awake system during execution to prevent ordinary idle sleep; forced lid
+  closure still suspends the laptop. A temporary awake request protects the
+  currently running process while the laptop remains open.

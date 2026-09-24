@@ -38,7 +38,8 @@ logged-in profile and catches up when available. `install-weekly.ps1` manages
 registration and enables wake timers on AC and battery power. Logs are in
 `logs/`, with the last twelve weekly transcripts kept. The PC must have power;
 an interrupted run leaves its partial output in `weekly-<date>.out.tmp` and
-`weekly-<date>.err.tmp`.
+`weekly-<date>.err.tmp`. The launcher prevents idle sleep while running;
+closing the lid or explicitly sleeping the laptop pauses it until wake.
 The full sweep includes Singapore and Hong Kong. Never move the build into CI:
 only this machine has the database.
 

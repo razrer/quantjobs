@@ -68,6 +68,20 @@ if (-not (Test-Path $python)) {
 
 $env:PYTHONIOENCODING = 'utf-8'
 
+# Prevent ordinary idle sleep while the long sweep is active. Windows still
+# honours an explicit sleep or lid-close action; StartWhenAvailable catches up
+# after the user wakes the machine again.
+$awake = [uint32]0
+try {
+    Add-Type -Namespace QuantScraper -Name Power -MemberDefinition `
+        '[System.Runtime.InteropServices.DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint flags);' `
+        -ErrorAction Stop
+    $awake = [QuantScraper.Power]::SetThreadExecutionState([uint32]2147483649)
+    if ($awake -eq 0) { Write-Log 'WARN could not prevent idle sleep during the sweep' }
+} catch {
+    Write-Log "WARN could not request an awake system: $_"
+}
+
 try {
     $run = Start-Process -FilePath $python `
         -ArgumentList '-m', 'quantscraper', 'daily', '--full', '--publish' `
@@ -79,6 +93,10 @@ try {
 } catch {
     Write-Log "FAIL could not start the sweep: $_"
     exit 2
+} finally {
+    if ($awake -ne 0) {
+        [QuantScraper.Power]::SetThreadExecutionState([uint32]2147483648) | Out-Null
+    }
 }
 
 foreach ($part in @(@('stdout', $outFile), @('stderr', $errFile))) {

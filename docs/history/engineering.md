@@ -115,6 +115,12 @@ Nested `onlineSince` windows on the portal supplied the missing middle while a
 distinct-ID total check guarded completion. The September 24 recovery found
 28,825 distinct postings against 28,823 advertised; two ads changed while the
 walk was running. The original failed poll did not advance the cursor.
+The September 24 catch-up later paused again when the lid closed at 17:49;
+Windows entered Modern Standby, then hibernated after the standby battery
+budget was exceeded. The process survived and resumed on lid open at 20:56.
+The launcher now requests `ES_SYSTEM_REQUIRED` while the child runs, which
+prevents idle sleep but does not override a deliberate lid-close or sleep
+action. A temporary request was used for the already running process.
 
 `--full` sweeps every Jobindex category and **both national portals** —
 MyCareersFuture and Hong Kong's Interactive Employment Service — and widens the

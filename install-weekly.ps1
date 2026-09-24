@@ -34,7 +34,7 @@ if (-not (Test-Path $script)) { throw "weekly.ps1 is not beside this script" }
 
 # WakeToRun cannot wake this laptop on battery while the active power plan
 # disables wake timers. Keep both AC and battery wake timers enabled so the
-# Wednesday task can run while the lid is closed.
+# Wednesday task can wake the machine when the active power plan allows it.
 foreach ($supply in @('ac', 'dc')) {
     & powercfg "/set${supply}valueindex" SCHEME_CURRENT SUB_SLEEP RTCWAKE 1
     if ($LASTEXITCODE -ne 0) { throw "Could not enable $supply wake timers" }
