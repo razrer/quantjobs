@@ -6,6 +6,17 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 const html = fs.readFileSync(path.join(__dirname, '../web/index.html'), 'utf8');
+test('board data URL changes on each page load', () => {
+  const loader = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)]
+    .map(m => m[1]).find(s => s.includes('document.write('));
+  const requested = [];
+  const context = vm.createContext({
+    document: { write: html => requested.push(html) },
+    Date: { now: () => 123456789 },
+  });
+  vm.runInContext(loader, context);
+  assert.equal(requested[0], '<script src="data.js?v=123456789"></script>');
+});
 const script = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)]
   .map(m => m[1]).find(s => s.includes('function units('));
 new vm.Script(script); // Syntax-check the complete application as well.

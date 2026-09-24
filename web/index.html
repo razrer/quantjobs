@@ -854,7 +854,11 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
   </main>
 </div>
 
-<script src="data.js"></script>
+<script>
+  // A rebuilt board keeps the same filename. Give each page load a fresh URL
+  // so a browser cannot reuse an older copy after the weekly publish.
+  document.write('<script src="data.js?v=' + Date.now() + '"><\/script>');
+</script>
 <script>
 (() => {
   "use strict";

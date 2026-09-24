@@ -171,3 +171,10 @@ reaching `labels.csv`.
   re-poll recovered its one Graduate Trader posting. The UTR8 alert cleared.
   All 1,160 Python tests pass. The rebuilt board's job and firm data exactly
   matches the already published copy; only its build timestamp differs.
+
+## Stage 55 — browser cache after publication
+
+- The live CDN served the September 24 board, but a visitor still saw the
+  September 16 build date. The page requested the same `data.js` URL on every
+  visit, and the response has no `Cache-Control` header, allowing a browser to
+  reuse its old copy. Load board data with a fresh URL on each page load.
