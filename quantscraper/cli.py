@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -1088,7 +1089,7 @@ def _gather(steps: list[tuple[str, Callable[[], int]]]) -> list[str]:
     """
     if not steps:
         return []
-    reports: dict[str, tuple[int | None, str, str]] = {}
+    reports: dict[str, tuple[int | None, str, str, Exception | None]] = {}
     stream = _ThreadStream(sys.stdout)
     errors = _ThreadStream(sys.stderr)
 
@@ -1097,25 +1098,41 @@ def _gather(steps: list[tuple[str, Callable[[], int]]]) -> list[str]:
         out, err = io.StringIO(), io.StringIO()
         stream.claim(out)
         errors.claim(err)
+        error = None
         try:
             code = step()
         except Exception as exc:  # noqa: BLE001 - one source must not stop the rest
-            print(f"  FAIL {name}: {exc}", file=err)
-            code = None
-        return name, code, out.getvalue(), err.getvalue()
+            code, error = None, exc
+        return name, code, out.getvalue(), err.getvalue(), error
 
     previous = sys.stdout, sys.stderr
     sys.stdout, sys.stderr = stream, errors
     try:
         with ThreadPoolExecutor(max_workers=len(steps)) as pool:
-            for name, code, out, err in pool.map(run, steps):
-                reports[name] = (code, out, err)
+            for name, code, out, err, error in pool.map(run, steps):
+                reports[name] = (code, out, err, error)
+        # SQLite allows one writer at a time. A large national or registry
+        # batch can outlast the busy timeout while the other sources keep
+        # acquiring records. Their partial writes are idempotent, so replay
+        # lock failures after the concurrent phase has released its writers.
+        for name, step in steps:
+            code, out, err, error = reports[name]
+            if isinstance(error, sqlite3.OperationalError) and "locked" in str(error).lower():
+                _, retry_code, retry_out, retry_err, retry_error = run((name, step))
+                reports[name] = (
+                    retry_code,
+                    out + retry_out,
+                    err + f"  WARN {name}: database locked; retried after source reads\n" + retry_err,
+                    retry_error,
+                )
     finally:
         sys.stdout, sys.stderr = previous
 
     failed = []
     for name, _ in steps:
-        code, out, err = reports[name]
+        code, out, err, error = reports[name]
+        if error is not None:
+            err += f"  FAIL {name}: {error}\n"
         print(f"\n=== {name} ===", flush=True)
         if out.strip():
             print(out.rstrip())

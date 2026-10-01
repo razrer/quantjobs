@@ -22,6 +22,7 @@ from unittest import mock
 import argparse
 import contextlib
 import re
+import sqlite3
 from pathlib import Path
 
 from quantscraper import cli, http
@@ -182,6 +183,42 @@ class GatherTest(unittest.TestCase):
         finally:
             sys.stdout = saved
         self.assertEqual(failed, ["quiet"])
+
+    def test_locked_source_replays_after_concurrent_writers_finish(self):
+        calls = []
+
+        def locked_once():
+            calls.append("locked")
+            if calls.count("locked") == 1:
+                raise sqlite3.OperationalError("database is locked")
+            return 0
+
+        def other():
+            calls.append("other")
+            return 0
+
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            failed = cli._gather([("locked", locked_once), ("other", other)])
+        self.assertEqual(failed, [])
+        self.assertEqual(calls.count("locked"), 2)
+        self.assertLess(calls.index("other"), len(calls) - 1)
+        self.assertIn("retried after source reads", err.getvalue())
+        self.assertNotIn("FAIL locked", err.getvalue())
+
+    def test_persistent_lock_still_fails_loudly(self):
+        attempts = []
+
+        def locked():
+            attempts.append(1)
+            raise sqlite3.OperationalError("database is locked")
+
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            failed = cli._gather([("locked", locked)])
+        self.assertEqual(failed, ["locked"])
+        self.assertEqual(len(attempts), 2)
+        self.assertIn("FAIL locked: database is locked", err.getvalue())
 
     def test_stderr_is_kept_separate_from_stdout(self):
         """`daily`'s exit code and `alerts`' FAIL lines both live on stderr,
