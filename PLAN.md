@@ -196,9 +196,20 @@ reaching `labels.csv`.
 - Four national feeds reported `database is locked` under concurrent writes;
   the Swiss portal separately returned HTTP 504. A targeted Swiss retry
   recovered all 26,834 advertised postings. Future gathers retry locked
-  sources serially after the concurrent phase; current missed feeds require
-  direct recovery before final publication.
+  sources serially after the concurrent phase. Direct retries recovered
+  JobStream (39,641 changes), Denmark (17,164 postings), Singapore (95,506),
+  and Hong Kong (13,311, matching its advertised total).
 - An interim October 1 build was uploaded and verified byte-for-byte at the
-  public CDN: 3,838 cards, 241 worth reading. The active child is still
-  enriching descriptions; four locked feeds remain to be recovered, followed
-  by a final re-tag and publish.
+  public CDN: 3,838 cards, 241 worth reading. The hidden child survived its
+  interrupted wrapper, finished enrichment, and uploaded another October 1
+  build. Closing the lid suspended it for 96 minutes; it resumed on wake.
+- The final correction sync encountered Windows `ReplaceFileW` error 1175
+  after repeated per-entry replacements. It now applies all corrections under
+  one lock and one atomic replacement; all 338 remote corrections synced.
+  `run.ps1` now propagates the Python exit status. All 1,163 tests pass.
+- The fully recovered build is live and byte-for-byte verified at the CDN:
+  3,808 cards, 250 worth reading, built October 1 at 17:00 UTC. Against the
+  previous October 1 copy: 3,743 card IDs retained, 65 added, 14 removed;
+  238 shortlist IDs retained, 12 added, five removed. Four removals match
+  human rejections; raw records remain held. The only remaining alert is
+  Ashby/finvest's existing 404, with its last five postings retained.

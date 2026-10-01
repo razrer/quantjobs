@@ -133,8 +133,25 @@ Task Scheduler tracking it. Task Scheduler's Operational history was disabled,
 and enabling it was access denied, so the cause of the wrapper termination is
 unproved. Registration now disables stop-on-idle-end and allows 24 hours. An
 interim October 1 board (3,838 cards) was uploaded and verified at the CDN
-while the surviving child enriched bodies; recovery of four locked feeds was
-still outstanding.
+while the surviving child enriched bodies. The lid closed at 13:44 and Windows
+suspended the child until 15:20. It resumed and published 3,757 cards. Direct
+retries then completed all five failed national feeds: Swiss 26,834 against
+26,834 advertised; JobStream 39,641 changes; Denmark 17,164 postings;
+Singapore 95,506 after a complete 959-page walk; and Hong Kong 13,311 against
+13,311 advertised. Raw records and source failure history were retained.
+
+The final correction pull hit Windows `ReplaceFileW` error 1175. It had been
+rewriting `labels.csv` once for each remote correction, and a retry failed
+again. The pull now applies the batch under one lock and one atomic
+replacement; all 338 corrections synced, preserving human-filled sibling
+columns. `run.ps1` now passes through the Python exit code, which previously
+hid the correction failure from its shell caller. The full 1,163-test suite
+passes. The final October 1 board was uploaded and verified byte-for-byte at
+the public CDN: 3,808 cards, 250 worth reading, built at 17:00 UTC. From the
+previous October 1 build, 3,743 card IDs remained, 65 were added and 14 were
+removed; 238 shortlist IDs remained, 12 were added and five were removed.
+Four removed cards matched synced human rejections. The only remaining alert
+is the longstanding Ashby/finvest 404; its five acquired postings remain held.
 
 `--full` sweeps every Jobindex category and **both national portals** —
 MyCareersFuture and Hong Kong's Interactive Employment Service — and widens the
