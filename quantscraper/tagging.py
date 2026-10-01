@@ -42,7 +42,7 @@ from . import db, lexicon, role_scope
 # classifier improved" from "the market moved". **Forgetting is now loud** --
 # see `fingerprint`, which records what wrote each version's tags so that
 # `alerts` can say when the two have parted company.
-TAGGER = 66
+TAGGER = 67
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS job_tags (
@@ -1924,6 +1924,13 @@ _OFF_INDUSTRY = _terms(
     "barnansvarig", "rlc befal", "polisomradeskansli", "skogsservice",
     "forest clearer", "front office ambassador", "lymfmassageutbildad",
     "souschef", "skadeberaknare",
+    # October correction review: explicit occupations/subjects, never bare
+    # `stad`, `quantitative`, `power`, `research`, or an employer's name.
+    "byggstad", "byggstadning", "schneesportlehrperson",
+    "backereimitarbeiter", "dentalassistentin", "dentalassistenten",
+    "femme de menage", "computational chemist", "proteomics",
+    "mass spectrometry", "low power rtl", "netlist power",
+    "front office crew",
     # grounds, garden and groundworks -- the family behind `Plog,Trädgård
     # skötsel,Handskottning,odling, plock,hakklippning utemiljö`, a title that
     # names five trades and matched nothing
@@ -3524,7 +3531,7 @@ def _fit(tags: list[Tag]) -> Tag:
     # pass, not a grade they might grow into.
     if "student_only" in hard:
         return make("out_of_scope", "requires a future graduation date")
-    if relevance == "rejected" or gates.intersection({"non_quant_finance", "generic_it"}):
+    if relevance == "rejected" or gates.intersection({"non_quant_finance", "generic_it", "off_industry"}):
         return make("out_of_scope", f"excluded: {'/'.join(sorted(gates)) or 'no quant signal'}")
     # **Below every reading and above nothing.** The card stays on the board,
     # keeps its relevance verdict and stays filterable; it simply sorts last,

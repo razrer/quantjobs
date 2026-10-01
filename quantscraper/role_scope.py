@@ -20,6 +20,8 @@ STRICT_SUPPORT = (
     "redovisningsekonomer", "redovisningsansvarig", "ekonomiassistent",
     "recruiter", "recruitment", "talent acquisition", "human resources",
     "hr generalist", "hr specialist", "hr partner",
+    "hr consultant", "hr technology", "people direct advisor",
+    "personalansvarig", "ekonomiansvarig",
 )
 
 FINANCE_TITLES = (
@@ -43,6 +45,9 @@ FINANCE_TITLES = (
     "credit officer", "credit analyst", "credit assessment",
     "operational risk", "enterprise risk", "business risk",
     "middle office", "back office", "trade support", "trading support",
+    "backoffice", "backoffice administrator", "backofficekonsulter",
+    "settlement analyst", "depositary officer", "fondadministrator",
+    "vardepappersadministrator", "relationship associate",
     "trade operations", "trading operations", "settlements", "reconciliation",
     "client service", "client services", "client portfolio", "client processing",
     "relationship manager", "account manager", "accountmanager",
@@ -79,6 +84,7 @@ TECH_TITLES = (
     "devops", "cybersecurity", "cyber security", "information security",
     "informationssakerhet", "systems administrator", "database administrator",
     "scrum master", "product owner", "servicenow", "salesforce", "sharepoint",
+    "microsoft 365", "microsoft dynamics 365", "it infrastructure specialist",
 )
 
 ENTERPRISE_IT = (
@@ -87,6 +93,8 @@ ENTERPRISE_IT = (
     "service desk", "it support", "cybersecurity", "cyber security",
     "information security", "informationssakerhet", "servicenow", "salesforce",
     "sharepoint", "enterprise architect", "scrum master", "business systems",
+    "microsoft 365", "microsoft dynamics 365", "mainframe",
+    "it infrastructure specialist",
 )
 
 TRADING_TECH = (
@@ -131,7 +139,7 @@ WORK_VERBS = (
 
 SECTION_PATTERNS = (
     r"(?im)\b(?:responsibilities|what you(?:['’]ll| will) do|your (?:role|responsibilities)|role summary|position duties|key duties|arbetsuppgifter)\b|^\s*(?:role|the role)\s*[:\n]",
-    r"(?im)(?:^\s*|(?<=[.!?:])\s*)(?:qualifications|requirements|skills you|what (?:we offer|you(?:['’]ll)? bring)|the position requires|about (?:us|the company)|benefits|equal opportunity)\b|\b(?-i:REQUIREMENTS|QUALIFICATIONS)\b",
+    r"(?im)(?:^\s*|(?<=[.!?:])\s*)(?:qualifications|requirements|skills you|what (?:we offer|you(?:['’]ll)? bring)|the position requires|about (?:us|the company)|benefits|equal opportunity|vi söker dig|din profil|det är meriterande)\b|\b(?-i:REQUIREMENTS|QUALIFICATIONS)\b",
 )
 RESEARCH_DATA = ("data pipelines", "features", "feature engineering", "datasets",
                  "research data", "data validation")
@@ -139,6 +147,12 @@ RESEARCH_PURPOSE = ("systematic portfolio managers", "predictive modelling in fi
                     "quantitative research", "systematic strategies", "alpha signals")
 BODY_WORK = MODEL_WORK + TRADING_TECH + RESEARCH_PURPOSE
 TEASER_MARKERS = ("fejlmeld annonce", "tjek jobglaeden")
+
+# These describe the work's subject, not the employer. Apply only to a
+# responsibilities section; an introduction or skill list is insufficient.
+NON_MARKETS_DUTIES = ("välfärdsbrott", "välfärdsbrottsligheten",
+                      "felaktiga utbetalningar från välfärdsystemen")
+RECRUITMENT_DUTIES = ("longlisting", "candidate contact", "executive search ats")
 
 
 def _hit(text: str, terms: tuple[str, ...]) -> str | None:
@@ -181,6 +195,16 @@ def exclusion(title: str, body: str, description: str) -> tuple[str, str] | None
     """Return a scope gate and its evidence; unknown occupations stay unknown."""
     if hit := _hit(title, STRICT_SUPPORT):
         return "non_quant_finance", f"support occupation in title: {hit}"
+    analysis_role = (_hit(title, QUANT_TITLES)
+                     or _hit(title, ("analyst", "analytiker", "data scientist")))
+    if analysis_role and _hit(lexicon.normalize(description), NON_MARKETS_DUTIES):
+        _, duties = _duties(description)
+        if hit := _hit(duties, NON_MARKETS_DUTIES):
+            return "off_industry", f"non-markets duties: {hit}"
+    if _hit(title, ("executive researcher",)):
+        _, duties = _duties(description)
+        if hit := _hit(duties, RECRUITMENT_DUTIES):
+            return "non_quant_finance", f"executive recruitment duties: {hit}"
     # Actual trading seats stay, including discretionary/commodity trading.
     if _hit(title, TRADING_SEATS):
         return None

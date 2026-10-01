@@ -9,6 +9,48 @@ def exclusion(title, description=""):
 
 
 class RoleScopeTest(unittest.TestCase):
+    def test_rejected_support_variants(self):
+        for title in (
+            "Sr HR Consultant (Generalist)", "People Direct Advisor",
+            "Ekonomi- och personalansvarig till Epton Trading",
+            "Associate, HR Technology and Analytics", "Settlement Analyst",
+            "Backoffice Administrator - Mutual Funds", "Junior Depositary Officer",
+            "Fondadministratör på deltid", "Värdepappersadministratör",
+            "Relationship Associate - Public Sector Banking",
+        ):
+            with self.subTest(title=title):
+                self.assertEqual(exclusion(title)[0], "non_quant_finance")
+
+    def test_named_office_it_does_not_need_a_body(self):
+        for title in (
+            "Microsoft 365 Specialist med Exchange-bakgrund",
+            "Application Specialist Microsoft Dynamics 365 (Junior)",
+            "Expert IT Analyst - Mainframe Swedish Core Systems",
+            "IT Infrastructure Specialist - Nordea Life & Pension",
+        ):
+            with self.subTest(title=title):
+                self.assertEqual(exclusion(title)[0], "generic_it")
+        self.assertIsNone(exclusion("Software Engineer - Group Treasury"))
+        self.assertIsNone(exclusion("Information Architect, Group Data Management"))
+
+    def test_quantitative_welfare_analysis_is_not_financial_markets(self):
+        body = "Ansvar och arbetsuppgifter\nDu analyserar upplägg och metoder som används i välfärdsbrottsligheten. Vi använder Python och SQL.\nVi söker dig som har\nAkademisk examen."
+        self.assertEqual(exclusion("Kvantitativ analytiker", body)[0], "off_industry")
+        # The same phrase in an employer intro or previous-experience list
+        # must not exclude a markets role.
+        for body in (
+            "Vi förebygger välfärdsbrott. Arbetsuppgifter: Utveckla modeller för kreditrisk.\nVi söker dig som har erfarenhet.",
+            "Arbetsuppgifter: Utveckla modeller för kreditrisk.\nVi söker dig som har erfarenhet av välfärdsbrott.",
+        ):
+            with self.subTest(body=body):
+                self.assertIsNone(exclusion("Kvantitativ analytiker", body))
+        self.assertIsNone(exclusion("Kvantitativ analytiker"))
+
+    def test_executive_research_requires_recruitment_duties(self):
+        self.assertEqual(exclusion("Executive Researcher - Talent", "What you will do: Own market mapping and longlisting for board searches. Run first candidate contact.")[0], "non_quant_finance")
+        self.assertIsNone(exclusion("Executive Researcher", "Responsibilities: Develop alpha signals and backtest trading strategies."))
+        self.assertIsNone(exclusion("Executive Researcher"))
+
     def test_conventional_finance_is_out_even_at_a_quant_firm(self):
         for title in (
             "Portfolio Manager", "Treasury Analyst", "Equity Research Associate",

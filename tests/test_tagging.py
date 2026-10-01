@@ -37,6 +37,31 @@ def _tags(**kwargs) -> dict[str, set[str]]:
 
 
 class SwedishNoiseRegressionTest(unittest.TestCase):
+    def test_october_rejected_occupations_and_research_subjects(self):
+        for title in (
+            "Byggstäd", "Schneesportlehrperson", "Bäckereimitarbeiter",
+            "Dentalassistentin", "Femme de ménage", "Computational Chemist",
+            "Postdoc in mass spectrometry for quantitative proteomics",
+            "Master Thesis: Quantitative Characterization of Low-Power RTL Design Patterns",
+            "Master Thesis: Advanced IP Netlist Power Regression and AI-Ready Analytics Framework",
+            "Front Office Crew 60% på Home Hotel",
+        ):
+            with self.subTest(title=title):
+                self.assertIn("off_industry", _tags(title=title)["exclusion_reason"])
+        for title in ("Quantitative Researcher", "Power Trader", "FPGA Engineer - Trading", "Quantitative Analyst, Stockholms stad"):
+            with self.subTest(title=title):
+                self.assertNotIn("off_industry", _tags(title=title).get("exclusion_reason", set()))
+
+    def test_scope_rules_reach_stored_tag_and_fit_dimensions(self):
+        for title, gate in (("People Direct Advisor", "non_quant_finance"), ("Microsoft 365 Specialist", "generic_it")):
+            with self.subTest(title=title):
+                tags = _tags(title=title)
+                self.assertIn(gate, tags["exclusion_reason"])
+                self.assertEqual(tags["fit"], {"out_of_scope"})
+        tags = _tags(title="Kvantitativ analytiker", description="Arbetsuppgifter: Du analyserar välfärdsbrottsligheten med statistiska metoder.")
+        self.assertIn("off_industry", tags["exclusion_reason"])
+        self.assertEqual(tags["fit"], {"out_of_scope"})
+
     def test_observed_service_occupations_are_gated(self):
         for title in (
             "Städpersonal sökes", "Uppdrag: Åklagare till UC i Stockholm",
