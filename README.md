@@ -43,6 +43,8 @@ closing the lid or explicitly sleeping the laptop pauses it until wake.
 The scheduled launcher starts its Python child in a hidden window and records
 both output streams in `logs/`; it does not require an interactive console.
 The full sweep includes Singapore, Hong Kong, and the employer registries.
+If concurrent database writers exhaust their wait, the locked source is retried
+after the other source reads finish. Any remaining failure stays in the log.
 Never move the build into CI:
 only this machine has the database.
 

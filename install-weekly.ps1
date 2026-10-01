@@ -46,13 +46,16 @@ $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
 
 $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Wednesday -At 3am
 
+# A lid-close can suspend a sweep for hours. The time limit counts elapsed wall
+# time, so leave room for the machine to wake and finish the same run.
 $settings = New-ScheduledTaskSettingsSet `
     -WakeToRun `
     -StartWhenAvailable `
     -RunOnlyIfNetworkAvailable `
+    -DontStopOnIdleEnd `
     -DontStopIfGoingOnBatteries `
     -AllowStartIfOnBatteries `
-    -ExecutionTimeLimit (New-TimeSpan -Hours 8) `
+    -ExecutionTimeLimit (New-TimeSpan -Hours 24) `
     -MultipleInstances IgnoreNew
 
 Register-ScheduledTask -TaskName $name -Action $action -Trigger $trigger `

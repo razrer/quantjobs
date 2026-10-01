@@ -187,6 +187,18 @@ reaching `labels.csv`.
   before publication. The task's Operational history was disabled and could
   not be enabled from this session.
 - `weekly.ps1` no longer attaches its Python child to the scheduled process's
-  absent interactive console. With a hidden child window, the same scheduled
-  task stayed active beyond the previous interruption point and entered the
-  concurrent source-reading stage. The catch-up run is in progress.
+  absent interactive console. The scheduled wrapper was still interrupted
+  later with `0xC000013A`, but the hidden Python child survived and continued
+  collecting; a temporary awake request protects it. The installer now
+  disables stop-on-idle-end and allows 24 hours for a lid-paused run. These
+  task settings were applied while the orphaned child continued; the next
+  trigger is Wednesday, October 7 at 03:00.
+- Four national feeds reported `database is locked` under concurrent writes;
+  the Swiss portal separately returned HTTP 504. A targeted Swiss retry
+  recovered all 26,834 advertised postings. Future gathers retry locked
+  sources serially after the concurrent phase; current missed feeds require
+  direct recovery before final publication.
+- An interim October 1 build was uploaded and verified byte-for-byte at the
+  public CDN: 3,838 cards, 241 worth reading. The active child is still
+  enriching descriptions; four locked feeds remain to be recovered, followed
+  by a final re-tag and publish.

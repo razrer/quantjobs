@@ -127,10 +127,14 @@ woke October 1. Windows queued a catch-up run, but it and a manual scheduled
 start both ended with `0xC000013A` before publication. A direct console run had
 worked the prior week. The scheduled wrapper used `Start-Process -NoNewWindow`
 to attach Python to a noninteractive PowerShell console; changing that to
-`-WindowStyle Hidden` let the same scheduled task remain active and reach
-source reads. Task Scheduler's Operational history was disabled, and enabling
-it was access denied, so the console explanation is supported by the paired
-run outcomes rather than an event record.
+`-WindowStyle Hidden` let its child survive when the wrapper was again
+interrupted, twenty minutes later. The child continued reading sources without
+Task Scheduler tracking it. Task Scheduler's Operational history was disabled,
+and enabling it was access denied, so the cause of the wrapper termination is
+unproved. Registration now disables stop-on-idle-end and allows 24 hours. An
+interim October 1 board (3,838 cards) was uploaded and verified at the CDN
+while the surviving child enriched bodies; recovery of four locked feeds was
+still outstanding.
 
 `--full` sweeps every Jobindex category and **both national portals** —
 MyCareersFuture and Hong Kong's Interactive Employment Service — and widens the
