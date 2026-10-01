@@ -83,12 +83,14 @@ try {
 }
 
 try {
+    # A scheduled PowerShell process has no interactive console to share.
+    # Give Python its own hidden window; both streams still go to the files.
     $run = Start-Process -FilePath $python `
         -ArgumentList '-m', 'quantscraper', 'daily', '--full', '--publish' `
         -WorkingDirectory $root `
         -RedirectStandardOutput $outFile `
         -RedirectStandardError $errFile `
-        -NoNewWindow -Wait -PassThru
+        -WindowStyle Hidden -Wait -PassThru
     $code = $run.ExitCode
 } catch {
     Write-Log "FAIL could not start the sweep: $_"

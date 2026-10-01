@@ -122,6 +122,16 @@ The launcher now requests `ES_SYSTEM_REQUIRED` while the child runs, which
 prevents idle sleep but does not override a deliberate lid-close or sleep
 action. A temporary request was used for the already running process.
 
+On September 30 the closed laptop again slept through Wednesday at 03:00 and
+woke October 1. Windows queued a catch-up run, but it and a manual scheduled
+start both ended with `0xC000013A` before publication. A direct console run had
+worked the prior week. The scheduled wrapper used `Start-Process -NoNewWindow`
+to attach Python to a noninteractive PowerShell console; changing that to
+`-WindowStyle Hidden` let the same scheduled task remain active and reach
+source reads. Task Scheduler's Operational history was disabled, and enabling
+it was access denied, so the console explanation is supported by the paired
+run outcomes rather than an event record.
+
 `--full` sweeps every Jobindex category and **both national portals** —
 MyCareersFuture and Hong Kong's Interactive Employment Service — and widens the
 page and body queues. Those two are weekly rather than daily for one reason

@@ -178,3 +178,15 @@ reaching `labels.csv`.
   September 16 build date. The page requested the same `data.js` URL on every
   visit, and the response has no `Cache-Control` header, allowing a browser to
   reuse its old copy. Load board data with a fresh URL on each page load.
+
+## Stage 56 — September 30 scheduled refresh
+
+- The laptop was asleep from September 29 at 22:13 until October 1 at 11:13,
+  so Wednesday's 03:00 trigger could not run. The queued catch-up attempt and
+  a manual Task Scheduler start both ended with Windows code `0xC000013A`
+  before publication. The task's Operational history was disabled and could
+  not be enabled from this session.
+- `weekly.ps1` no longer attaches its Python child to the scheduled process's
+  absent interactive console. With a hidden child window, the same scheduled
+  task stayed active beyond the previous interruption point and entered the
+  concurrent source-reading stage. The catch-up run is in progress.
