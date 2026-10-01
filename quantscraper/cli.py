@@ -945,13 +945,13 @@ def _corrections(endpoint: str) -> int:
         print("no corrections pending")
         return 0
 
+    corrections = []
     for entry in data.values():
         key = (entry["ats"], entry["token"], entry["job_id"])
         context = {name: entry.get(name, "") for name in labels.CONTEXT}
-        labels.upsert(
-            labels.PATH, key, labels.DIMENSION_NAMES[entry["dim"]],
-            entry.get("value", ""), context,
-        )
+        corrections.append((key, labels.DIMENSION_NAMES[entry["dim"]],
+                            entry.get("value", ""), context))
+    labels.upsert_many(labels.PATH, corrections)
     print(f"pulled {len(data)} correction(s) into {labels.PATH}")
     return 0
 

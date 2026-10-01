@@ -457,6 +457,23 @@ class TheSheetSurvivesItsWriterTest(unittest.TestCase):
         self._write(1)
         self.assertEqual([p.name for p in Path(self.dir.name).iterdir()], ["labels.csv"])
 
+    def test_batch_corrections_replace_once_and_keep_other_labels(self):
+        self._write(1)
+        labels.upsert(self.path, ("a", "b", "1"), "seniority", "junior_0_2", {})
+        corrections = [
+            (("a", "b", "1"), "relevance", "relevant", {"title": "changed"}),
+            (("a", "b", "2"), "relevance", "rejected", {"title": "new"}),
+        ]
+        with patch.object(labels, "_write_sheet", wraps=labels._write_sheet) as write:
+            labels.upsert_many(self.path, corrections)
+            write.assert_called_once()
+            labels.upsert_many(self.path, corrections)
+            write.assert_called_once()
+        result = {label.job_id: label for label in labels.load(self.path)}
+        self.assertEqual(result["1"].relevance, "relevant")
+        self.assertEqual(result["1"].seniority, "junior_0_2")
+        self.assertEqual(result["2"].relevance, "rejected")
+
     def test_concurrent_corrections_do_not_lose_each_other(self):
         """The `serve.py` case: one thread per request, one file."""
         start = threading.Barrier(8)

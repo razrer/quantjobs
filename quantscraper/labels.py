@@ -526,23 +526,13 @@ def upsert(path: Path, key: tuple[str, str, str], dimension: str, value: str,
     existing row keeps whatever a person already put there, same as `draw`
     never overwriting a filled-in label.
     """
-    with _SHEET_LOCK:
-        _upsert(path, key, dimension, value, context)
+    upsert_many(path, [(key, dimension, value, context)])
 
 
-def _upsert(path: Path, key: tuple[str, str, str], dimension: str, value: str,
-            context: dict[str, str]) -> None:
-    """`upsert`'s read-modify-write. The caller holds `_SHEET_LOCK`."""
-    header = list(HEADER)
-    rows: list[list[str]] = []
-    if path.exists():
-        with path.open(encoding="utf-8-sig", newline="") as handle:
-            reader = csv.reader(handle)
-            first = next(reader, None)
-            if first:
-                header = first
-            rows = list(reader)
-
+def _apply_upsert(rows: list[list[str]], header: list[str],
+                  key: tuple[str, str, str], dimension: str, value: str,
+                  context: dict[str, str]) -> None:
+    """Change one row in memory without touching the other human-filled cells."""
     idx = {_column(name): i for i, name in enumerate(header)}
 
     def cell(row: list[str], name: str) -> str:
@@ -574,7 +564,27 @@ def _upsert(path: Path, key: tuple[str, str, str], dimension: str, value: str,
     if dimension in idx:
         target[idx[dimension]] = value
 
-    _write_sheet(path, [header, *rows])
+
+def upsert_many(path: Path, corrections: list[tuple[tuple[str, str, str], str,
+                                                     str, dict[str, str]]]) -> None:
+    """Apply a remote correction batch with one locked atomic replacement."""
+    if not corrections:
+        return
+    with _SHEET_LOCK:
+        header = list(HEADER)
+        rows: list[list[str]] = []
+        if path.exists():
+            with path.open(encoding="utf-8-sig", newline="") as handle:
+                reader = csv.reader(handle)
+                first = next(reader, None)
+                if first:
+                    header = first
+                rows = list(reader)
+        before = [row[:] for row in rows]
+        for key, dimension, value, context in corrections:
+            _apply_upsert(rows, header, key, dimension, value, context)
+        if rows != before or not path.exists():
+            _write_sheet(path, [header, *rows])
 
 
 def nearest(value: str, allowed: tuple[str, ...]) -> str | None:
