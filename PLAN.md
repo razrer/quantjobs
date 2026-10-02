@@ -213,3 +213,29 @@ reaching `labels.csv`.
   238 shortlist IDs retained, 12 added, five removed. Four removals match
   human rejections; raw records remain held. The only remaining alert is
   Ashby/finvest's existing 404, with its last five postings retained.
+
+## Stage 57 — learn from rejected postings
+
+Requested: inspect the user's rejected postings and improve the classifier from
+the observed mistakes. Preserve raw jobs, human labels, ambiguous missing-body
+roles, genuine quantitative work and the shortlist.
+
+- Reviewed all 402 human rejections against stored evidence. Version 67 adds
+  observed occupation and support-role variants, explicit office IT specialties,
+  and duties-based checks for welfare-fraud analysis and executive recruitment.
+- Controlled preflight across 896,110 retained postings: automatic exclusion of
+  human rejections improves from 301 to 329; no newly excluded human-positive
+  posting. This is development evidence, not independent accuracy measurement.
+- All 1,169 regressions pass. Re-tagged all 896,110 retained postings at version
+  67; human labels are byte-for-byte unchanged. All 22 non-rejected human relevance
+  labels were checked, with no newly excluded label.
+- Final board: 3,808 → 3,797 cards. The new rules remove exactly the 12 reviewed
+  cards. Recomputing existing employer profiles separately removes two CMC
+  business-analyst cards, adds three missing-description roles, and changes five
+  existing ratings. Each of those ten differences reproduces under version 66
+  with the same refreshed profiles. All other surviving card payloads and every
+  one of the 250 shortlist IDs are unchanged.
+- Details and limits: [rejection review](docs/history/engineering.md#october-2026-rules-learned-from-human-rejections).
+- Published October 2; the CDN's index, data and robots files match the verified
+  local files byte-for-byte. Code and verification are committed; the final task
+  confirmation records the remote push outcome.

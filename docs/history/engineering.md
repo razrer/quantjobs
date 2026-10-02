@@ -3788,3 +3788,62 @@ collapsed. No card was added, no shortlist entry changed, and every surviving
 card payload remained identical apart from display-only grouping fields excluded
 from the comparison. The full 1,155-test Python suite and five JavaScript board
 tests passed.
+
+## October 2026: rules learned from human rejections
+
+The October 1 correction review compared all 402 saved human rejections with
+their current stored descriptions and classifier decisions. Version 67 extends
+the existing reversible rules with observed Swedish/Swiss occupations, laboratory
+and electronics research subjects, HR titles, fund administration and settlement
+variants, relationship associates, and named enterprise IT specialties.
+
+Two cases need duties rather than a title blacklist. `Kvantitativ analytiker`
+at Utbetalningsmyndigheten analyses welfare fraud rather than financial markets;
+`Executive Researcher` at Monterro maps and contacts executive candidates.
+The new rules require those subjects inside a responsibilities section. Employer
+introductions and qualification lists do not establish the occupation. Swedish
+qualification headings now end the duties section. A scope-only `off_industry`
+gate also produces `fit: out_of_scope`, consistent with title-based exclusions.
+
+Missing descriptions remain an evidence gap. The rejected Swedbank Treasury
+Software Engineer and Nordea Information Architect do not justify excluding every
+ambiguous developer or architect. Their individual human rejections remain in
+force. Power trading, quantitative research, model validation, and specialized
+trading engineering retain their existing protections; bare `quantitative`,
+`research`, `power`, and Swedish `stad` are not occupation exclusions.
+
+Controlled preflight over 896,110 retained postings finds 698 changed rule results,
+of which 61 move from machine-visible to excluded before board-specific gates.
+Automatic handling of the 402 human rejections improves from 301 to 329. This is
+a focused development sample used to tune the rules, not independent accuracy or
+whole-market recall. No newly excluded positive human label was found.
+
+The 12 rule-driven current-card removals comprise three cleaning/dental jobs, four
+client relationship associates, two AP7 securities administration cards, one
+settlement analyst, one depositary officer, and Susquehanna's HR software role.
+All 250 shortlist identities remain. All 22 non-rejected human relevance labels
+(including the lower-rated labels) were checked; none gains an exclusion.
+
+Full re-tagging of 896,110 postings wrote 14,580,717 tags at version 67. The
+1,169-test regression suite passes. The label file's SHA-256 remains
+`30837696f91624b1345cb4a6867df3cf204474dbd80be47bb8f32feb798468be`.
+
+The final build has 3,797 cards, versus 3,808 before: 14 removed and three added.
+The two removals beyond the twelve new-rule matches are CMC's Business Analyst
+and Business Analyst - Onboarding. Three missing-description roles at LA Capital,
+American Century and Brevan Howard become visible. Four existing S.A.C. cards
+move from unknown to adjacent/stretch, and CMC's ML Ops Engineer moves in the
+opposite direction. These ten extra differences come from the existing dynamic
+quant-board profiles, which a full re-tag recalculates from current retained
+titles. Each produces identical tags under old version 66 and new version 67
+when given the same refreshed profile. Reversing profile membership reproduces
+the prior relevance/fit values. These are weak employer-based readings of ads
+without descriptions, not newly verified duties or evidence of improved accuracy.
+
+The exact card comparison accepts only the twelve reviewed rule removals and
+those ten independently checked profile changes. Every other surviving card's
+complete payload is unchanged; shortlist identities and labels are unchanged.
+Local detailed evidence is retained under `logs/rejection-review/`.
+
+Published October 2. The public CDN's `index.html`, `data.js` and `robots.txt`
+match the local release byte-for-byte: classifier 67, 3,797 cards, 250 shortlisted.
