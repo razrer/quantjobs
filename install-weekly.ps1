@@ -41,10 +41,16 @@ foreach ($supply in @('ac', 'dc')) {
 }
 
 $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
-    -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$script`"" `
+    -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$script`" -IfNeeded" `
     -WorkingDirectory $root
 
-$trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Wednesday -At 3am
+$trigger = @(
+    New-ScheduledTaskTrigger -Weekly -DaysOfWeek Wednesday -At 3am
+    # A wake-time catch-up has twice died before writing its first log line.
+    # Try at noon each day until this week's build succeeds. The launcher
+    # skips a completed or still-running sweep, so this does not add reads.
+    New-ScheduledTaskTrigger -Daily -At 12pm
+)
 
 # A lid-close can suspend a sweep for hours. The time limit counts elapsed wall
 # time, so leave room for the machine to wake and finish the same run.
@@ -63,6 +69,6 @@ Register-ScheduledTask -TaskName $name -Action $action -Trigger $trigger `
     -Description ('Runs quantscraper daily --full --publish: both national portals, ' +
                   'every Jobindex category, the ATS boards, tag, bodies, re-tag, ' +
                   'rebuild, then upload to https://quantjobs.spawned.app. ' +
-                  'Transcript in logs\weekly-<date>.log.') | Out-Null
+                  'Transcript in logs\weekly-<timestamp>.log.') | Out-Null
 
 Get-ScheduledTaskInfo -TaskName $name | Select-Object NextRunTime, LastTaskResult

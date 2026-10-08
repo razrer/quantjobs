@@ -33,12 +33,14 @@ paid services are required for this refactor.
 ./run.ps1 coverage
 ```
 
-Wednesdays at 03:00, Windows Task Scheduler runs `weekly.ps1`. It uses the user's
-logged-in profile and catches up when available. `install-weekly.ps1` manages
-registration and enables wake timers on AC and battery power. Logs are in
-`logs/`, with the last twelve weekly transcripts kept. The PC must have power;
-an interrupted run leaves its partial output in `weekly-<date>.out.tmp` and
-`weekly-<date>.err.tmp`. The launcher prevents idle sleep while running;
+Wednesdays at 03:00, Windows Task Scheduler runs `weekly.ps1`. A daily noon
+trigger retries only if no current-week build or active sweep exists. It uses
+the user's logged-in profile and catches up when available.
+`install-weekly.ps1` manages registration and enables wake timers on AC and
+battery power. Logs are in `logs/`, with the last twelve weekly transcripts
+kept. The PC must have power; an interrupted run leaves its partial output in
+`weekly-<timestamp>.out.tmp` and `weekly-<timestamp>.err.tmp`. The launcher
+prevents idle sleep while running;
 closing the lid or explicitly sleeping the laptop pauses it until wake.
 The scheduled launcher starts its Python child in a hidden window and records
 both output streams in `logs/`; it does not require an interactive console.

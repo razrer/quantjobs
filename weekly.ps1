@@ -33,24 +33,46 @@
 # The exit code is passed through, so Task Scheduler's Last Run Result is the
 # answer `daily` gave: 0 if every step succeeded, 1 if any did not.
 
+param([switch]$IfNeeded)
+
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $python = Join-Path $env:LOCALAPPDATA 'Programs\Python\Python313\python.exe'
 
 $logs = Join-Path $root 'logs'
 if (-not (Test-Path $logs)) { New-Item -ItemType Directory -Path $logs | Out-Null }
-$stamp = Get-Date -Format 'yyyy-MM-dd'
+$stamp = Get-Date -Format 'yyyy-MM-dd-HHmmss'
 $log = Join-Path $logs "weekly-$stamp.log"
 $outFile = Join-Path $logs "weekly-$stamp.out.tmp"
 $errFile = Join-Path $logs "weekly-$stamp.err.tmp"
+
+if ($IfNeeded) {
+    # The daily noon trigger retries a catch-up launch that died during wake.
+    # Do not repeat a sweep already built this week
+    # or race its still-running child after the scheduled wrapper exited.
+    $now = Get-Date
+    $daysSinceWednesday = (([int]$now.DayOfWeek - [int][DayOfWeek]::Wednesday + 7) % 7)
+    $weekStart = $now.Date.AddDays(-$daysSinceWednesday).AddHours(3)
+    $data = Join-Path $root 'web\data.js'
+    if ((Test-Path $data) -and (Get-Item $data).LastWriteTime -ge $weekStart) {
+        exit 0
+    }
+    try {
+        $active = Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" -ErrorAction Stop |
+            Where-Object { $_.CommandLine -match '-m quantscraper daily --full --publish' }
+    } catch {
+        Add-Content -Path $log -Encoding UTF8 -Value "FAIL could not check for an active sweep: $_"
+        exit 2
+    }
+    if ($active) { exit 0 }
+}
 
 function Write-Log([string]$line) {
     Add-Content -Path $log -Value $line -Encoding UTF8
 }
 
-# Keep the last twelve weeks. A run's transcript is a few hundred KB; twelve is
-# enough to watch a source go quiet across a season and few enough that nobody
-# has to think about it.
+# Keep the last twelve attempts. A run's transcript is a few hundred KB; this
+# retains failures and retries without accumulating logs indefinitely.
 Get-ChildItem -Path $logs -Filter 'weekly-*.log' -ErrorAction SilentlyContinue |
     Sort-Object LastWriteTime -Descending |
     Select-Object -Skip 12 |

@@ -94,7 +94,7 @@ redirected stderr in `NativeCommandError` records, which would bury exactly
 the `FAIL` lines worth reading), and reads those files back with
 **`-Encoding UTF8`** — without which `Öhman` logs as `Ã–hman`, measured on a
 probe run before it reached a real transcript. Transcripts are
-`logs/weekly-<date>.log`, last twelve kept, gitignored.
+`logs/weekly-<timestamp>.log`, last twelve attempts kept, gitignored.
 
 The task runs as `Interactive` rather than `S4U` on purpose: the sweep needs
 the user's own profile — the interpreter under `%LOCALAPPDATA%`, the `.env`
@@ -152,6 +152,45 @@ previous October 1 build, 3,743 card IDs remained, 65 were added and 14 were
 removed; 238 shortlist IDs remained, 12 were added and five were removed.
 Four removed cards matched synced human rejections. The only remaining alert
 is the longstanding Ashby/finvest 404; its five acquired postings remain held.
+
+On October 7 the lid stayed closed through the Wednesday 03:00 trigger. The
+queued launch began three seconds after wake at 10:17, ended with Windows
+`0xC000013A`, and wrote no log. A manual Task Scheduler start while fully awake
+on October 8 did run the full pipeline. The wrapper and Python process both
+finished; the site received an October 8 build, verified against a fresh CDN
+download. The precise cause of the wake-time termination remains unproved
+because Task Scheduler's Operational history was disabled. The installed task
+now checks again at noon each day. `weekly.ps1 -IfNeeded` skips a current-week
+local build or an active full sweep; distinct attempts get timestamped logs.
+The guard was tested against both an active Python child and a completed
+current-week build without launching another reader.
+
+The October 8 full run failed its Danish step before reading any pages: Jobindex
+moved `searchResponse` and `subjobcategory_list` from the Stash key
+`jobsearch/result_app` to `jobsearch/result_app/list`. The parser now accepts
+both keys and still fails on a missing response. A full retry read 18,687
+postings against 18,661 advertised across 100 slices and 1,290 pages, with
+62,968 Danish rows held. The 26-row excess is compatible with postings changing
+during the walk; the old rows and failed poll remain in history.
+
+Oracle's Kotak tenant exposed a second coverage cap: it advertised 16,008
+postings but returned an empty page at offset 10,000. The earlier reader raised
+and preserved its 9,146 last successful rows. The [Oracle finder reference](https://docs.oracle.com/en/cloud/saas/human-resources/farws/op-recruitingcejobrequisitions-get.html)
+documents posting-date bounds. Live probes found that `postingEndDate` only
+filters when `postingStartDate` is also present; complementary ranges around
+September 15 totaled 15,993 against the same unfiltered advertised total.
+The reader now splits a range above the 10,000-result window by posting date,
+recurses if needed, deduplicates IDs, and still checks the final count. A
+tenant ignoring the date filters fails loudly. A targeted retry read 15,983
+postings, wrote them without discarding earlier records, and cleared the board
+alert. Workday/Aesop still returned HTTP 422 on one normal retry; the existing
+Finvest board still returned HTTP 404. Their last acquired rows remain held.
+After re-tagging the recovered records, 16 newly queued title-only ads were
+enriched (five bodies filled) and re-tagged. The final October 8 board was
+published and verified byte-for-byte from a fresh CDN download: 3,899 cards,
+261 worth reading, built 13:38 UTC. All 3,893 interim card IDs and all 259
+strong/apply-now IDs remained; six Danish cards and two shortlist IDs were
+added. All 1,172 Python tests pass.
 
 `--full` sweeps every Jobindex category and **both national portals** —
 MyCareersFuture and Hong Kong's Interactive Employment Service — and widens the

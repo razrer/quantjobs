@@ -239,3 +239,26 @@ roles, genuine quantitative work and the shortlist.
 - Published October 2; the CDN's index, data and robots files match the verified
   local files byte-for-byte. Code and verification are committed; the final task
   confirmation records the remote push outcome.
+
+## Stage 58 — October 7 missed weekly refresh
+
+- The laptop was closed during Wednesday's 03:00 trigger. Its wake-time catch-up
+  ended `0xC000013A` before writing a log. A manual scheduled start while fully
+  awake on October 8 completed the pipeline and uploaded an interim board;
+  its public `data.js` matched the local file byte-for-byte.
+- The full run exposed two coverage failures. Jobindex moved its search response
+  into a different Stash key; a repaired full retry read 18,687 Danish postings
+  against 18,661 advertised. Oracle's Kotak board advertised about 16,000 but
+  stopped at the 10,000-result window; documented date bounds now partition
+  larger boards, and a targeted retry read 15,983 postings and cleared its alert.
+- A daily noon retry trigger is installed alongside Wednesday 03:00. Its guard
+  skipped both a still-running sweep and a completed current-week build without
+  duplicating source reads. Distinct attempts now keep timestamped logs.
+- Re-tagged the recovered rows, fetched details for all 16 new title-only
+  candidates (five bodies filled), and re-tagged those five. The final alert
+  check has only Workday/Aesop's 422 and Ashby/finvest's 404; their last records
+  are retained. All 1,172 Python tests pass.
+- The final build is live and byte-for-byte verified with a fresh CDN download:
+  3,899 cards, 261 worth reading, built October 8 at 13:38 UTC. Against the
+  interim October 8 build, all 3,893 card IDs remain and six Danish cards were
+  added. The strong/apply-now shortlist retained all 259 IDs and gained two.
