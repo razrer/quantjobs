@@ -329,7 +329,14 @@ def parse(markup: str) -> Page:
     except ValueError as exc:
         raise Blocked(f"unreadable Stash island: {exc}") from exc
 
-    store = (stash.get("jobsearch/result_app") or {}).get("storeData") or {}
+    # Jobindex moved the same store into /list in October 2026. Retain the
+    # previous island path for pages still served with the older layout.
+    store = {}
+    for key in ("jobsearch/result_app/list", "jobsearch/result_app"):
+        candidate = (stash.get(key) or {}).get("storeData") or {}
+        if candidate.get("searchResponse"):
+            store = candidate
+            break
     response = store.get("searchResponse")
     if not response:
         raise Blocked("the Stash island carries no search response")

@@ -55,6 +55,7 @@ def _markup(
     max_page: int = 50,
     page_size: int = 20,
     taxonomy: bool = True,
+    island_key: str = "jobsearch/result_app",
 ) -> str:
     """A page as the site serves it: the island inline, chrome either side."""
     store = {
@@ -71,7 +72,7 @@ def _markup(
             ["Informationsteknologi", [["Systemudvikling og programmering", 1]]],
             ["Handel og service", [["Detailhandel", 70]]],
         ]
-    stash = {"common": {"lang": "da"}, "jobsearch/result_app": {"storeData": store}}
+    stash = {"common": {"lang": "da"}, island_key: {"storeData": store}}
     return (
         "<html><head><title>Ledige job</title></head><body>\n"
         "<script>//<![CDATA[\n\n    var Stash = "
@@ -122,6 +123,16 @@ class IslandTest(unittest.TestCase):
         page = jobindex.parse(_markup(_full(3), hitcount=342))
         self.assertEqual(len(page.rows), 3)
         self.assertEqual(page.hitcount, 342)
+
+    def test_the_list_island_keeps_results_totals_and_taxonomy(self):
+        page = jobindex.parse(_markup(
+            _full(3), hitcount=342, max_page=12, page_size=25,
+            island_key="jobsearch/result_app/list",
+        ))
+        self.assertEqual(len(page.rows), 3)
+        self.assertEqual(page.hitcount, 342)
+        self.assertEqual(page.window, 300)
+        self.assertEqual(page.taxonomy[35], "Finans og forsikring")
 
     def test_the_board_is_believed_about_its_own_window(self):
         page = jobindex.parse(_markup(_full(2), max_page=12, page_size=25))

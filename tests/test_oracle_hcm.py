@@ -24,6 +24,7 @@ import sqlite3
 import time
 import unittest
 import urllib.error
+import urllib.parse
 from unittest import mock
 
 from quantscraper import ats, extract
@@ -67,6 +68,44 @@ class OracleTokenTest(unittest.TestCase):
 
 
 class OraclePagingTest(unittest.TestCase):
+    def test_a_result_window_is_split_by_posting_date_without_losing_jobs(self):
+        rows = [
+            _req(str(n), PostedDate=f"2026-10-{day:02d}")
+            for day, start in ((8, 0), (7, 2), (6, 4))
+            for n in range(start, start + 2)
+        ]
+        asked = []
+
+        def answer(url, **_):
+            finder = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)["finder"][0]
+            fields = dict(part.split("=", 1) for part in finder.split(";", 1)[1].split(","))
+            asked.append(fields)
+            matching = [
+                row for row in rows
+                if row["PostedDate"] >= fields.get("postingStartDate", "0001-01-01")
+                and row["PostedDate"] <= fields.get("postingEndDate", "9999-12-31")
+            ]
+            offset = int(fields["offset"])
+            page = matching[offset:offset + 2] if offset < 4 else []
+            return _payload(len(matching) if page else 0, *page)
+
+        with mock.patch.object(extract, "_ORACLE_PAGE", 2), \
+             mock.patch.object(extract, "_ORACLE_WINDOW", 4), \
+             mock.patch.object(extract.http, "get_text", side_effect=answer):
+            jobs = extract.oracle_hcm("pod.example|CX_1001")
+        self.assertEqual({job.job_id for job in jobs}, {str(n) for n in range(6)})
+        self.assertTrue(any("postingStartDate" in query for query in asked))
+        self.assertTrue(any("postingEndDate" in query for query in asked))
+
+    def test_a_tenant_ignoring_date_filters_fails_before_writing(self):
+        with mock.patch.object(extract, "_ORACLE_WINDOW", 4), \
+             mock.patch.object(
+                 extract, "_oracle_page",
+                 return_value=(6, [_req("1", PostedDate="2026-10-07")]),
+             ):
+            with self.assertRaisesRegex(ValueError, "did not shrink"):
+                extract.oracle_hcm("pod.example|CX_1001")
+
     def test_a_short_page_is_not_the_end_of_the_board(self):
         """Oracle serves the occasional short page in the middle of a board.
 

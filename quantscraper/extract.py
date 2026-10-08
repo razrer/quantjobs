@@ -28,9 +28,10 @@ import json
 import re
 import sqlite3
 import urllib.error
-from concurrent.futures import ThreadPoolExecutor
 import urllib.parse
 import xml.etree.ElementTree as ElementTree
+from concurrent.futures import ThreadPoolExecutor
+from datetime import date, timedelta
 from collections.abc import Callable
 
 from . import db, http, parsing
@@ -986,6 +987,80 @@ def avature(token: str) -> list[Job]:
 # with HTTP 200 one day, which is the Workday trap two hundred lines up.
 _ORACLE_PAGE = 200
 _ORACLE_PAGES = 1_000
+_ORACLE_WINDOW = 10_000  # Kotak's 16,008 results stopped at offset 10,000.
+
+
+def _oracle_page(
+    origin: str, site: str, offset: int,
+    start: str | None = None, end: str | None = None,
+) -> tuple[int, list[dict]]:
+    finder = (
+        f"findReqs;siteNumber={site},limit={_ORACLE_PAGE},"
+        f"offset={offset},sortBy=POSTING_DATES_DESC"
+    )
+    if start is not None:
+        finder += f",postingStartDate={start}"
+    if end is not None:
+        finder += f",postingEndDate={end}"
+    payload = _json(
+        f"{origin}/hcmRestApi/resources/latest/recruitingCEJobRequisitions"
+        "?onlyData=true&expand=requisitionList.secondaryLocations"
+        f"&finder={urllib.parse.quote(finder, safe=';,=')}"
+    )
+    items = payload.get("items") or []
+    if not items:
+        return 0, []
+    block = items[0]
+    return int(block.get("TotalJobsCount") or 0), block.get("requisitionList") or []
+
+
+def _oracle_range(
+    origin: str, site: str, first: tuple[int, list[dict]],
+    start: str | None = None, end: str | None = None,
+) -> list[dict]:
+    """Walk one Oracle date range, splitting if its 10,000-result window bites."""
+    advertised, initial = first
+    if advertised > _ORACLE_WINDOW:
+        # Oracle reports the full total but returns an empty list at offset
+        # 10,000. Its documented posting date filters give two disjoint ranges.
+        # A probe at the last reachable page finds a boundary without walking
+        # the same 10,000 rows before splitting.
+        _, boundary = _oracle_page(
+            origin, site, _ORACLE_WINDOW - _ORACLE_PAGE, start, end
+        )
+        if not boundary or not boundary[-1].get("PostedDate"):
+            raise ValueError("Oracle's result window has no posting-date boundary")
+        cutoff = boundary[-1]["PostedDate"][:10]
+        try:
+            following = (date.fromisoformat(cutoff) + timedelta(days=1)).isoformat()
+        except ValueError as exc:
+            raise ValueError(f"Oracle returned an invalid posting date {cutoff!r}") from exc
+        older_start = start or "1900-01-01"
+        older = _oracle_page(origin, site, 0, older_start, cutoff)
+        newer = _oracle_page(origin, site, 0, following, end)
+        if older[0] >= advertised or newer[0] >= advertised:
+            raise ValueError(
+                "Oracle's posting-date filters did not shrink the result window"
+            )
+        return (
+            _oracle_range(origin, site, older, older_start, cutoff)
+            + _oracle_range(origin, site, newer, following, end)
+        )
+
+    rows: list[dict] = []
+    seen_page: str | None = None
+    for page in range(_ORACLE_PAGES):
+        _, postings = first if page == 0 else _oracle_page(
+            origin, site, page * _ORACLE_PAGE, start, end
+        )
+        if not postings:
+            break
+        this_page = "|".join(str(job.get("Id") or "") for job in postings)
+        if this_page == seen_page:
+            break
+        seen_page = this_page
+        rows.extend(postings)
+    return rows
 
 
 def oracle_hcm(token: str) -> list[Job]:
@@ -995,14 +1070,12 @@ def oracle_hcm(token: str) -> list[Job]:
     this project recognised Oracle at all until a roster measurement asked why
     a Copenhagen bank produced no jobs.
 
-    **`TotalJobsCount` is trustworthy here, and is still not the stop
-    condition.** Oracle reports the true total on every page including one past
-    the end, so it does not have Workday's `total: 0` trap -- but the rule this
-    project settled on after that trap is to page until a short page and treat
-    the advertised total as a *check* rather than a bound, which is also what
-    `jobvite` does with its "1-50 of 73" line. So the total is compared against
-    what arrived and a mismatch is raised, which is the loud failure; the
-    silent one would be believing it.
+    **`TotalJobsCount` on the first page is a check, not a stop condition.**
+    Oracle reports the unfiltered total there, even when its result window
+    ends at offset 10,000. An empty page reports zero, as Workday does after
+    its first page. We walk each reachable range to an empty page and compare
+    the distinct IDs against the first advertised total; a large mismatch
+    raises instead of silently accepting a truncated board.
 
     **`PostingEndDate` is a published closing date**, so it is mapped. Danske's
     tenant leaves it null on every row, which costs nothing -- the rule is that
@@ -1015,68 +1088,33 @@ def oracle_hcm(token: str) -> list[Job]:
             f"oracle_hcm token {token!r} is not podhost|siteNumber -- re-run `ats`"
         )
     origin = f"https://{host}"
+    first = _oracle_page(origin, site, 0)
+    raw = _oracle_range(origin, site, first)
     jobs: list[Job] = []
-    advertised: int | None = None
-    seen_page: str | None = None
-    for page in range(_ORACLE_PAGES):
-        finder = (
-            f"findReqs;siteNumber={site},limit={_ORACLE_PAGE},"
-            f"offset={page * _ORACLE_PAGE},sortBy=POSTING_DATES_DESC"
-        )
-        payload = _json(
-            f"{origin}/hcmRestApi/resources/latest/recruitingCEJobRequisitions"
-            "?onlyData=true&expand=requisitionList.secondaryLocations"
-            f"&finder={urllib.parse.quote(finder, safe=';,=')}"
-        )
-        items = payload.get("items") or []
-        if not items:
-            break
-        block = items[0]
-        if advertised is None:
-            advertised = block.get("TotalJobsCount")
-        postings = block.get("requisitionList") or []
-        # **Stop on an empty page, never on a short one.** Oracle serves the
-        # occasional 199-row page in the middle of a board -- measured on
-        # Kotak's tenant, where offset 3,000 hands back 199 and offset 3,200
-        # hands back a full 200 -- so a short-page stop ends the walk wherever
-        # one lands. That truncated Kotak at 3,199 of 9,959 and Tata Capital at
-        # 1,599 of 5,542, and both counts are the round number a cap leaves
-        # behind. This is the Jobbsafari lesson in a second format: the real
-        # last page is the empty one, and past the end Oracle answers with a
-        # block whose `requisitionList` is empty and whose total reads 0.
-        if not postings:
-            break
-        # With the short-page stop gone, a tenant that ignores `offset` would
-        # serve page one until the page bound -- 1,000 requests and 200,000
-        # duplicate rows. Workday needed the same guard for the same reason.
-        this_page = "|".join(str(job.get("Id") or "") for job in postings)
-        if this_page == seen_page:
-            break
-        seen_page = this_page
-        for job in postings:
-            job_id = str(job.get("Id") or "")
-            if not job_id:
-                continue
-            jobs.append(
-                Job(
-                    ats="oracle_hcm",
-                    token=token,
-                    job_id=job_id,
-                    title=job.get("Title") or "",
-                    url=f"{origin}/hcmUI/CandidateExperience/en/sites/{site}/job/{job_id}",
-                    location=job.get("PrimaryLocation"),
-                    department=job.get("Department") or job.get("JobFamily"),
-                    posted_at=job.get("PostedDate"),
-                    deadline=job.get("PostingEndDate"),
-                    description=_text(job.get("ShortDescriptionStr")),
-                )
+    seen_ids: set[str] = set()
+    for job in raw:
+        job_id = str(job.get("Id") or "")
+        if not job_id or job_id in seen_ids:
+            continue
+        seen_ids.add(job_id)
+        jobs.append(
+            Job(
+                ats="oracle_hcm",
+                token=token,
+                job_id=job_id,
+                title=job.get("Title") or "",
+                url=f"{origin}/hcmUI/CandidateExperience/en/sites/{site}/job/{job_id}",
+                location=job.get("PrimaryLocation"),
+                department=job.get("Department") or job.get("JobFamily"),
+                posted_at=job.get("PostedDate"),
+                deadline=job.get("PostingEndDate"),
+                description=_text(job.get("ShortDescriptionStr")),
             )
-    # `TotalJobsCount` is honest on every page here, unlike Workday's `total`,
-    # which is what lets this be a check rather than the stop condition. The
-    # churn tolerance it reads is `_shortfall`'s -- written for BNY's 1,387 of
-    # 1,390, and shared since seven other readers turned out to be raising on a
-    # difference of one.
-    _shortfall("oracle_hcm", token, advertised, jobs)
+        )
+    # Use the first page's total: the empty page at the result window reports
+    # zero. `_shortfall` tolerates small live churn, as for BNY's 1,387 of
+    # 1,390, but rejects a truncated range.
+    _shortfall("oracle_hcm", token, first[0], jobs)
     return jobs
 
 
