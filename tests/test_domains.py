@@ -187,3 +187,72 @@ class BestWebsiteTest(unittest.TestCase):
         from quantscraper.resolve import _best_website
 
         self.assertIsNone(_best_website([None, None]))
+
+
+class RegradeConvergesTest(unittest.TestCase):
+    """Every row a pass walks has to leave a mark, including the ones it fails.
+
+    `regrade_targets` orders by `checked_at`, so a row nothing writes keeps the
+    oldest timestamp and sorts first on the next pass as well. The `hit is
+    None` branch was already written to break that loop -- its comment names
+    the 3,422 rows that sat in it -- and two paths out of `work` still returned
+    early without recording anything: a name that normalizes to nothing, and a
+    host whose fetch raises. Under a weekly `--limit` those rows are the head
+    of the queue forever and the budget never reaches past them.
+    """
+
+    def _connection(self, *rows):
+        connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
+        connection.row_factory = sqlite3.Row
+        connection.executescript(domains.SCHEMA)
+        connection.executemany(
+            "INSERT INTO domain_lookups (query, domain, method, evidence, checked_at)"
+            " VALUES (?, ?, 'name-strong', ?, '2026-01-01')",
+            rows,
+        )
+        connection.commit()
+        return connection
+
+    def _pending(self, connection):
+        return [row["query"] for row in domains.regrade_targets(connection, 10)]
+
+    def test_a_host_that_raises_is_recorded_as_unreachable(self):
+        connection = self._connection(
+            ("Hostile Ltd", "hostile.com", "https://hostile.com/ names 'hostile'"),
+        )
+
+        with mock.patch.object(domains, "verify", side_effect=TimeoutError("boom")):
+            checked, demoted = domains.regrade(connection, 10, workers=1)
+
+        self.assertEqual((checked, demoted), (1, 0))
+        row = connection.execute(
+            "SELECT method, domain, evidence FROM domain_lookups"
+        ).fetchone()
+        self.assertEqual(row["method"], "name-strong", "the grade must stand")
+        self.assertEqual(row["domain"], "hostile.com", "the domain must stand")
+        self.assertIn("[unreachable at regrade]", row["evidence"])
+        self.assertEqual(self._pending(connection), [])
+
+    def test_a_name_that_normalizes_to_nothing_is_recorded_too(self):
+        connection = self._connection(
+            ("A/S", "empty.com", "https://empty.com/ names 'a'"),
+        )
+
+        with mock.patch.object(domains, "verify") as verify:
+            domains.regrade(connection, 10, workers=1)
+
+        verify.assert_not_called()
+        self.assertEqual(self._pending(connection), [])
+
+    def test_a_budgeted_pass_reaches_the_next_row(self):
+        """The failure this exists for: the first row must not block the queue."""
+        connection = self._connection(
+            ("Hostile Ltd", "hostile.com", "https://hostile.com/ names 'hostile'"),
+            ("Next Ltd", "next.com", "https://next.com/ names 'next'"),
+        )
+
+        with mock.patch.object(domains, "verify", side_effect=TimeoutError("boom")):
+            domains.regrade(connection, 1, workers=1)
+
+        self.assertEqual(self._pending(connection), ["Next Ltd"])

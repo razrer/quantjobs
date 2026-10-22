@@ -359,9 +359,17 @@ def regrade_targets(connection: sqlite3.Connection, limit: int):
 
     Ordered oldest first, so an interrupted pass resumes where it stopped
     rather than re-reading the rows it just refreshed.
+
+    **`evidence` is selected because `regrade` writes it back**, and leaving it
+    out did not read as a missing column -- it read as a crash on the first
+    unreachable host. `row['evidence']` is built outside the `try` that guards
+    `verify`, so the `IndexError` escaped `work`, came back out of
+    `pool.map` and killed the pass. The marker that branch exists to write has
+    therefore never been written once: 0 rows carry it, against a queue 3,502
+    deep. Pinned by `tests/test_domains.RegradeConvergesTest`.
     """
     return connection.execute(
-        "SELECT query, domain FROM domain_lookups"
+        "SELECT query, domain, evidence FROM domain_lookups"
         " WHERE method = 'name-strong' AND evidence NOT LIKE '%, but no %'"
         "   AND evidence NOT LIKE '% and ''%'"
         "   AND evidence NOT LIKE '%[unreachable at regrade]'"
@@ -389,24 +397,37 @@ def regrade(
     if not rows:
         return 0, 0
 
-    def work(row: sqlite3.Row) -> Lookup | None:
+    def unreachable(row: sqlite3.Row) -> Lookup:
+        """Record the attempt without touching the grade or the domain.
+
+        Unreachable today says nothing about yesterday's evidence, so the grade
+        and the domain both stand. The attempt is still recorded: without it
+        the row keeps matching `regrade_targets` and the pass re-fetches the
+        same dead hosts on every run instead of converging. 3,422 rows sat in
+        exactly that loop.
+        """
+        return Lookup(
+            row["query"], row["domain"], "name-strong",
+            f"{row['evidence']} [unreachable at regrade]",
+        )
+
+    def work(row: sqlite3.Row) -> Lookup:
         normalized = normalize_name(row["query"])
+        # **Recorded rather than skipped, both here and on the exception
+        # below.** `regrade_targets` orders by `checked_at`, so a row nothing
+        # writes keeps the oldest timestamp, keeps sorting first, and is
+        # re-fetched by every budgeted pass -- the loop the `hit is None`
+        # branch below was already written to break, left open for the two
+        # cases that return early. A pass that cannot finish the queue must at
+        # least advance through it.
         if not normalized:
-            return None
+            return unreachable(row)
         try:
             hit = verify(row["domain"], normalized)
         except Exception:  # noqa: BLE001 -- one hostile host must not stop the pass
-            return None
+            return unreachable(row)
         if hit is None:
-            # Unreachable today says nothing about yesterday's evidence, so the
-            # grade and the domain both stand. The attempt is still recorded:
-            # without it the row keeps matching `regrade_targets` and the pass
-            # re-fetches the same dead hosts on every run instead of
-            # converging. 3,422 rows sat in exactly that loop.
-            return Lookup(
-                row["query"], row["domain"], "name-strong",
-                f"{row['evidence']} [unreachable at regrade]",
-            )
+            return unreachable(row)
         _, strength, evidence = hit
         method = "name-strong" if strength == "strong" else "name-weak"
         return Lookup(row["query"], row["domain"], method, evidence)
@@ -416,8 +437,6 @@ def regrade(
     with ThreadPoolExecutor(max_workers=workers) as pool:
         for lookup in pool.map(work, rows):
             checked += 1
-            if lookup is None:
-                continue
             demoted += lookup.method == "name-weak"
             batch.append(lookup)
             if len(batch) >= 100:

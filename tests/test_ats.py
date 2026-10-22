@@ -380,3 +380,83 @@ class FingerprintTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReprobeCursorTest(unittest.TestCase):
+    """A budgeted re-probe has to move through its queue, and it did not.
+
+    `reprobe_targets` was `ORDER BY a.tier, a.domain` and `reprobe` writes a
+    row only when `_improves` says so, so the thousands it declines kept their
+    old `checked_at` and kept sorting first. Under a `--limit` that is not a
+    queue at all: the same alphabetical head of tier A every run, and tier B --
+    the 3,561 rows the sweep exists for -- never reached. Scheduling the pass
+    weekly makes that the difference between progress and a report of it.
+    """
+
+    def _connection(self):
+        connection = db.connect(":memory:")
+        connection.executescript(ats.SCHEMA)
+        return connection
+
+    def _tier_b(self, connection, domain, probed_at=None):
+        connection.execute(
+            "INSERT INTO ats_resolution"
+            " (domain, careers_url, ats, token, tier, evidence, checked_at)"
+            " VALUES (?, ?, NULL, NULL, 'B', 'x', '2026-08-31')",
+            (domain, f"https://{domain}/careers"),
+        )
+        if probed_at is not None:
+            connection.execute(
+                "INSERT INTO ats_attempts VALUES (?, ?)", (domain, probed_at)
+            )
+        connection.commit()
+
+    def test_a_domain_nobody_has_tried_comes_first(self):
+        connection = self._connection()
+        self._tier_b(connection, "tried.com", probed_at="2026-10-01")
+        self._tier_b(connection, "fresh.com")
+
+        self.assertEqual(
+            [row["domain"] for row in ats.reprobe_targets(connection, 10)],
+            ["fresh.com", "tried.com"],
+        )
+
+    def test_the_oldest_attempt_is_next(self):
+        connection = self._connection()
+        self._tier_b(connection, "recent.com", probed_at="2026-10-15")
+        self._tier_b(connection, "ancient.com", probed_at="2026-09-01")
+
+        self.assertEqual(
+            [row["domain"] for row in ats.reprobe_targets(connection, 1)],
+            ["ancient.com"],
+        )
+
+    def test_a_declined_re_walk_still_moves_the_cursor(self):
+        """The whole point: `_improves` says no and the queue advances anyway.
+
+        Without this the next budgeted pass re-walks the same domain, which is
+        the loop that made a weekly re-probe a no-op after its first run.
+        """
+        connection = self._connection()
+        self._tier_b(connection, "first.com")
+        self._tier_b(connection, "second.com")
+        # Tier C is a demotion, so `_improves` refuses to write it -- the
+        # cheapest way to get a decline without inventing an outcome.
+        declined = ats.Resolution("first.com", None, None, None, "C", "no page")
+
+        with mock.patch.object(ats, "resolve_domain", return_value=declined):
+            checked, promoted, corrected = ats.reprobe(connection, 1, workers=1)
+
+        self.assertEqual((checked, promoted, corrected), (1, 0, 0))
+        self.assertEqual(
+            connection.execute(
+                "SELECT tier FROM ats_resolution WHERE domain = 'first.com'"
+            ).fetchone()["tier"],
+            "B",
+            "a decline must not demote the stored answer",
+        )
+        self.assertEqual(
+            [row["domain"] for row in ats.reprobe_targets(connection, 1)],
+            ["second.com"],
+            "the next pass must reach the domain the first one did not",
+        )

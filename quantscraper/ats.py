@@ -52,6 +52,17 @@ CREATE TABLE IF NOT EXISTS ats_resolution (
     evidence    TEXT,
     checked_at  TEXT NOT NULL
 );
+
+-- When a re-probe last *looked* at a domain, as distinct from when the stored
+-- answer last *moved*. `reprobe` writes only an improvement -- that is the
+-- promotions-only rule and it must stay -- so `checked_at` cannot be the
+-- cursor: a budgeted pass would re-walk the head of its own queue forever and
+-- never reach the rest. Separate from the answer for the reason
+-- `pages.page_attempts` is: an attempt is not a result.
+CREATE TABLE IF NOT EXISTS ats_attempts (
+    domain    TEXT PRIMARY KEY,
+    probed_at TEXT NOT NULL
+);
 """
 
 # Two bounds, and the host patterns need both.
@@ -833,21 +844,49 @@ def reprobe_targets(connection: sqlite3.Connection, limit: int) -> list[sqlite3.
 
     The stored `careers_url` comes back with each row, because `reprobe` needs
     to know what it is replacing.
+
+    **Ordered by oldest attempt, which is what makes a budgeted pass move.**
+    It was `ORDER BY a.tier, a.domain`, and under a `--limit` that is not a
+    queue: `reprobe` writes a row only when `_improves` says so, so the
+    thousands it declines keep their old `checked_at`, keep sorting first, and
+    get re-walked every single run. Alphabetical order made it the same few
+    hundred tier-A domains every time and tier B was never reached at all.
+    `ats_attempts` records the visit instead, so a pass resumes where the last
+    one stopped -- the invariant AGENTS.md states as "schedule oldest attempts
+    first where queues are limited", and the reason it names failures too.
     """
     return connection.execute(
         """
-        SELECT domain, careers_url FROM ats_resolution a
+        SELECT a.domain, a.careers_url FROM ats_resolution a
+        LEFT JOIN ats_attempts p ON p.domain = a.domain
         WHERE a.tier = 'B'
            OR (a.tier = 'A' AND a.token IS NULL)
            OR (a.tier = 'A'
                AND COALESCE(a.evidence, '') NOT LIKE '%sites.py%'
                AND NOT EXISTS (
                  SELECT 1 FROM jobs j WHERE j.ats = a.ats AND j.token = a.token))
-        ORDER BY a.tier, a.domain
+        ORDER BY COALESCE(p.probed_at, ''), a.tier, a.domain
         LIMIT ?
         """,
         (limit,),
     ).fetchall()
+
+
+def record_attempts(
+    connection: sqlite3.Connection, domains: list[str], timestamp: str | None = None
+) -> None:
+    """Note that these domains were looked at, whatever the answer was.
+
+    Every domain a pass walks, not only the ones it writes -- see
+    `reprobe_targets`, where that distinction is the whole cursor.
+    """
+    moment = timestamp or db.now()
+    with connection:
+        connection.executemany(
+            "INSERT INTO ats_attempts VALUES (?, ?)"
+            " ON CONFLICT(domain) DO UPDATE SET probed_at = excluded.probed_at",
+            [(domain, moment) for domain in domains],
+        )
 
 
 def record(connection: sqlite3.Connection, results: list[Resolution]) -> None:
@@ -947,9 +986,17 @@ def reprobe(
 
     checked = promoted = corrected = 0
     batch: list[Resolution] = []
+    # Flushed as the pass goes, for the same reason `batch` is: the cursor is
+    # only useful if it survives the crash. A pass that walked three thousand
+    # domains and died would otherwise resume at the first of them.
+    visited: list[str] = []
     with ThreadPoolExecutor(max_workers=workers) as pool:
         for stored, result in zip(rows, pool.map(resolve_domain, [r["domain"] for r in rows])):
             checked += 1
+            visited.append(stored["domain"])
+            if len(visited) >= 100:
+                record_attempts(connection, visited)
+                visited.clear()
             if not _improves(result, stored):
                 continue
             if result.tier == "A":
@@ -966,6 +1013,7 @@ def reprobe(
                 record(connection, batch)
                 batch.clear()
     record(connection, batch)
+    record_attempts(connection, visited)
     return checked, promoted, corrected
 
 
