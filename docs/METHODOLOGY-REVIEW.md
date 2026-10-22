@@ -174,6 +174,64 @@ attempt.
 Both are pinned: `tests/test_ats.ReprobeCursorTest`,
 `tests/test_domains.RegradeConvergesTest`.
 
+### F6b — The second SuccessFactors surface: 505 postings, and a zero-yield board result. (M)
+
+**Done 22 October.** RMK's unify career site is a JSON API, read off the site's
+own bundle rather than guessed — `j2w.searchManager.min.js` POSTs
+`{keywords, locale, location, pageNumber, sortBy}` to
+`/services/recruiting/v1/jobs`, and a GET answers **405**, which confirmed the
+path before a body was sent. Three traps, each quiet when wrong:
+
+- **The locale is neither optional nor guessable.** `en_US` against Orkla
+  returns `totalJobs: 0` — a well-formed empty answer, not an error — where its
+  own `en_GB` returns 9. It is read from the page.
+- **The posting URL is `/job/{display title}/{id}-{locale}`**, not the classic
+  `/job/{slug}/{id}/`, which redirects to `/errorpage/`. Taken from the
+  widget's own href builder and then opened. A card nobody can open is the
+  SmartRecruiters defect this project already paid 1,507 rows for.
+- **One pass cannot read the board.** The API hands over exactly as many rows
+  as it advertises and shuffles which page each lands on, so a single pass
+  serves some postings twice and others never: Royal London 33 advertised, 33
+  served, **26 distinct**. The walk repeats until it stops finding
+  requisitions — `jobroom_ch`'s two-ended walk in another shape — and
+  `_shortfall` gained `sweep.problem`'s served/distinct distinction so a moving
+  order is not reported as truncation.
+
+The fallback is gated on the unify marker, so a layout the reader cannot parse
+stays as loud as it was rather than quietly becoming a request to a different
+product — the `heyrowan` invariant `tests/test_icims` pins, which the first
+version of this change broke.
+
+**Result: 5 rows resolved, 4 boards, 505 postings — and zero board yield.**
+Worldline 264, Vistra 199, Royal London 33, Orkla 9; classified, they are 384
+`out_of_scope`, 116 `unknown`, 3 `stretch` (Warsaw credit-risk roles) and 2
+`background`. **Nothing reached the shortlist and nothing will.** Consumer
+goods, corporate services, insurance and payments are not quant employers, so
+the gates are right and the postings are correctly invisible. Recorded because
+DISCOVERY-STRATEGY requires zero-yield pilots to be reported too.
+
+What the change is actually worth is therefore not these four boards. It is
+that SuccessFactors is the third-largest employer-board source here (17,403
+postings) and every tenant migrating to unify would otherwise have gone silent
+one at a time, each looking like a firm that stopped hiring — and the
+`unpollable` alert now says so when it happens.
+
+**Still not fixed, and not by this route.** Eurex, Clearstream, Hang Seng and
+PFA — the rows this review held up as the prize — are among the 29 that did not
+improve: their stored careers URL is a marketing page, not a board (Eurex and
+Clearstream both point at `careers.deutsche-boerse.com`, which runs no RMK at
+all), or the host 404s on `/search/`. That is the careers-page walk, which is
+F5 and F8, not a vendor reader. `jobs.paysafe.com` is a third case and not ours
+to fix: its TLS certificate has expired.
+
+The remaining 29 tokenless rows are single-vendor pattern defects — Recruitee
+×7 and Jobylon ×3 on custom hosts their readers cannot address,
+`jobs.lever.co/500` refused for being numeric, SmartRecruiters capturing
+`oneclick-`, Jobvite capturing `careers`, Workable capturing `api`. Deliberately
+left: the firms behind them are a VC fund, a hotel group and a payments
+processor, so on the evidence of this exercise the expected board yield is zero
+and the `unpollable` alert keeps them visible until something changes.
+
 ### F2 — The census portals cost 77% of the corpus for 26% of the shortlist, and their own facets make a bounded cut measurable. (M)
 
 Hong Kong, from today's log — one sweep of 650 pages, ~50 minutes, read against
@@ -335,24 +393,33 @@ the one state `ats.py`'s docstring says must not exist, reached from the other
 direction. Today's log reads "polled 1,133 boards" against 1,263 tier-A rows,
 and nothing reconciles the two numbers.
 
-**The 36 tokenless rows are 17 SuccessFactors boards and the evidence column
-says why.** Those rows were fingerprinted on `career2.successfactors.eu` and
-`career5.successfactors.eu` — a host naming the vendor's *datacentre*, not the
-tenant. SuccessFactors carries the company in the path, so the host pattern
-matched, the token builder had nothing to read, and the row landed at tier A
-with a NULL token. Structurally the same failure as the Greenhouse `embed`
-capture, in a different vendor. The boards it costs:
+**The 36 tokenless rows are 17 SuccessFactors boards**, fingerprinted on
+`career2.successfactors.eu` and `career5.successfactors.eu` — a host naming the
+vendor's *datacentre*, not the tenant. The boards it costs:
 
 > Eurex, Clearstream, Hang Seng Bank, PFA, Scania, Moody's, Worldline,
 > Paysafe, Royal London, Allianz Life, Orkla, Vistra, Equiti, Bentley,
 > Clarion, PayOne, Turning Leaf
 
-Eurex and Clearstream are Deutsche Börse group and Eurex is already a registry
-source here; Hang Seng is a Hong Kong focus-hub employer; PFA is a Copenhagen
-one. Two further things visible in the same rows: `eurex.com`'s stored careers
-URL contains `&amp;` verbatim — the HTML-entity bug written up for
-SuccessFactors URLs, still present in this table — and `clarion.com` resolved
-to `jobs.faurecia.com`, which is defensible on the acquisition but is the
+**Correction (22 October, on implementing it): this is not a token-extraction
+bug, and the first draft above was wrong twice over.** The token *shape* was
+already right — SuccessFactors' token here is the firm's own host, not a
+company parameter — and those rows sit on RMK's **unify** career site, which
+renders its list from a JSON API. Every selector the classic reader uses
+matches nothing against it, so the board reads as empty with HTTP 200, and
+`_serves_feed` was *correctly* refusing to record a host whose feed could not
+be read. The guard was working; the reader was missing. See F6b for what that
+took and what it was worth.
+
+One real defect did sit underneath it: `_custom_host` skipped its own vendor
+rule whenever the host patterns had named the vendor — including when they
+named it and captured nothing, which is not a board at all. A token beats a
+custom host; nothing does not.
+
+Two further things visible in the same rows: `eurex.com`'s stored careers URL
+contains `&amp;` verbatim — the HTML-entity bug written up for SuccessFactors
+URLs, still present in this table — and `clarion.com` resolved to
+`jobs.faurecia.com`, which is defensible on the acquisition but is the
 `heyrowan` shape and should be re-verified.
 
 **The Taleo ten are mostly not worth a reader.** Four carry `token='tbe'`,

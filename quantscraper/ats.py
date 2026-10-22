@@ -887,7 +887,14 @@ def reprobe_targets(connection: sqlite3.Connection, limit: int) -> list[sqlite3.
                AND COALESCE(a.evidence, '') NOT LIKE '%sites.py%'
                AND NOT EXISTS (
                  SELECT 1 FROM jobs j WHERE j.ats = a.ats AND j.token = a.token))
-        ORDER BY COALESCE(p.probed_at, ''), a.tier, a.domain
+        -- Tokenless first among equally-stale rows, because it is the strictly
+        -- worse state: a row with a token that produced no postings addresses
+        -- a board and found it empty, while one with no token addresses
+        -- nothing at all. Both sort before tier B, which `pages.py` is at
+        -- least diffing in the meantime.
+        ORDER BY COALESCE(p.probed_at, ''),
+                 (a.token IS NOT NULL AND a.token <> ''),
+                 a.tier, a.domain
         LIMIT ?
         """,
         (limit,),

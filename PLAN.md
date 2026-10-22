@@ -314,3 +314,40 @@ are in [the methodology review](docs/METHODOLOGY-REVIEW.md).
   vendor's datacentre host rather than the tenant, which leaves 35 tier-A rows
   tokenless including Eurex, Clearstream, Hang Seng and PFA. That is F6 in the
   review, approved and not yet implemented.
+
+## Stage 60 — SuccessFactors' second surface
+
+Requested: fix the SuccessFactors token extraction so the tokenless tier-A rows
+get a real token, then reprobe them.
+
+- It was not a token-extraction bug. The token shape was already right -- the
+  firm's own host -- and those rows sit on RMK's unify career site, which
+  renders its list from a JSON API, so the classic reader's selectors match
+  nothing and `_serves_feed` was correctly refusing to record a host whose feed
+  could not be read. A reader was missing, not a pattern.
+- `extract._sf_unify` reads it: `POST /services/recruiting/v1/jobs`, taken off
+  the site's own `j2w.searchManager.min.js`, with a GET's 405 confirming the
+  path first. The locale is read from the page (`en_US` against Orkla returns
+  `totalJobs: 0`), the posting URL is `/job/{display title}/{id}-{locale}` from
+  the widget's href builder and then opened, and the walk repeats until it
+  finds no new requisition, because the API shuffles which page each row lands
+  on -- Royal London served 33 rows for 26 distinct. `_shortfall` gained
+  `sweep.problem`'s served/distinct distinction. The fallback is gated on the
+  unify marker so an unparseable layout stays loud.
+- One real defect underneath: `_custom_host` skipped its own vendor rule
+  whenever the host patterns had named the vendor, including when they named it
+  and captured nothing.
+- 5 rows resolved, 4 boards, **505 postings, and zero board yield**: 384
+  out_of_scope, 116 unknown, 3 stretch, 2 background. Consumer goods, corporate
+  services, insurance and payments are not quant employers, so the gates are
+  right. Recorded as a zero-yield result, per DISCOVERY-STRATEGY.
+- `alerts` grew an `unpollable` check. Tier A means Layer 3 polls the feed, and
+  two states satisfy the tier without satisfying the sentence -- no token, or
+  an ats with no extractor -- which `extract.targets` filters out silently. It
+  now reports 29 tokenless rows across nine vendors and 10 Taleo rows.
+- `reprobe_targets` puts tokenless rows ahead of tokened ones among equally
+  stale rows, so the weekly pass reaches the strictly worse state first.
+- Eurex, Clearstream, Hang Seng and PFA are **not** fixed: their stored careers
+  URL is a marketing page rather than a board. That is the careers-page walk
+  (F5, F8), not a vendor reader. `jobs.paysafe.com` has an expired certificate.
+- 1,210 tests pass.
