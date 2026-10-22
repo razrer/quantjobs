@@ -573,3 +573,64 @@ class Layer2GoesQuietTest(unittest.TestCase):
         for _, table, _, _ in alerts._LAYER_TWO:
             with self.subTest(table=table):
                 self.assertIn(table, schemas)
+
+
+class UnpollableBoardsTest(unittest.TestCase):
+    """Tier A means Layer 3 polls the feed, and two states satisfy the tier
+    without satisfying the sentence. `extract.targets` filters both out, so
+    they read as resolved in every summary and are polled nowhere -- 36 rows
+    with no token and 10 resolved to Taleo, which has no reader.
+    """
+
+    def _resolution(self, *rows):
+        from quantscraper import ats
+        connection = _memory(self)
+        connection.executescript(ats.SCHEMA)
+        connection.executemany(
+            "INSERT INTO ats_resolution"
+            " (domain, careers_url, ats, token, tier, evidence, checked_at)"
+            " VALUES (?, ?, ?, ?, 'A', 'x', '2026-10-22')",
+            [(d, f"https://{d}/", a, t) for d, a, t in rows],
+        )
+        connection.commit()
+        return connection
+
+    def test_a_tier_a_row_with_no_token_is_reported(self):
+        connection = self._resolution(("eurex.com", "successfactors", None))
+        found = [a for a in alerts.check(connection) if a.kind == "unpollable"]
+        self.assertEqual([a.source for a in found], ["successfactors"])
+        self.assertIn("no board token", found[0].detail)
+
+    def test_an_empty_token_counts_the_same_as_a_missing_one(self):
+        connection = self._resolution(("eurex.com", "successfactors", ""))
+        self.assertTrue([a for a in alerts.check(connection) if a.kind == "unpollable"])
+
+    def test_an_ats_with_no_extractor_is_reported(self):
+        connection = self._resolution(("ocbc.com", "taleo", "ocbc"))
+        found = [a for a in alerts.check(connection) if a.kind == "unpollable"]
+        self.assertEqual([a.source for a in found], ["taleo"])
+        self.assertIn("no extractor", found[0].detail)
+
+    def test_a_pollable_board_is_not_reported(self):
+        connection = self._resolution(("janestreet.com", "greenhouse", "janestreet"))
+        self.assertEqual(
+            [a for a in alerts.check(connection) if a.kind == "unpollable"], []
+        )
+
+    def test_rows_are_grouped_by_vendor_not_listed_one_by_one(self):
+        """The useful fact is which reader or pattern is missing, and 36 alerts
+        would bury every other line in the report."""
+        connection = self._resolution(
+            ("eurex.com", "successfactors", None),
+            ("hangseng.com", "successfactors", None),
+            ("pfa.dk", "successfactors", None),
+        )
+        found = [a for a in alerts.check(connection) if a.kind == "unpollable"]
+        self.assertEqual(len(found), 1)
+        self.assertIn("3 tier-A row(s)", found[0].detail)
+
+    def test_a_fresh_install_with_no_resolution_table_is_quiet(self):
+        connection = _memory(self)
+        self.assertEqual(
+            [a for a in alerts.check(connection) if a.kind == "unpollable"], []
+        )

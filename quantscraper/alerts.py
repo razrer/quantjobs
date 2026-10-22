@@ -25,6 +25,9 @@ or plausibly could:
   lexicon    the classifier was edited without `tagging.TAGGER` being bumped,
              so `tag` visits nothing and every summary keeps serving the
              previous answers -- see `tagging.fingerprint`
+  unpollable a tier-A row addresses nothing -- no board token, or an ATS with
+             no extractor -- so it counts as resolved everywhere and is polled
+             nowhere. See `_unreachable_boards`.
   layer2     a Layer 2 cache has not been written to in a month, so new
              employers are arriving and never reaching a pollable board --
              see `_layer2_alerts`, which is the one check here that asks when
@@ -68,7 +71,7 @@ STALE_AFTER = timedelta(days=30)
 @dataclass(frozen=True, slots=True)
 class Alert:
     source: str
-    kind: str  # fail | empty | shrank | stale | lexicon | layer2 | board
+    kind: str  # fail | empty | shrank | stale | lexicon | layer2 | unpollable | board
     detail: str
 
     def __str__(self) -> str:
@@ -168,8 +171,67 @@ def check(connection: sqlite3.Connection, now: datetime | None = None) -> list[A
             " the previous classifier's answers",
         ))
     alerts.extend(_layer2_alerts(connection, now))
+    alerts.extend(_unreachable_boards(connection))
     alerts.extend(_board_alerts(connection))
     return alerts
+
+
+def _unreachable_boards(connection: sqlite3.Connection) -> list[Alert]:
+    """Tier-A rows that no poller can reach, which every report called healthy.
+
+    **Tier A means "an ATS and token were fingerprinted, so Layer 3 polls the
+    feed".** Two states satisfy the tier and not the sentence, and
+    `extract.targets` filters both out of its queue -- so they are counted as
+    resolved everywhere, polled nowhere, and yield nothing forever. That is the
+    silent coverage loss `ats.py`'s docstring is written against, reached from
+    the other direction: not an untiered domain, a tiered one addressing
+    nothing.
+
+      * **no token.** 36 rows, and 16 of them were one bug: `_custom_host`
+        skipped its own vendor rule whenever the host patterns had named the
+        vendor, including when they had named it and captured nothing, so
+        `careerN.successfactors.eu` -- SAP's datacentre, naming no tenant --
+        held Eurex, Hang Seng, PFA and thirteen others off the board.
+      * **an `ats` with no extractor.** 10 Taleo rows, which no reader exists
+        for; `taleo` is simply absent from `EXTRACTORS`, so the `IN` clause in
+        `extract.targets` drops them without a word.
+
+    Grouped by vendor rather than listed per row, because the useful fact is
+    which *reader or pattern* is missing. Reported and never acted on: the
+    answer to a tokenless row is a fix here, not a demotion that would discard
+    a verified careers URL `pages.py` has been diffing for months.
+    """
+    from . import extract
+
+    if not connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ats_resolution'"
+    ).fetchone():
+        return []
+
+    found: list[Alert] = []
+    for row in connection.execute(
+        "SELECT ats, COUNT(*) AS n FROM ats_resolution"
+        " WHERE tier = 'A' AND (token IS NULL OR token = '')"
+        " GROUP BY ats ORDER BY n DESC, ats"
+    ):
+        found.append(Alert(
+            row["ats"] or "(no ats)", "unpollable",
+            f"{row['n']:,d} tier-A row(s) carry no board token, so nothing"
+            " polls them -- the pattern captured the vendor and not the tenant",
+        ))
+
+    placeholders = ",".join("?" * len(extract.EXTRACTORS))
+    for row in connection.execute(
+        f"SELECT ats, COUNT(*) AS n FROM ats_resolution WHERE tier = 'A'"
+        f" AND ats NOT IN ({placeholders}) GROUP BY ats ORDER BY n DESC, ats",
+        tuple(extract.EXTRACTORS),
+    ):
+        found.append(Alert(
+            row["ats"] or "(no ats)", "unpollable",
+            f"{row['n']:,d} tier-A row(s) resolved to '{row['ats']}', which has"
+            " no extractor -- `extract.targets` drops them silently",
+        ))
+    return found
 
 
 # The Layer 2 caches, and the column that says when each last did any work.

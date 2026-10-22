@@ -456,6 +456,18 @@ _VENDOR_ASSETS: tuple[tuple[str, str, tuple[str, ...], str], ...] = (
         ("/search/?q=&startrow=0",),
         "jobTitle-link",
     ),
+    # RMK's *other* surface, on the same CDN and the same custom-host shape,
+    # distinguished only by which script the page loads. The classic entry
+    # above looks for a rendered row; this one looks for the search widget that
+    # fetches the rows, because on this surface there is no row in the markup
+    # to find. 16 domains sat tier A with a NULL token because nothing here
+    # could tell the two apart -- see `extract._sf_unify`.
+    (
+        "successfactors",
+        "rmkcdn.successfactors.com",
+        ("/search/?q=&startrow=0",),
+        extract.SF_UNIFY_MARKER,
+    ),
 )
 
 
@@ -664,7 +676,17 @@ def _custom_host(
     if not host:
         return None
     for name, asset_host, paths, marker in _VENDOR_ASSETS:
-        if named and named[0] == name:
+        # **The same-vendor rule skips only a named match that carries a
+        # token.** "The named token wins" presumes there is one; where the host
+        # patterns matched the vendor and captured nothing, the named answer is
+        # not a board at all -- it is the tier-A-with-a-NULL-token state this
+        # module's docstring calls "a board nobody can poll", and skipping here
+        # on vendor alone is what kept it. 16 SuccessFactors rows were held by
+        # exactly that: `careerN.successfactors.eu` names SAP's datacentre and
+        # no tenant, so the pattern matched, the builder had nothing to read,
+        # and this rule then declined to look for the host that does serve the
+        # board. A token beats a custom host; nothing does not.
+        if named and named[0] == name and named[1]:
             continue
         if asset_host in markup and _serves_feed(host, paths, marker):
             return name, host, f"{asset_host}, feed verified at {host}"

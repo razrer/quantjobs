@@ -68,8 +68,26 @@ _CHURN = 0.02
 _CHURN_FLOOR = 1
 
 
-def _shortfall(source: str, token: str, advertised: object, jobs: list) -> None:
+def _shortfall(
+    source: str, token: str, advertised: object, jobs: list,
+    *, served: int | None = None,
+) -> None:
     """Raise when a board handed over materially less than it advertised.
+
+    **`served` is how many rows the board actually handed over, duplicates
+    included, and only a reader whose board re-sorts under the walk passes
+    it.** The distinction is `sweep.problem`'s, arrived at on Jobbsafari and
+    the same fact here: a shortfall in *distinct* postings means either that
+    the walk stopped early or that it saw every row and some of them twice, and
+    those want opposite responses. Measured on Royal London's unify board --
+    33 advertised, 10+10+10+3 = 33 rows served over four pages ending on an
+    empty one, **27 distinct**, because `sortBy: recent` re-orders between
+    requests. The board handed over everything it claimed; six postings
+    arrived twice. Raising on that throws away a board to protect it.
+
+    Every other reader here passes nothing and is judged on distinct postings
+    exactly as before, which is right for a board with a stable order: there a
+    repeat is evidence of paging that does not advance.
 
     **The one check every reader here owes its caller**, because a board that
     states its own size is the only thing that can say a walk was truncated:
@@ -95,9 +113,16 @@ def _shortfall(source: str, token: str, advertised: object, jobs: list) -> None:
     if not isinstance(advertised, int):
         return
     allowed = max(_CHURN_FLOOR, advertised * _CHURN)
+    if served is not None and advertised - served <= allowed:
+        # The walk reached the end and the board handed over what it said it
+        # held; the gap is repeats from a moving order, not a truncation.
+        return
     if advertised - len(jobs) > allowed:
+        short = f"read {len(jobs)}"
+        if served is not None:
+            short += f" ({served} rows served)"
         raise ValueError(
-            f"{source}/{token}: board advertises {advertised} postings, read {len(jobs)}"
+            f"{source}/{token}: board advertises {advertised} postings, {short}"
         )
 
 
@@ -1702,6 +1727,174 @@ _SF_TOTAL = re.compile(
 _SF_PAGE = 25
 _SF_PAGES = 400
 
+# **RMK's second surface, and the list is not in the HTML at all.** Everything
+# above reads a server-rendered table or card list; the "unify" career site
+# renders its results from a JSON API, so `_SF_ROW` matches nothing and the
+# board reads as empty -- the one failure this project is least able to see.
+# Measured: 16 domains sat tier A with a NULL token on this surface, and four
+# of them serve 510 postings between them (Worldline 265, Vistra 203, Royal
+# London 33, Orkla 9).
+#
+# **Read off the site's own bundle, not guessed.** `j2w.searchManager.min.js`
+# POSTs `{keywords, locale, location, pageNumber, sortBy}` as JSON to this
+# path, and `j2w.searchResultsUnify.min.js` builds each card's href. That is
+# the rule job-room.ch's 401 established: ask for what the page asks for. A GET
+# answers **405**, which is how the path was confirmed before a body was sent.
+_SF_UNIFY = "/services/recruiting/v1/jobs"
+# Ten per page, 0-based, and verified rather than assumed: pages 0-3 of
+# Worldline's 265 returned 40 distinct requisition ids with no overlap.
+_SF_UNIFY_PAGE = 10
+_SF_UNIFY_PAGES = 400
+# How many times the paged walk is repeated before it is believed. Four, and
+# the cap matters more than the number: a board that never converges must yield
+# what it has rather than raise forever, which is what `served` in `_shortfall`
+# is for. Royal London converged on the second pass.
+_SF_UNIFY_PASSES = 4
+# **The locale is not optional and not guessable.** `en_US` against Orkla and
+# Royal London returns `totalJobs: 0` -- a well-formed empty answer, not an
+# error -- while their own `en_GB` returns 9 and 33. The page states it, so it
+# is read from the page.
+_SF_LOCALE = re.compile(r"defaultLocale:\s*'([a-zA-Z_-]{2,12})'")
+# What separates the two surfaces, for `ats._VENDOR_ASSETS`. Measured over both
+# layouts and two non-RMK pages: present on every unify host, absent from the
+# classic one and from firms running no RMK at all.
+SF_UNIFY_MARKER = "j2w.SearchManager"
+
+
+def _sf_unify_locale(token: str) -> str | None:
+    """The locale this career site answers in, from its own search page."""
+    page = http.get_text(f"https://{token}/search/?q=&startrow=0", timeout=25, retries=2)
+    found = _SF_LOCALE.search(page)
+    return found.group(1) if found else None
+
+
+def _sf_unify(token: str) -> list[Job]:
+    """SuccessFactors RMK's unify career site. `token` is the firm's own host.
+
+    **The posting URL is `/job/{title}/{id}-{locale}`**, with the *display*
+    title rather than the url-safe one the payload also carries, and the locale
+    appended to the requisition id. Both halves are counter-intuitive and both
+    were taken from the widget's own href builder, then opened: all three hosts
+    tested return the posting with its title in the page, where
+    `/job/{urlTitle}/{id}/` -- the classic shape, and the obvious guess --
+    redirects to `/errorpage/`. A card nobody can open is the SmartRecruiters
+    defect this project already paid for once, all 1,507 rows of it.
+    """
+    locale = _sf_unify_locale(token)
+    if locale is None:
+        raise ValueError(f"successfactors/{token}: the career site states no locale")
+
+    jobs: list[Job] = []
+    seen: set[str] = set()
+    advertised: int | None = None
+    served = 0
+
+    # **The walk is repeated until it stops finding new requisitions, and that
+    # is not belt-and-braces -- one pass cannot read this board.** The API
+    # hands over exactly as many rows as it advertises and shuffles which page
+    # each lands on, so a single pass serves some postings twice and others
+    # never: measured, Royal London 33 advertised, 33 served, **26 distinct**,
+    # and Vistra 203 served for 163. Repeating converges, because the shuffle
+    # is different each time -- Royal London reached 29 on the first pass, all
+    # 33 on the second and nothing new on the third. This is `jobroom_ch`'s
+    # two-ended walk in a different shape: a second reading from another angle
+    # to cover what one cannot.
+    for _ in range(_SF_UNIFY_PASSES):
+        before = len(seen)
+        # Reset per pass: page 0 of the next pass naturally resembles page 0 of
+        # this one, which is the shuffle working and not a stuck pager.
+        previous: set[str] | None = None
+        for page in range(_SF_UNIFY_PAGES):
+            body = json.dumps({
+                "keywords": "", "locale": locale, "location": "",
+                # The page's own `appParams` default. `"recent"`, which the
+                # search box sends, is measurably worse: 152 distinct of
+                # Vistra's 203 against 163 for this.
+                "pageNumber": page, "sortBy": "",
+            }).encode()
+            payload = json.loads(
+                http.post_json(f"https://{token}{_SF_UNIFY}", body, timeout=25, retries=2)
+            )
+            if advertised is None:
+                total = payload.get("totalJobs")
+                advertised = total if isinstance(total, int) else None
+            rows = [
+                entry["response"] for entry in payload.get("jobSearchResult") or []
+                if isinstance(entry, dict) and isinstance(entry.get("response"), dict)
+            ]
+            # **The board says when it is done, and a repeat does not.**
+            # Stopping on "this page added no new requisition" is the rule
+            # Workday, ADP and both iCIMS readers each needed, and it is wrong
+            # here: Royal London's page 2 is six repeats and four new, and
+            # breaking there ends the walk short of a board that goes on to
+            # hand over the rest. An empty page is the end.
+            if not rows:
+                break
+            ids = {str(row.get("id") or "") for row in rows}
+            # What that rule was protecting against, narrowed to its actual
+            # signature: a server ignoring `pageNumber` returns the *same
+            # page*, not a reshuffle of one.
+            if previous is not None and ids == previous:
+                break
+            previous = ids
+            served += len(rows)
+            for row in rows:
+                job_id = str(row.get("id") or "")
+                if not job_id or job_id in seen:
+                    continue
+                seen.add(job_id)
+                title = row.get("unifiedStandardTitle") or row.get("urlTitle") or ""
+                jobs.append(
+                    Job(
+                        ats="successfactors",
+                        token=token,
+                        job_id=job_id,
+                        title=title,
+                        url=f"https://{token}/job/"
+                            f"{urllib.parse.quote(title or 'untitled')}/{job_id}-{locale}",
+                        location=_sf_unify_text(row.get("jobLocationShort")),
+                        department=_sf_unify_text(row.get("department_obj")),
+                        posted_at=_sf_unify_date(row.get("unifiedStandardStart")),
+                    )
+                )
+        if len(seen) == before:
+            break
+    _shortfall("successfactors", token, advertised, jobs, served=served)
+    return jobs
+
+
+def _sf_unify_text(value: object) -> str | None:
+    """One string out of a field RMK publishes as a list.
+
+    Every descriptive field here arrives wrapped -- `["Hong Kong "]`,
+    `["Private Client"]` -- and several carry more than one value, so they are
+    joined rather than indexed. The trailing space is the payload's own.
+    """
+    if isinstance(value, str):
+        return value.strip() or None
+    if isinstance(value, list):
+        parts = [str(item).strip() for item in value if isinstance(item, (str, int))]
+        return ", ".join(part for part in parts if part) or None
+    return None
+
+
+def _sf_unify_date(value: object) -> str | None:
+    """`9/24/26` to `2026-09-24`, or None if it is not that.
+
+    Written M/D/YY with a two-digit year, which no other reader here emits and
+    which `web/build_data.posted` cannot parse -- so it is normalised at the
+    source rather than left for the board to guess at.
+    """
+    if not isinstance(value, str):
+        return None
+    parts = value.strip().split("/")
+    if len(parts) != 3 or not all(part.isdigit() for part in parts):
+        return None
+    month, day, year = (int(part) for part in parts)
+    if not (1 <= month <= 12 and 1 <= day <= 31):
+        return None
+    return f"{2000 + year if year < 100 else year:04d}-{month:02d}-{day:02d}"
+
 
 def _sf_field(block, selector: str) -> str | None:
     """The text of the first node in `block` matching `selector`, or None."""
@@ -1730,15 +1923,26 @@ def successfactors(token: str) -> list[Job]:
     spell out. Stops on a page that adds no new requisition id: a site
     ignoring `startrow` serves page one forever, and no empty-page test catches
     that -- the rule Workday, ADP and both iCIMS readers each needed.
+
+    **Two surfaces behind one vendor name, and the classic one is tried first.**
+    RMK's unify career site renders its list from a JSON API, so the selectors
+    below match nothing against it and the board reads as empty. The token is
+    the same thing on both -- the firm's own host -- so the reader picks the
+    surface rather than the resolver picking a name, and no stored
+    `ats_resolution` row has to be re-resolved. Falling back only on an empty
+    classic read keeps the request order right for the boards that already
+    work: a tenant serving the table costs exactly what it did before.
     """
     jobs: list[Job] = []
     seen: set[str] = set()
     advertised: int | None = None
     startrow = 0
+    first = ""
     for _ in range(_SF_PAGES):
         body = http.get_text(
             f"https://{token}/search/?q=&startrow={startrow}", timeout=25, retries=2
         )
+        first = first or body
         if advertised is None:
             total = _SF_TOTAL.search(_text(body) or "")
             advertised = int(total.group(1).replace(",", "")) if total else None
@@ -1767,6 +1971,16 @@ def successfactors(token: str) -> list[Job]:
             )
         if not fresh:
             break
+    # **Nothing matched a row selector, and the page says which of three facts
+    # that is.** The unify surface loads its search widget and holds no row to
+    # find, so its marker is the licence to read the API instead. Without that
+    # marker an empty read stays exactly as loud as it was: a layout this
+    # reader cannot parse must not quietly become a second request to a
+    # different product, which is the `heyrowan` shape -- a scraper that keeps
+    # answering after the page it reads has been redesigned. Pinned by
+    # `tests/test_icims.SuccessFactorsTest`.
+    if not jobs and SF_UNIFY_MARKER in first:
+        return _sf_unify(token)
     _shortfall("successfactors", token, advertised, jobs)
     return jobs
 
