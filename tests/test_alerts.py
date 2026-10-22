@@ -487,3 +487,89 @@ class BoardPollsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Layer2GoesQuietTest(unittest.TestCase):
+    """The gap that cost two months, as a test.
+
+    `check` walks `SELECT DISTINCT source FROM runs`, and the three Layer 2
+    steps write no run -- their row count is a budget, not a volume, so a queue
+    returning 500 because that was the limit and then 0 because it is exhausted
+    would read as `shrank` and then `empty` on a healthy pipeline. So nothing
+    watched them, and nothing scheduled them either: `domain_lookups` had
+    53,742 of 53,789 rows last checked in August while every registry reported
+    healthy every week.
+    """
+
+    def _cache(self, table, when, method="name-strong"):
+        connection = _memory(self)
+        columns = "query, domain, method, evidence, checked_at"
+        values = ("Firm Ltd", "firm.com", method, "x", when)
+        if table == "ats_resolution":
+            columns = "domain, careers_url, ats, token, tier, evidence, checked_at"
+            values = ("firm.com", "https://firm.com/jobs", "greenhouse", "firm", "A", "x", when)
+        elif table == "board_lookups":
+            columns = "query, domain, ats, token, evidence, checked_at"
+            values = ("Firm Ltd", "firm.com", "greenhouse", "firm", "x", when)
+        connection.execute(
+            f"CREATE TABLE IF NOT EXISTS {table} ({columns.replace(', ', ' TEXT, ')} TEXT)"
+        )
+        connection.execute(
+            f"INSERT INTO {table} ({columns}) VALUES ({','.join('?' * len(values))})",
+            values,
+        )
+        connection.commit()
+        return connection
+
+    def _ago(self, days):
+        return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(
+            timespec="seconds"
+        )
+
+    def test_a_cache_nothing_has_written_for_months_is_flagged(self):
+        connection = self._cache("domain_lookups", self._ago(62))
+        found = [a for a in alerts.check(connection) if a.kind == "layer2"]
+        self.assertEqual([a.source for a in found], ["domains"])
+        self.assertIn("62 days", found[0].detail)
+
+    def test_a_cache_written_this_week_is_not(self):
+        connection = self._cache("domain_lookups", self._ago(5))
+        self.assertEqual([a for a in alerts.check(connection) if a.kind == "layer2"], [])
+
+    def test_a_free_registry_reseed_does_not_count_as_work(self):
+        """`harvest_registry_domains` rewrites `checked_at` on a fifth of the
+        table with no network at all, so a `MAX` over every method reads fresh
+        on a step that resolved nothing."""
+        connection = self._cache("domain_lookups", self._ago(2), method="registry")
+        found = [a for a in alerts.check(connection) if a.kind == "layer2"]
+        self.assertEqual([a.source for a in found], ["domains"])
+
+    def test_each_step_is_named_on_its_own(self):
+        for table, step in (
+            ("ats_resolution", "ats"),
+            ("board_lookups", "discover"),
+        ):
+            with self.subTest(step=step):
+                connection = self._cache(table, self._ago(99))
+                found = [a for a in alerts.check(connection) if a.kind == "layer2"]
+                self.assertEqual([a.source for a in found], [step])
+
+    def test_a_fresh_install_with_no_cache_is_not_an_alert(self):
+        """Never having run is `coverage`'s question, not this one."""
+        connection = _memory(self)
+        self.assertEqual([a for a in alerts.check(connection) if a.kind == "layer2"], [])
+
+    def test_every_watched_table_is_one_a_layer_2_module_creates(self):
+        """Three table names is the smallest thing that can drift, and a wrong
+        one reads as healthy rather than as an error."""
+        from quantscraper import ats as ats_module
+        from quantscraper import discover as discover_module
+        from quantscraper import domains as domains_module
+
+        schemas = " ".join(
+            module.SCHEMA
+            for module in (domains_module, ats_module, discover_module)
+        )
+        for _, table, _, _ in alerts._LAYER_TWO:
+            with self.subTest(table=table):
+                self.assertIn(table, schemas)

@@ -56,6 +56,122 @@ class WeeklySourcesTest(unittest.TestCase):
         self.assertNotIn("registries", gathered[1])
 
 
+    def test_full_sweep_grows_the_board_set_but_a_top_up_does_not(self):
+        """Layer 2 is the half the weekly sequence was missing.
+
+        `jobs` polls the boards already resolved and `registries` fetches the
+        employers that should become new ones; between them sat `resolve`,
+        `domains`, `ats` and `discover`, none of them scheduled. Measured when
+        this was wired: 1,984 employer rows -- 678 in the focus registries --
+        had arrived since the last `resolve` and were in no firm at all, so
+        `domains` reported "nothing left to probe" while two months of new
+        employers sat invisible to it.
+        """
+        gathered = []
+        serial = []
+
+        def capture(steps):
+            gathered.append(dict(steps))
+            return []
+
+        with mock.patch.object(cli.db, "connect"),                 mock.patch.object(cli, "_denmark_since", return_value=None),                 mock.patch.object(cli, "_corrections", return_value=0),                 mock.patch.object(cli, "_gather", side_effect=capture),                 mock.patch.object(cli, "_tag", return_value=0),                 mock.patch.object(cli, "_bodies", return_value=0),                 mock.patch.object(cli, "_alerts", return_value=0),                 mock.patch.object(cli, "_layer2", return_value=0) as layer2,                 mock.patch.object(
+                    cli, "_resolve",
+                    side_effect=lambda *a: serial.append("firms") or 0) as resolve,                 mock.patch.object(cli.subprocess, "run", return_value=mock.Mock(returncode=0)),                 contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(cli._daily("test.db", True, False), 0)
+            gathered[0]["layer2"]()
+            self.assertEqual(cli._daily("test.db", False, False), 0)
+
+        self.assertIn("layer2", gathered[0])
+        self.assertNotIn("layer2", gathered[1], "a top-up must not spend the budget")
+        layer2.assert_called_once_with("test.db")
+        resolve.assert_called_once_with("test.db")
+        self.assertEqual(serial, ["firms"], "`firms` is rebuilt before the gather")
+
+
+class Layer2ChainTest(unittest.TestCase):
+    """The chain runs in order inside one slot, and one broken step is not six.
+
+    `domains` writes the domains `ats` needs and `ats` writes the tiers
+    `discover` reads, so running them as separate concurrent gather steps would
+    advance one link a week -- four weeks from a registration to a first poll.
+    In sequence it is one run.
+    """
+
+    def _run(self, **failures):
+        calls = []
+
+        def step(name, bad=False):
+            def inner(*args, **kwargs):
+                calls.append(name)
+                if bad == "raise":
+                    raise RuntimeError("boom")
+                return 1 if bad else 0
+            return inner
+
+        with mock.patch.object(
+                cli, "_domains", side_effect=step("domains", failures.get("domains"))),                 mock.patch.object(
+                    cli, "_ats", side_effect=step("ats", failures.get("ats"))),                 mock.patch.object(
+                    cli, "_discover",
+                    side_effect=step("discover", failures.get("discover"))),                 contextlib.redirect_stdout(io.StringIO()),                 contextlib.redirect_stderr(io.StringIO()):
+            code = cli._layer2("test.db")
+        return code, calls
+
+    def test_the_chain_runs_in_order(self):
+        code, calls = self._run()
+
+        self.assertEqual(code, 0)
+        # `_domains` and `_ats` are each called twice -- new work, then
+        # re-verification -- and `_discover` once per focus registry.
+        self.assertEqual(calls[0], "domains")
+        self.assertEqual(calls[1], "ats")
+        self.assertEqual(
+            calls[2:2 + len(cli.FOCUS_SOURCES)],
+            ["discover"] * len(cli.FOCUS_SOURCES),
+        )
+        self.assertEqual(calls[-2:], ["domains", "ats"], "re-verification runs last")
+
+    def test_discover_is_scoped_to_one_registry_at_a_time(self):
+        """`discover.targets` orders the global queue by how many registries
+        saw a firm, which inside a `--limit` acts as a filter: Hong Kong's
+        licensed corporations are almost all SFC-only, so an unscoped sweep
+        never reaches one. That module measured it -- 50 probed, 0 boards, not
+        one of them a Hong Kong company."""
+        with mock.patch.object(cli, "_domains", return_value=0),                 mock.patch.object(cli, "_ats", return_value=0),                 mock.patch.object(cli, "_discover", return_value=0) as discover,                 contextlib.redirect_stdout(io.StringIO()):
+            cli._layer2("test.db")
+
+        scoped = [call.args[-1] for call in discover.call_args_list]
+        self.assertEqual(scoped, list(cli.FOCUS_SOURCES))
+
+    def test_one_failing_step_does_not_take_the_others(self):
+        code, calls = self._run(domains=True)
+
+        self.assertEqual(code, 1, "the slot still reports the failure")
+        self.assertIn("ats", calls)
+        self.assertEqual(calls.count("discover"), len(cli.FOCUS_SOURCES))
+
+    def test_a_raising_step_does_not_take_the_others_either(self):
+        code, calls = self._run(ats="raise")
+
+        self.assertEqual(code, 1)
+        self.assertEqual(calls.count("discover"), len(cli.FOCUS_SOURCES))
+
+    def test_every_budget_is_spent_and_every_step_has_one(self):
+        """A budget key nothing reads is silent, which is the direction that
+        loses coverage rather than announcing it."""
+        spent = []
+
+        with mock.patch.object(
+                cli, "_domains",
+                side_effect=lambda db, limit, workers, **kw: spent.append(limit) or 0),                 mock.patch.object(
+                    cli, "_ats",
+                    side_effect=lambda db, limit, workers, **kw: spent.append(limit) or 0),                 mock.patch.object(
+                    cli, "_discover",
+                    side_effect=lambda db, limit, *a: spent.append(limit) or 0),                 contextlib.redirect_stdout(io.StringIO()):
+            cli._layer2("test.db")
+
+        self.assertEqual(set(spent), set(cli.LAYER_TWO_BUDGET.values()))
+
+
 class ThrottleIsPerHostTest(unittest.TestCase):
     """The precondition for the whole phase, and the thing that would make it
     a politeness regression if it were false."""

@@ -262,3 +262,55 @@ roles, genuine quantitative work and the shortlist.
   3,899 cards, 261 worth reading, built October 8 at 13:38 UTC. Against the
   interim October 8 build, all 3,893 card IDs remain and six Danish cards were
   added. The strong/apply-now shortlist retained all 259 IDs and gained two.
+
+## Stage 59 — Layer 2 back on the schedule
+
+Requested: a methodology review of discovery, retrieval, reliability and
+tagging, then the first item from it — put `resolve`, `domains`, `ats` and
+`discover` back on the weekly schedule. The review and its recorded decisions
+are in [the methodology review](docs/METHODOLOGY-REVIEW.md).
+
+- Measured the funnel and the per-source yield that the review is built on:
+  70,370 firms produce 1,263 tier-A boards and 1,216 firms visible on the
+  board; the six national portals hold 77.5% of 1,187,720 postings and supply
+  26% of the 283-card shortlist; `job_tags` is about 65% of a 9.69 GB database.
+- `domain_lookups` had 53,742 of 53,789 rows last checked in August and
+  `ats_resolution` 19,839 of 20,033, while all 14 registries reported healthy
+  every week. The cause was narrower than a backlog: every Layer 2 queue is
+  drawn from `firms`, `resolve` had not run since August, and the 1,984
+  employer rows that arrived since were in no firm at all. `domains` therefore
+  answered "nothing left to probe" with two months of new employers invisible
+  to it.
+- `cli._layer2` runs `domains → ats → discover → regrade → reprobe` in order
+  inside one concurrent gather slot, with `resolve` in the `--full` prologue
+  ahead of it. Weekly rates rather than a monthly block: stages 54, 56 and 58
+  are missed-Wednesday incidents, and every queue here is self-advancing, so a
+  missed week costs one week instead of a cycle. Budgets in
+  `cli.LAYER_TWO_BUDGET`, sized against measured throughput — domains 1.2 s a
+  firm, ats 0.58 s, regrade 0.65 s, reprobe 0.35 s, discover 22 s a candidate —
+  so the slot stays inside the hour Singapore and Hong Kong already take.
+  `discover` is scoped to each focus registry in turn, because its global
+  ordering acts as a filter inside a `--limit`.
+- Two defects found while testing it, both a queue with no cursor.
+  `ats.reprobe_targets` ordered alphabetically while `reprobe` writes only an
+  improvement, so a budgeted pass re-walked the same head every run and never
+  reached tier B; an `ats_attempts` table on the `page_attempts` pattern is now
+  the cursor. `domains.regrade_targets` never selected `evidence` although
+  `regrade` writes it back, so the first unreachable host raised `IndexError`
+  out of `pool.map` and killed the pass — the marker that branch exists to
+  write had never been written once, 0 rows against a queue 3,502 deep.
+- `alerts` grew a `layer2` check: these steps write no `runs` row, because a
+  count that is sometimes the budget and sometimes an empty queue is not a
+  volume, so the check asks when each cache last did work. `domains` excludes
+  `method = 'registry'`, because `harvest_registry_domains` rewrites
+  `checked_at` on a fifth of the table with no network at all and would read as
+  health.
+- Verified live: `resolve` took 4 seconds and raised `firms` from 70,370 to
+  72,130; `domains` then probed 40 firms for 9 domains where it had just
+  reported nothing to do; `ats` fingerprinted 40 domains into 2 new tier-A
+  boards; `reprobe` re-walked 40 and corrected 29, `bentley.com` among them,
+  from a tokenless SuccessFactors row to `workday|wd5|bentley`.
+- Not done here and still open: the SuccessFactors token extraction reads the
+  vendor's datacentre host rather than the tenant, which leaves 35 tier-A rows
+  tokenless including Eurex, Clearstream, Hang Seng and PFA. That is F6 in the
+  review, approved and not yet implemented.

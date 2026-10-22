@@ -44,7 +44,15 @@ prevents idle sleep while running;
 closing the lid or explicitly sleeping the laptop pauses it until wake.
 The scheduled launcher starts its Python child in a hidden window and records
 both output streams in `logs/`; it does not require an interactive console.
-The full sweep includes Singapore, Hong Kong, and the employer registries.
+The full sweep includes Singapore, Hong Kong, the employer registries, and the
+Layer 2 chain that turns those employers into boards: `firms` is rebuilt before
+the gather, then one slot runs `domains`, `ats`, `discover` (scoped to each
+focus registry in turn) and the `--regrade` and `--reprobe` re-verification
+passes in order. Its budgets are weekly rates in `cli.LAYER_TWO_BUDGET`, sized
+so the slot stays inside the hour the two portal sweeps already take; its hosts
+are the firms' own domains, which no portal sweep touches. A queue that drains
+is the healthy state, so none of these steps writes to `runs` -- `alerts`
+watches them with a `layer2` check on when each cache last did work.
 If concurrent database writers exhaust their wait, the locked source is retried
 after the other source reads finish. Any remaining failure stays in the log.
 Never move the build into CI:

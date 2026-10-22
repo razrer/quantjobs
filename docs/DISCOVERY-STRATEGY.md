@@ -94,7 +94,31 @@ contact graphs. A historical sponsor is a lead, not proof of current hiring.
 
 ## Make discovery recurrent and accountable
 
-Proposed local cadence, without creating another scheduled task in this change:
+**Implemented 22 October 2026, weekly rather than monthly.** The cadence below
+was the proposal; what runs is `cli._layer2`, one slot in the existing
+concurrent gather under `daily --full`, with `resolve` moved into the prologue
+ahead of it. No second scheduled task, as this section asked.
+
+Weekly and small rather than monthly and large, for a reason this repository
+has measured three times: stages 54, 56 and 58 are all missed-Wednesday
+incidents, and a monthly trigger would have skipped a whole cycle on any one of
+them. Every queue here is self-advancing and oldest-attempt-first, so a
+repeated weekly budget works through its population and then settles into
+maintenance, and a missed week costs one week rather than a cycle.
+
+It is affordable because of where it sits: its hosts are the firms' own domains
+and the ATS vendors — thousands of distinct hosts no portal sweep touches — so
+under one shared per-host throttle it hides inside the hour Singapore and Hong
+Kong already take.
+
+What the refresh had been missing was not budget but `resolve`: every queue
+here is drawn from `firms`, and `firms` was two months old, so 1,984 employer
+rows that had arrived since were in no firm and invisible to all of it.
+Measured on the fix — `resolve` 4 seconds, 70,370 firms to 72,130, then 40
+firms probed for 9 domains and 40 domains fingerprinted for 2 new tier-A
+boards.
+
+The original proposal, for the record:
 
 - Monthly: refresh FI/MAS/SFC and relevant exchange lists, resolve new records,
   revisit unresolved domains and careers channels, and compare corporate snapshots.

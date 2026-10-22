@@ -25,6 +25,10 @@ or plausibly could:
   lexicon    the classifier was edited without `tagging.TAGGER` being bumped,
              so `tag` visits nothing and every summary keeps serving the
              previous answers -- see `tagging.fingerprint`
+  layer2     a Layer 2 cache has not been written to in a month, so new
+             employers are arriving and never reaching a pollable board --
+             see `_layer2_alerts`, which is the one check here that asks when
+             a step last worked rather than how much it returned
 
 A source with no history is not judged. One run is not a baseline, and inventing
 one would produce noise on exactly the sources that are newest and least
@@ -64,7 +68,7 @@ STALE_AFTER = timedelta(days=30)
 @dataclass(frozen=True, slots=True)
 class Alert:
     source: str
-    kind: str  # fail | empty | shrank | stale | lexicon
+    kind: str  # fail | empty | shrank | stale | lexicon | layer2 | board
     detail: str
 
     def __str__(self) -> str:
@@ -163,8 +167,89 @@ def check(connection: sqlite3.Connection, now: datetime | None = None) -> list[A
             " bump tagging.TAGGER and re-run `tag`, or the board is serving"
             " the previous classifier's answers",
         ))
+    alerts.extend(_layer2_alerts(connection, now))
     alerts.extend(_board_alerts(connection))
     return alerts
+
+
+# The Layer 2 caches, and the column that says when each last did any work.
+# Derived from the modules' own schemas rather than restated as SQL here would
+# be better still; three table names is the smallest thing that can drift, and
+# a wrong one reads as "healthy" -- so `tests/test_alerts.py` asserts each
+# table exists.
+#
+# **`domains` excludes `method = 'registry'` and that clause is the whole
+# check.** `harvest_registry_domains` re-seeds every firm whose registry row
+# published a website -- 19,997 rows, `INSERT OR REPLACE`, no network -- so it
+# rewrites `checked_at` on a fifth of the table every time `domains` is
+# invoked, whether or not one firm was actually probed. A plain `MAX` over the
+# table therefore reads fresh on a step that resolved nothing, which is the
+# precise shape of false health this module exists to refuse.
+_LAYER_TWO = (
+    ("domains", "domain_lookups", "resolve a firm name to a domain",
+     "method <> 'registry'"),
+    ("ats", "ats_resolution", "fingerprint a domain to a board", "1"),
+    ("discover", "board_lookups", "guess a board a careers page never named", "1"),
+)
+
+
+def _layer2_alerts(connection: sqlite3.Connection, now: datetime) -> list[Alert]:
+    """Layer 2 going quiet, which is invisible to every check above.
+
+    **This is the failure it was written for, found two months late.** The
+    weekly sequence polls the boards it already knows and refreshes the
+    registries that supply new employers -- and nothing between the two ran at
+    all. `domain_lookups` had 53,742 of 53,789 rows last checked in August and
+    `ats_resolution` 19,839 of 20,033, while every registry reported healthy
+    every week. So the universe kept growing and the pollable board set stayed
+    frozen at its August state: a firm registered since then had no domain, and
+    a firm that changed ATS since then was simply quiet.
+
+    `check` above cannot see this and it is not an oversight it can fix. It
+    walks `SELECT DISTINCT source FROM runs`, and these three steps write no
+    run -- deliberately, because their row count is a *budget* and not a
+    volume: a queue that returns 500 because that was the limit, then 0 because
+    it is exhausted, would read as `shrank` and then `empty` on a healthy
+    pipeline. The honest question for a cache is not how much it wrote but when
+    it last wrote anything, so that is what this asks.
+
+    One alert per step rather than one for the layer, because they fail
+    separately: `ats` cannot work on domains `domains` has not resolved, so the
+    first of them to go quiet is the one worth naming.
+    """
+    found: list[Alert] = []
+    for step, table, what, worked in _LAYER_TWO:
+        if not connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+        ).fetchone():
+            # A fresh install has no cache yet, which is not the same fact as a
+            # scheduled step that stopped running. `coverage` is where "never
+            # ran at all" belongs.
+            continue
+        row = connection.execute(
+            f"SELECT MAX(checked_at) AS last, COUNT(*) AS n FROM {table}"
+            f" WHERE {worked}"
+        ).fetchone()
+        last = _parse(row["last"] if row else None)
+        if last is None:
+            # No row this step put there. An empty table is a fresh install and
+            # `coverage` owns "never ran at all"; a table holding *only* free
+            # re-seeds is this check's own answer, because then nothing has
+            # ever probed and the board set cannot grow.
+            if connection.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone():
+                found.append(Alert(
+                    step, "layer2",
+                    f"nothing here has ever tried to {what}",
+                ))
+            continue
+        age = now - last
+        if age > STALE_AFTER:
+            found.append(Alert(
+                step, "layer2",
+                f"nothing has tried to {what} for {age.days} days -- new"
+                f" employers are not reaching a pollable board",
+            ))
+    return found
 
 
 # A board is allowed a bad morning before it is worth reporting: a vendor

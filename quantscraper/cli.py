@@ -258,6 +258,103 @@ def _discover(
     return 0
 
 
+# What one weekly run spends on Layer 2, per step. These are *rates*, not
+# backlogs: every queue below is self-advancing and oldest-first, so a budget
+# repeated weekly works through its population and then settles into
+# maintenance -- and a missed Wednesday costs one week's progress rather than a
+# whole cycle. That is why this is weekly and small rather than monthly and
+# large, which is what `docs/DISCOVERY-STRATEGY.md` proposed: stages 54, 56 and
+# 58 are all missed-Wednesday incidents, and a monthly trigger would have
+# skipped a month on any one of them.
+# Sized against measured throughput at 12 workers, 22 October, so the whole
+# slot stays inside the hour Singapore and Hong Kong already take:
+#
+#   domains   1.2 s a firm      ats       0.58 s a domain
+#   regrade   0.65 s a row      reprobe   0.35 s a row
+#   discover  22 s a candidate  -- ten vendor probes apiece, and
+#             `apply.workable.com` is one of them at four seconds a request
+#
+# So `discover` is the one that has to be rationed and the rest are nearly
+# free. The two "new work" budgets are worst-case caps rather than expected
+# cost: they drain to nothing when nothing new has arrived, which is their
+# healthy steady state -- about 500 firms a week at the current registry
+# intake, or ten minutes.
+LAYER_TWO_BUDGET = {
+    # New work. Neither queue writes to `runs`, because a count that is
+    # sometimes the budget and sometimes an empty queue is not a volume --
+    # `alerts._layer2_alerts` is what watches these instead.
+    "domains": 1_500,
+    "ats": 1_500,
+    # Per focus source, not in total: 72 candidates is about 26 minutes, and
+    # the scoping is why it is per source -- see `_layer2`.
+    "discover": 12,
+    # Re-verification. These populations do not drain -- a domain re-walked
+    # today is a candidate again later -- so the budget is a cycle time.
+    # 3,502 regrade rows at 800 a week is four and a half weeks; 3,800 reprobe
+    # rows at 1,200 is three.
+    "regrade": 800,
+    "reprobe": 1_200,
+}
+
+
+def _layer2(database: str, budget: dict[str, int] | None = None) -> int:
+    """Grow the set of boards Layer 3 can poll. Returns the number that failed.
+
+    **The step the weekly sequence was missing, and the gap was invisible by
+    construction.** `jobs` polls the boards already resolved and `registries`
+    fetches the employers that should become new ones; between them sat
+    `resolve`, `domains`, `ats` and `discover`, none of which was scheduled.
+    Measured when this was written: 1,984 employer rows -- 678 of them in the
+    focus registries -- had arrived since the last `resolve` and were in no
+    firm, so nothing downstream could see them at all. `domains` answered
+    "nothing left to probe" not because the work was done but because the
+    queue is drawn from `firms`, and `firms` was two months old.
+
+    So the chain runs in order inside one slot. `domains` writes the domains
+    `ats` needs and `ats` writes the tiers `discover` reads, and running the
+    three as separate concurrent steps would advance one link per week -- four
+    weeks from a registration to a first poll. In sequence it is one.
+
+    A failing step does not stop the others, for the reason `_daily` gives: the
+    four are independent enough that one broken host must not cost the other
+    three their budget.
+    """
+    budget = budget or LAYER_TWO_BUDGET
+    steps: list[tuple[str, Callable[[], int]]] = [
+        ("domains", lambda: _domains(database, budget["domains"], 12)),
+        ("ats", lambda: _ats(database, budget["ats"], 12)),
+        # **Scoped per registry, deliberately.** `discover.targets` orders the
+        # global queue by how many registries saw a firm, which is the right
+        # priority for a mixed queue and acts as a filter inside a `--limit`:
+        # Hong Kong's licensed corporations are almost all SFC-only, so they
+        # sort behind every multi-registry bank and an unscoped sweep never
+        # reaches one. That module's own docstring records the measurement --
+        # 50 probed, 0 boards, not one of them a Hong Kong company.
+        *(
+            (f"discover {source}",
+             lambda source=source: _discover(
+                 database, budget["discover"], False, 6, source))
+            for source in FOCUS_SOURCES
+        ),
+        # Re-verification last: a pattern added to `ats.py` or a rule changed in
+        # `domains.py` makes the *stored* answers wrong, and nothing re-asks on
+        # its own. Promotions only in both cases.
+        ("regrade", lambda: _domains(database, budget["regrade"], 12, regrade=True)),
+        ("reprobe", lambda: _ats(database, budget["reprobe"], 12, reprobe=True)),
+    ]
+
+    failed = 0
+    for name, step in steps:
+        print(f"\n--- {name} ---", flush=True)
+        try:
+            if step() != 0:
+                failed += 1
+        except Exception as exc:  # noqa: BLE001 - one step must not stop the rest
+            print(f"  FAIL {name}: {exc}", file=sys.stderr)
+            failed += 1
+    return 1 if failed else 0
+
+
 def _sweep(database: str, name: str, walk, *, partial: bool | None = None):
     """Run one Layer 4 sweep, record it, and hand back what it found.
 
@@ -1190,6 +1287,16 @@ def _daily(database: str, full: bool, publish: bool) -> int:
         # Cheap (one GET) and unrelated to the rest.
         ("corrections", lambda: _corrections(CORRECTIONS_ENDPOINT)),
     ]
+    if full:
+        # **Before the gather, because everything in Layer 2 reads `firms`.**
+        # It is local SQL over `employers` with no network at all, so it costs
+        # the gather nothing to wait for it -- and `layer2` below is drawn
+        # entirely from the table this rebuilds. It therefore picks up the
+        # employers *last* week's `registries` step fetched, which is the one
+        # week of lag this ordering buys: the alternative is 15 minutes of
+        # registry fetching moved out of the concurrent phase to save a lag
+        # shorter than the interval between runs.
+        prologue.append(("firms", lambda: _resolve(database)))
 
     # The portal sweeps use distinct hosts. Employer boards, pages and
     # registries may overlap them or each other, so all source reads share
@@ -1234,6 +1341,14 @@ def _daily(database: str, full: bool, publish: bool) -> int:
         # while the job board itself is fresh. Refresh the established sources
         # alongside the independent job feeds, under the same shared throttle.
         gathered.append(("registries", lambda: _fetch(list(REGISTRIES), database)))
+        # **And the half that turns those employers into boards.** Its hosts
+        # are the firms' own domains and the ATS vendors -- thousands of
+        # distinct hosts that no portal sweep touches -- so under one shared
+        # per-host throttle it costs nothing but hides under Singapore's and
+        # Hong Kong's hour. That is the whole reason it is affordable weekly:
+        # see `_layer2`, and `_gather` for why concurrency is not a politeness
+        # question.
+        gathered.append(("layer2", lambda: _layer2(database)))
 
     failed: list[str] = []
 

@@ -50,13 +50,18 @@ These reversible display gates preserve raw records and human relevance labels.
    overwrite resolved Workday locations. Changed evidence invalidates derived tags;
    unchanged polls do not need reclassification.
 
-The weekly sequence is corrections → concurrent source reads (including the
-employer registries) → tag → bodies →
+The weekly sequence is corrections → rebuild firms → concurrent source reads
+(including the employer registries and the Layer 2 chain that resolves domains,
+fingerprints boards and discovers the rest) → tag → bodies →
 tag → alerts → build/publish. The two tagging passes have different inputs.
 Robots exclusions are read past only under the standing slow weekly policy;
 CAPTCHAs, WAF refusals, and 429 responses retain the existing restrictions.
 
-Discovery must recur alongside polling existing jobs. Use corporate snapshots,
+Discovery recurs alongside polling existing jobs, weekly and budgeted rather
+than monthly, because every queue is self-advancing and a missed Wednesday must
+cost one week rather than a cycle. Every Layer 2 queue is drawn from `firms`,
+so `resolve` runs ahead of them: left unscheduled it froze the whole layer
+while every registry reported healthy. Use corporate snapshots,
 exchange activity and evidenced affiliate/adviser relationships to investigate
 unlicensed or unfamiliar names; keep relationships separate from entity identity.
 Audit unresolved careers channels, including vacancies embedded directly in prose.
