@@ -1232,6 +1232,45 @@ SITES: tuple[Site, ...] = (
     # Sonepar's own metros, which is Summit's business and not somebody else's.
     Site("career.sonepar.com", "summit.com", "Summit Electric Supply", None,
          ats="successfactors"),
+    # ---- roster firms whose stored domain could never reach their board ----
+    #
+    # `audit --pipeline` counted most of these as reached because an aggregator
+    # carried the name, which hid that no board was being polled. The careers
+    # page of each firm's real domain named the board, and each token below was
+    # read through its extractor before being recorded.
+    #
+    # SEB's stored domain was `mb.seb.se`, from a Euronext record, and it does
+    # not answer. `sebgroup.com/career` names no vendor in its markup, so no walk
+    # reaches this board even from the right domain. 121 postings, of which about
+    # 31 were arriving through the Swedish aggregators.
+    Site("seb", "sebgroup.com", "SEB", None, ats="lever_eu"),
+    # Name guessing attached this firm to `union.com.hk`, an unrelated retailer.
+    Site(
+        "iaadtu.fa.ocs.oraclecloud.eu|CX_1",
+        "ubp.com",
+        "Union Bancaire Privee",
+        None,
+        ats="oracle_hcm",
+    ),
+    Site("gam|wd3|GAM", "gam.com", "GAM", None, ats="workday"),
+    Site("ghr|wd1|lateral-us", "bankofamerica.com", "Bank of America", None, ats="workday"),
+    Site("careers.swissre.com", "swissre.com", "Swiss Re", None, ats="successfactors"),
+    Site(
+        "www.careers.zurich.com",
+        "zurich.com",
+        "Zurich Insurance",
+        None,
+        ats="successfactors",
+    ),
+    Site("jobs.six-group.com", "six-group.com", "SIX Group", None, ats="successfactors"),
+    Site("veritiongroupllc", "verition.com", "Verition", None, ats="greenhouse"),
+    Site(
+        "fisch-asset-management-ag",
+        "fam.ch",
+        "Fisch Asset Management",
+        None,
+        ats="personio",
+    ),
 )
 
 BY_TOKEN = {site.token: site for site in SITES}

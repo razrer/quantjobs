@@ -351,3 +351,28 @@ get a real token, then reprobe them.
   URL is a marketing page rather than a board. That is the careers-page walk
   (F5, F8), not a vendor reader. `jobs.paysafe.com` has an expired certificate.
 - 1,210 tests pass.
+
+## Stage 61 — regional ATS hosts and misattached roster domains
+
+Requested: read SEB's Lever board, look for other missed platforms, then fix
+Lever EU, Greenhouse's regional hosts and the roster firms on the wrong domain.
+
+- Lever's EU instance is a separate deployment: SEB's board answers on
+  `api.eu.lever.co` and 404s on `api.lever.co`, so it is its own `lever_eu`
+  vendor and is discoverable by name. Greenhouse's regional hosts are pages only;
+  the global API serves them, so that fix is the pattern alone.
+- Pinned nine firms in `sites.py`: SEB, UBP, GAM, Bank of America, Swiss Re,
+  Zurich, SIX, Verition, Fisch. Each token was read through its extractor first.
+  Dymon and Karl Lagerfeld resolved through the fixed patterns unaided.
+- Real corpus, with the fixed classifier version 67: 4,623 → 4,739 cards, none
+  removed, every surviving payload unchanged; shortlist 299 → 315, none removed.
+  Those boards account for 87 cards and nine shortlist entries. The other 29 and
+  seven are boards already tier A that had never been polled, Blocktech mainly.
+  Bank of America fell from 382 cards to 65 once descriptions were read.
+- Not done: `audit --pipeline` still counts an aggregator name match as reached,
+  so the 171/254 it now reports overstates board coverage. Stored `union.com.hk`
+  and `mb.seb.se` matches remain. Readers for Oleeo, Radancy, HiBob, Refline,
+  ReachMee, Heartpace, Paylocity and ApplicantPro are unbuilt and their endpoints
+  unverified. A card's hub can read a city from its title: Zurich's Köln role
+  shows Switzerland.
+- 1,217 tests pass.

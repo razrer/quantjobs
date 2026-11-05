@@ -346,6 +346,33 @@ class MarqueeRegistrationTest(unittest.TestCase):
         domains = [site.domain for site in sites.SITES]
         self.assertEqual(len(domains), len(set(domains)))
 
+    def test_every_pinned_board_has_a_reader_to_dispatch_to(self):
+        """`extract.targets` filters on `EXTRACTORS`, so a pin naming a vendor
+        that has no extractor would be silently polled by nobody."""
+        for site in sites.SITES:
+            with self.subTest(token=site.token):
+                self.assertIn(site.ats, extract.EXTRACTORS)
+                self.assertEqual(site.ats == "site", site.read is not None)
+
+    def test_roster_firms_are_pinned_to_their_real_domains(self):
+        """Each of these was attached to a domain that could never reach its
+        board: `mb.seb.se`, `union.com.hk`, `l-gam.com`."""
+        by_domain = {site.domain: site for site in sites.SITES}
+        for domain, ats_name, token in (
+            ("sebgroup.com", "lever_eu", "seb"),
+            ("ubp.com", "oracle_hcm", "iaadtu.fa.ocs.oraclecloud.eu|CX_1"),
+            ("gam.com", "workday", "gam|wd3|GAM"),
+            ("bankofamerica.com", "workday", "ghr|wd1|lateral-us"),
+            ("swissre.com", "successfactors", "careers.swissre.com"),
+            ("zurich.com", "successfactors", "www.careers.zurich.com"),
+            ("six-group.com", "successfactors", "jobs.six-group.com"),
+            ("verition.com", "greenhouse", "veritiongroupllc"),
+            ("fam.ch", "personio", "fisch-asset-management-ag"),
+        ):
+            with self.subTest(domain=domain):
+                self.assertEqual(by_domain[domain].ats, ats_name)
+                self.assertEqual(by_domain[domain].token, token)
+
     def test_the_marquee_firms_are_all_present(self):
         by_domain = {site.domain: site for site in sites.SITES}
         for domain, token in (
