@@ -334,6 +334,31 @@ class FingerprintTest(unittest.TestCase):
         hit = ats.fingerprint('src="https://boards-api.greenhouse.io/v1/boards/optiver"')
         self.assertEqual(hit[:2], ("greenhouse", "optiver"))
 
+    def test_a_regional_greenhouse_page_names_the_board(self):
+        """Dymon Asia sat in tier B linking to exactly the first of these. The
+        region is a page host only, so the token is the whole answer."""
+        for markup, token in (
+            (
+                'href="https://job-boards.anz.greenhouse.io/dymonasiacapitalsingaporepteltd?x=1"',
+                "dymonasiacapitalsingaporepteltd",
+            ),
+            ('href="https://job-boards.eu.greenhouse.io/bitpanda"', "bitpanda"),
+            ('src="https://boards.eu.greenhouse.io/embed/job_board/js?for=raisin"', "raisin"),
+            ('src="https://boards-api.eu.greenhouse.io/v1/boards/raisin/jobs"', "raisin"),
+        ):
+            with self.subTest(markup=markup):
+                self.assertEqual(ats.fingerprint(markup)[:2], ("greenhouse", token))
+
+    def test_the_lever_eu_instance_is_its_own_vendor(self):
+        """`jobs.lever.co/` cannot match this host, and treating the two as one
+        would poll an API where SEB's board returns 404."""
+        hit = ats.fingerprint('href="https://jobs.eu.lever.co/karllagerfeld"')
+        self.assertEqual(hit[:2], ("lever_eu", "karllagerfeld"))
+
+    def test_the_global_lever_host_is_still_lever(self):
+        hit = ats.fingerprint('href="https://jobs.lever.co/valkyrietrading"')
+        self.assertEqual(hit[:2], ("lever", "valkyrietrading"))
+
     def test_a_workday_site_called_careers_is_kept(self):
         """The site component is not a host, and "Careers" is what most of
         them are called -- LSEG, Fortress and PJT Partners among them."""

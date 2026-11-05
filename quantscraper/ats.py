@@ -82,6 +82,12 @@ CREATE TABLE IF NOT EXISTS ats_attempts (
 _LABEL = r"([a-z0-9-]{1,63})"
 _HOST_LABEL = r"(?<![a-z0-9-])" + _LABEL
 
+# Greenhouse's regional page hosts: `job-boards.anz.greenhouse.io` is Dymon Asia,
+# `job-boards.eu.greenhouse.io` is Bitpanda and Raisin. Only the page is regional.
+# All three boards answer on the global API and the regional API hosts do not
+# resolve, so the token alone addresses the board and the reader is unchanged.
+_GREENHOUSE_REGION = r"(?:\.[a-z]{2,4})?"
+
 # Each pattern pulls the board token straight out of the ATS's own URL. The
 # Nordic group (Teamtailor, Varbi, Jobylon, Emply, Talentech) is here because
 # without it Stockholm and Copenhagen are not exhaustive -- generic scrapers
@@ -90,7 +96,13 @@ ATS_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     # boards-api URLs carry an API version before the board, so the token is
     # after /boards/, not after the host. Matching the host alone extracts "v1"
     # for every Greenhouse user on earth.
-    ("greenhouse", re.compile(r"boards-api\.greenhouse\.io/v\d+/boards/([a-z0-9_-]+)", re.I)),
+    (
+        "greenhouse",
+        re.compile(
+            r"boards-api" + _GREENHOUSE_REGION + r"\.greenhouse\.io/v\d+/boards/([a-z0-9_-]+)",
+            re.I,
+        ),
+    ),
     # The embed script, which is how a firm puts its board on its own careers
     # page -- and the shape Greenhouse's own copy-paste snippet uses is
     # `/embed/job_board/js?for={board}`, with a path segment between the
@@ -113,13 +125,26 @@ ATS_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "greenhouse",
         re.compile(
-            r"(?:job-)?boards\.greenhouse\.io/embed/job_(?:board|app)[a-z0-9/_.-]{0,40}"
+            r"(?:job-)?boards" + _GREENHOUSE_REGION + r"\.greenhouse\.io"
+            r"/embed/job_(?:board|app)[a-z0-9/_.-]{0,40}"
             r"\?(?:[a-z0-9_]{1,30}=[^\s\"'&]{0,60}&(?:amp;)?){0,4}for=([a-z0-9_-]+)",
             re.I,
         ),
     ),
-    ("greenhouse", re.compile(r"(?:job-)?boards\.greenhouse\.io/(?:embed/job_board\?for=)?([a-z0-9_-]+)", re.I)),
+    (
+        "greenhouse",
+        re.compile(
+            r"(?:job-)?boards" + _GREENHOUSE_REGION + r"\.greenhouse\.io"
+            r"/(?:embed/job_board\?for=)?([a-z0-9_-]+)",
+            re.I,
+        ),
+    ),
     ("lever", re.compile(r"jobs\.lever\.co/([a-z0-9_-]+)", re.I)),
+    # Lever's EU instance is a separate deployment, not a mirror: SEB's 121
+    # postings answer on `api.eu.lever.co` and 404 on `api.lever.co`. A token
+    # names a board only within one instance, so this is its own `ats` rather
+    # than a fallback that could land on another firm's board of the same name.
+    ("lever_eu", re.compile(r"jobs\.eu\.lever\.co/([a-z0-9_-]+)", re.I)),
     # Workday needs three things to be pollable -- tenant, data-centre number
     # and site -- so the token is compound. Capturing the tenant alone reads
     # like success and leaves the board unreachable.

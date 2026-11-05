@@ -87,6 +87,9 @@ CREATE TABLE IF NOT EXISTS board_lookups (
 DISCOVERABLE: tuple[str, ...] = (
     "greenhouse",
     "lever",
+    # Its own entry because the EU instance's boards are invisible to `lever`.
+    # A firm whose careers page names no vendor can only be found by this guess.
+    "lever_eu",
     "ashby",
     "smartrecruiters",
     "workable",

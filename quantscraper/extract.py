@@ -150,10 +150,19 @@ def greenhouse(token: str) -> list[Job]:
 
 
 def lever(token: str) -> list[Job]:
-    payload = _json(f"https://api.lever.co/v0/postings/{token}?mode=json")
+    return _lever_board("api.lever.co", "lever", token)
+
+
+def lever_eu(token: str) -> list[Job]:
+    """Lever's EU instance, which shares the API but none of the boards."""
+    return _lever_board("api.eu.lever.co", "lever_eu", token)
+
+
+def _lever_board(host: str, ats: str, token: str) -> list[Job]:
+    payload = _json(f"https://{host}/v0/postings/{token}?mode=json")
     return [
         Job(
-            ats="lever",
+            ats=ats,
             token=token,
             job_id=str(job["id"]),
             title=job.get("text") or "",
@@ -2257,6 +2266,7 @@ def _site(token: str) -> list[Job]:
 EXTRACTORS: dict[str, Callable[[str], list[Job]]] = {
     "greenhouse": greenhouse,
     "lever": lever,
+    "lever_eu": lever_eu,
     "ashby": ashby,
     "smartrecruiters": smartrecruiters,
     "workable": workable,

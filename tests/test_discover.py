@@ -20,6 +20,40 @@ from quantscraper.discover import Discovery
 from quantscraper.models import Job
 
 
+class LeverInstanceTest(unittest.TestCase):
+    _POSTING = {
+        "id": "abc",
+        "text": "Quantitative Valuation Analyst | SEB, Stockholm",
+        "hostedUrl": "https://jobs.eu.lever.co/seb/abc",
+        "categories": {"location": "Stockholm", "team": "Markets"},
+        "createdAt": 1782419562496,
+        "descriptionPlain": "Pricing models.",
+    }
+
+    def test_each_instance_reads_its_own_api_and_labels_its_own_rows(self):
+        """SEB answers on the EU API and returns 404 on the global one, so a
+        reader that asks the wrong host reports a dead board, not a missing one."""
+        for reader, host, name in (
+            (extract.lever, "api.lever.co", "lever"),
+            (extract.lever_eu, "api.eu.lever.co", "lever_eu"),
+        ):
+            with self.subTest(name=name), mock.patch.object(
+                extract, "_json", return_value=[self._POSTING]
+            ) as fetched:
+                jobs = reader("seb")
+                self.assertEqual(
+                    fetched.call_args.args[0],
+                    f"https://{host}/v0/postings/seb?mode=json",
+                )
+                self.assertEqual((jobs[0].ats, jobs[0].token), (name, "seb"))
+                self.assertEqual(jobs[0].location, "Stockholm")
+
+    def test_the_eu_instance_can_be_found_by_name(self):
+        """A careers page naming no vendor leaves only the guess, and SEB's does."""
+        self.assertIn("lever_eu", discover.DISCOVERABLE)
+        self.assertIn("lever_eu", extract.EXTRACTORS)
+
+
 def job(title: str, description: str = "", department: str | None = None) -> Job:
     return Job(
         ats="greenhouse",
