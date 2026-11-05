@@ -1624,7 +1624,11 @@ def _jobylon_field(name: str, block: str) -> str | None:
 
 
 def jobylon(token: str) -> list[Job]:
-    """Jobylon. `token` is the customer's numeric company id.
+    """Jobylon. `token` is the numeric company id, or `g{id}` for a company group.
+
+    A group is one widget over several companies: Länsförsäkringar's regional
+    insurers publish together under one group, and no single company id holds
+    them. The list has the same shape either way.
 
     **The published dates are deliberately not mapped.** `published_date` and
     `to_date` are real fields, and the widget renders them in the tenant's own
@@ -1634,8 +1638,11 @@ def jobylon(token: str) -> list[Job]:
     the wrong card to the top of the page for weeks. The place is what matters
     here and it arrives as plain text.
     """
+    path = (
+        f"company-groups/{token[1:]}" if token.startswith("g") else f"companies/{token}"
+    )
     body = http.get_text(
-        f"https://cdn.jobylon.com/jobs/companies/{token}/embed/v2/", timeout=25, retries=2
+        f"https://cdn.jobylon.com/jobs/{path}/embed/v2/", timeout=25, retries=2
     )
     start = body.find("JBL.embed_v2['jobs']")
     if start < 0:
@@ -2396,6 +2403,105 @@ def oleeo(token: str) -> list[Job]:
     return jobs
 
 
+_DEEL_CHUNK = re.compile(r'self\.__next_f\.push\(\[1,("(?:[^"\\]|\\.)*")\]\)')
+_DEEL_KEY = '"jobPostings":'
+
+
+def deel(token: str) -> list[Job]:
+    """Deel's job boards. `token` is the board's slug, as `klarna`.
+
+    The page carries the whole list inside the framework's streamed chunks, so
+    they are joined and decoded rather than the markup being searched: a posting
+    is only escaped JSON there. No total is stated, and **a page without the list
+    raises**, because an empty board still prints `"jobPostings":[]`.
+    """
+    markup = http.get_text(f"https://jobs.deel.com/{token}", timeout=25, retries=2)
+    stream = "".join(json.loads(chunk) for chunk in _DEEL_CHUNK.findall(markup))
+    start = stream.find(_DEEL_KEY)
+    if start < 0:
+        raise ValueError(f"deel/{token}: page carries no jobPostings")
+    postings, _ = json.JSONDecoder().raw_decode(stream[start + len(_DEEL_KEY):])
+    jobs = []
+    for posting in postings:
+        detail = posting.get("job") or {}
+        places = []
+        for entry in detail.get("jobLocations") or []:
+            place = entry.get("location") or {}
+            country = (place.get("country") or {}).get("name")
+            places.append(", ".join(p for p in (place.get("name"), country) if p))
+        teams = detail.get("jobDepartments") or []
+        department = teams[0].get("department", {}).get("name") if teams else None
+        jobs.append(
+            Job(
+                ats="deel",
+                token=token,
+                job_id=posting["id"],
+                title=(posting.get("title") or "").strip(),
+                url=f"https://jobs.deel.com/{token}/job-details/{posting['id']}/overview",
+                location="; ".join(places) or None,
+                department=department,
+                posted_at=posting.get("createdAt"),
+            )
+        )
+    return jobs
+
+
+_ATTRAX_TITLE = re.compile(
+    r'<a\b[^>]{0,200}?class="attrax-vacancy-tile__title[^"]{0,120}"'
+    r'[^>]{0,120}?href="([^"]{1,400})"[^>]{0,120}>([\s\S]{1,400}?)</a>',
+    re.I,
+)
+_ATTRAX_PLACE = re.compile(
+    r'attrax-vacancy-tile__location-freetext[\s\S]{0,200}?'
+    r'__item-value"[^>]{0,60}>([\s\S]{0,200}?)</p>',
+    re.I,
+)
+_ATTRAX_PAGES = 200
+
+
+def attrax(token: str) -> list[Job]:
+    """Attrax career sites. `token` is `host/path` of the job list.
+
+    Server-rendered and paged by `?page=N`. No total is reliably printed, so a
+    page adding no new id ends the walk, and **a first page with no tile raises**.
+    """
+    origin = "https://" + token.split("/")[0]
+    jobs: list[Job] = []
+    seen: set[str] = set()
+    for page in range(1, _ATTRAX_PAGES + 1):
+        markup = http.get_text(
+            f"https://{token}" + (f"?page={page}" if page > 1 else ""),
+            timeout=25,
+            retries=2,
+        )
+        if page == 1 and "attrax-vacancy-tile" not in markup:
+            raise ValueError(f"attrax/{token}: no vacancy tile on the list")
+        fresh = 0
+        # Split on the id, because a tile's length varies with its optional
+        # fields and each must not reach into the next.
+        for tile in markup.split('data-jobid="')[1:]:
+            job_id = tile.partition('"')[0]
+            link = _ATTRAX_TITLE.search(tile)
+            if link is None or not job_id.isdigit() or job_id in seen:
+                continue
+            seen.add(job_id)
+            fresh += 1
+            place = _ATTRAX_PLACE.search(tile)
+            jobs.append(
+                Job(
+                    ats="attrax",
+                    token=token,
+                    job_id=job_id,
+                    title=_text(link.group(2)) or "",
+                    url=urllib.parse.urljoin(origin, link.group(1)),
+                    location=(_text(place.group(1)) or None) if place else None,
+                )
+            )
+        if not fresh:
+            break
+    return jobs
+
+
 _REFLINE_ROW = re.compile(r"<tr>([\s\S]{0,3000}?)</tr>", re.I)
 _REFLINE_LINK = re.compile(
     r'<td class="position">\s*<a href="(https://apply\.refline\.ch/\d+/(\d+)/pub/\d+)"'
@@ -2530,6 +2636,28 @@ _REACHMEE_ROW = re.compile(
     re.I,
 )
 _REACHMEE_DATE = re.compile(r"\b(20\d\d-\d\d-\d\d)\b")
+_REACHMEE_PLACE = re.compile(r'<p class="[^"]{0,80}\bextid\b[^"]{0,40}">([^<]{1,120})</p>')
+_REACHMEE_BODY = re.compile(r'<div class="jobad-body">([\s\S]+?)</main>')
+
+
+def _reachmee_detail(url: str) -> tuple[str | None, str | None]:
+    """(location, description) from a posting's page, each None if absent.
+
+    The list publishes neither, so without this every card has no hub and is
+    judged on its title alone. A failed page costs that posting its detail and
+    not the board. **The `extid` line holds a place on the tenants read so far,
+    yet its name says external id**, so a line containing a digit is refused.
+    """
+    try:
+        page = http.get_text(url, timeout=25, retries=2)
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return None, None
+    place = _REACHMEE_PLACE.search(page)
+    body = _REACHMEE_BODY.search(page)
+    location = _text(place.group(1)) if place else None
+    if location and any(ch.isdigit() for ch in location):
+        location = None
+    return location or None, (_text(body.group(1)) or None) if body else None
 
 
 def reachmee(token: str) -> list[Job]:
@@ -2566,14 +2694,18 @@ def reachmee(token: str) -> list[Job]:
             continue
         seen.add(job_id)
         closing = _REACHMEE_DATE.search(rest)
+        url = html.unescape(url)
+        location, description = _reachmee_detail(url)
         jobs.append(
             Job(
                 ats="reachmee",
                 token=token,
                 job_id=job_id,
                 title=_text(title) or "",
-                url=html.unescape(url),
+                url=url,
+                location=location,
                 deadline=closing.group(1) if closing else None,
+                description=description,
             )
         )
     return jobs
@@ -2667,6 +2799,8 @@ EXTRACTORS: dict[str, Callable[[str], list[Job]]] = {
     "applicantpro": applicantpro,
     "reachmee": reachmee,
     "heartpace": heartpace,
+    "deel": deel,
+    "attrax": attrax,
     # Layer 3C: firms with no ATS at all, read from their own website. One
     # entry here, dispatched by token -- see `sites.py` for why the list is
     # deliberately short.

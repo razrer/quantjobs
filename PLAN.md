@@ -410,3 +410,33 @@ Requested: fix the audit's overstatement, then build the unbuilt readers.
 - To check: Citi's Radancy site lists 3,112 and its Workday board 2,017, unexplained.
   The Workday token holds 9,174 rows marked live, many unseen since September. One
   Standard Chartered card is dated 2026-12-10, in the future.
+
+## Stage 63 — the remaining vendors, and a Swedish census
+
+Requested: build the remaining readers, then make Sweden completely covered,
+because a few misses matter more in a small market.
+
+- New vendors: `refline` (ZKB), `paylocity` (XR Trading), `applicantpro` (Group
+  One), `reachmee` (Alecta, FI, Riksbanken, Riksgälden, Folksam), `heartpace` (AP2),
+  `deel` (Klarna), `attrax` (Vattenfall). Jobylon now reads company groups.
+- The census started from about 120 real Swedish employers on their real domains,
+  not the roster, because the roster only shows gaps in firms already thought of.
+  Most misses had no domain, or a wrong one, in the universe. `roster.csv` gained 52
+  Stockholm lines, so `audit --pipeline` now measures these firms.
+- Result: 164/306 roster firms have a board we read, 162 producing, 53 more
+  seen only on a portal. The denominator grew from 254, so this is not comparable
+  with Stage 62's 130/254. Board: 5,699 cards, 364 worth reading; Stockholm
+  112 → 136 cards since Stage 62's snapshot was taken.
+- ReachMee lists no place, so its cards had no hub and were judged on titles alone.
+  The reader now fetches each posting. Riksbanken's pages state no place, so its
+  cards still have no hub.
+- Not changed: the classifier. `non_quant_finance` hides Swedish portfolio and fund
+  management roles such as Alecta's aktieförvaltare and SEB's Portfolio Analyst,
+  which is a scope decision for the user. Student-only roles stay out by the
+  existing scope.
+- Open in Stockholm, see `audit --pipeline`. Own-site or unread: SEK, Kommuninvest
+  (Teamtailor widget with no public board found), Ziklo, Simplicity, Stabelo,
+  Catella, Lannebo, Spiltan, Cevian. DNB Carnegie's old site lists nothing and its
+  new site returned almost nothing. Blocked (403): Euroclear. The Teamtailor widget
+  key on Kommuninvest's page was not used. A TLS failure stops Atlant and Movestic.
+  Portal counts in that list are name substrings, so `Atlant 133` is a lead only.

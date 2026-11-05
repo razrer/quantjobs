@@ -188,12 +188,38 @@ class ReachMeeTest(unittest.TestCase):
         "<td><span>2026-11-15</span></td></tr></table></div>"
     )
 
+    DETAIL = (
+        '<p class="text-color-muted extid">Stockholm</p>'
+        '<div class="jobad-body"><p>The role</p></div></main>'
+    )
+
     def test_the_validator_is_read_from_the_script(self):
-        with _patched(self.SCRIPT, self.PAGE) as get:
+        with _patched(self.SCRIPT, self.PAGE, self.DETAIL) as get:
             job = extract.reachmee("w.reachmee.com|I1|2|6")[0]
         self.assertIn("validator=abcdef0123456789", get.call_args_list[1].args[0])
         self.assertEqual((job.job_id, job.title), ("241", "Testare"))
         self.assertEqual(job.deadline, "2026-11-15")
+
+    def test_each_posting_gets_its_place_and_description(self):
+        with _patched(self.SCRIPT, self.PAGE, self.DETAIL):
+            job = extract.reachmee("w.reachmee.com|I1|2|6")[0]
+        self.assertEqual((job.location, job.description), ("Stockholm", "The role"))
+
+    def test_an_external_id_is_not_taken_for_a_place(self):
+        page = '<p class="extid">REF-2031</p><div class="jobad-body">x</div></main>'
+        with _patched(self.SCRIPT, self.PAGE, page):
+            self.assertIsNone(extract.reachmee("w.reachmee.com|I1|2|6")[0].location)
+
+    def test_a_failed_posting_page_keeps_the_posting(self):
+        def answer(url, **_):
+            if "customerjs" in url:
+                return self.SCRIPT
+            if "/main?" in url:
+                return self.PAGE
+            raise TimeoutError
+        with mock.patch.object(extract.http, "get_text", side_effect=answer):
+            job = extract.reachmee("w.reachmee.com|I1|2|6")[0]
+        self.assertEqual((job.title, job.location), ("Testare", None))
 
     def test_a_missing_validator_or_list_raises(self):
         with _patched("nothing"), self.assertRaises(ValueError):
@@ -243,6 +269,84 @@ class SmallVendorFingerprintTest(unittest.TestCase):
             with self.subTest(ats=ats_name):
                 self.assertEqual(ats.fingerprint(markup)[:2], (ats_name, token))
                 self.assertIn(ats_name, extract.EXTRACTORS)
+
+
+class JobylonGroupTest(unittest.TestCase):
+    def test_a_group_token_reads_the_group_widget(self):
+        page = "JBL.embed_v2['jobs'] = [ { id: '1', url: '/jobs/1-x/', title: 'Quant', company: 'AMF', } ]"
+        with _patched(page) as get:
+            extract.jobylon("g468")
+        self.assertIn("/company-groups/468/embed", get.call_args.args[0])
+
+    def test_a_company_token_still_reads_the_company_widget(self):
+        page = "JBL.embed_v2['jobs'] = []"
+        with _patched(page) as get:
+            extract.jobylon("1843")
+        self.assertIn("/companies/1843/embed", get.call_args.args[0])
+
+    def test_groups_are_fingerprinted_from_both_forms(self):
+        for markup in (
+            "https://cdn.jobylon.com/jobs/company-groups/468/embed/v2/",
+            "var jbl_group_id = 468;",
+        ):
+            self.assertEqual(ats.fingerprint(markup)[:2], ("jobylon", "g468"))
+        self.assertEqual(
+            ats.fingerprint("https://cdn.jobylon.com/jobs/companies/953/embed/v2/")[:2],
+            ("jobylon", "953"),
+        )
+
+
+class DeelTest(unittest.TestCase):
+    def _page(self, postings):
+        stream = '{"x":1,"jobPostings":' + json.dumps(postings) + ',"y":2}'
+        half = len(stream) // 2
+        return "".join(
+            f"<script>self.__next_f.push([1,{json.dumps(part)}])</script>"
+            for part in (stream[:half], stream[half:])
+        )
+
+    def test_a_posting_spread_across_chunks_is_read(self):
+        page = self._page([{
+            "id": "abc", "title": "Data Scientist ", "createdAt": "2026-07-17T13:51:21Z",
+            "job": {"jobLocations": [
+                {"location": {"name": "Stockholm", "country": {"name": "Sweden"}}}
+            ]},
+        }])
+        with _patched(page):
+            job = extract.deel("klarna")[0]
+        self.assertEqual((job.job_id, job.title), ("abc", "Data Scientist"))
+        self.assertEqual(job.location, "Stockholm, Sweden")
+        self.assertEqual(job.url, "https://jobs.deel.com/klarna/job-details/abc/overview")
+
+    def test_an_empty_board_is_an_answer_and_a_changed_page_is_not(self):
+        with _patched(self._page([])):
+            self.assertEqual(extract.deel("klarna"), [])
+        with _patched("<html></html>"), self.assertRaises(ValueError):
+            extract.deel("klarna")
+
+
+def _attrax_tile(job_id, title="Analyst", place="Solna"):
+    return (
+        f'<div class="attrax-vacancy-tile" data-jobid="{job_id}">'
+        f'<a class="attrax-vacancy-tile__title attrax-button" href="/global/job/x-jid-{job_id}">{title}</a>'
+        '<div class="attrax-vacancy-tile__location-freetext attrax-vacancy-tile__item">'
+        f'<p class="attrax-vacancy-tile__item-label">Location</p>'
+        f'<p class="attrax-vacancy-tile__item-value"> {place} </p></div></div>'
+    )
+
+
+class AttraxTest(unittest.TestCase):
+    def test_paging_stops_on_a_page_adding_nothing(self):
+        with _patched(_attrax_tile(1), _attrax_tile(2), _attrax_tile(2)) as get:
+            jobs = extract.attrax("careers.x.com/global/jobs")
+        self.assertEqual([j.job_id for j in jobs], ["1", "2"])
+        self.assertEqual(jobs[0].location, "Solna")
+        self.assertEqual(jobs[0].url, "https://careers.x.com/global/job/x-jid-1")
+        self.assertIn("?page=2", get.call_args_list[1].args[0])
+
+    def test_a_changed_page_raises(self):
+        with _patched("<html></html>"), self.assertRaises(ValueError):
+            extract.attrax("careers.x.com/global/jobs")
 
 
 def _gresearch_card(slug, title, place="London"):

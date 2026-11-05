@@ -822,6 +822,16 @@ def paylocity_body(row) -> Fetched:
     return _ld_body(row["url"])
 
 
+def attrax_body(row) -> Fetched:
+    """Attrax's posting page, which carries a schema.org `JobPosting`."""
+    return _ld_body(row["url"])
+
+
+def deel_body(row) -> Fetched:
+    """Deel's posting page, `/{board}/job-details/{id}/overview`."""
+    return _ld_body(row["url"])
+
+
 def applicantpro_body(row) -> Fetched:
     """ApplicantPro's posting page, whose URL the list endpoint states."""
     return _ld_body(row["url"])
@@ -841,6 +851,8 @@ FETCHERS = {
     "refline": refline_body,
     "paylocity": paylocity_body,
     "applicantpro": applicantpro_body,
+    "attrax": attrax_body,
+    "deel": deel_body,
 }
 
 # The fetchers that can answer *where*, which is a strict subset: Jobbsafari

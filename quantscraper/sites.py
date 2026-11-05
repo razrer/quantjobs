@@ -1361,6 +1361,44 @@ SITES: tuple[Site, ...] = (
     Site("group1", "group1.com", "Group One", None, ats="applicantpro"),
     Site("web103.reachmee.com|I005|1018|6", "alecta.se", "Alecta", None, ats="reachmee"),
     Site("ap2", "ap2.se", "AP2", None, ats="heartpace"),
+    # ---- Swedish employers, from a census of the market by name ----
+    #
+    # Sweden is small enough that each of these matters, and most were invisible
+    # for one reason: the firm's real domain was not in the universe, or the
+    # registry's name resolved to a wrong one. Read through its extractor first.
+    Site("sbab", "sbab.se", "SBAB", None, ats="teamtailor"),
+    Site("career.avanza.se", "avanza.se", "Avanza", None, ats="teamtailor"),
+    Site("karriar.skandia.se", "skandia.se", "Skandia", None, ats="teamtailor"),
+    Site("careers.lysa.se", "lysa.se", "Lysa", None, ats="teamtailor"),
+    Site("afaforsakring", "afaforsakring.se", "AFA", None, ats="teamtailor"),
+    Site("career.borgohypotek.se", "borgohypotek.se", "Borgo", None, ats="teamtailor"),
+    Site("career.anyfin.com", "anyfin.com", "Anyfin", None, ats="teamtailor"),
+    Site(
+        "jobb.sparbankenskane.se",
+        "sparbankenskane.se",
+        "Sparbanken Sk\u00e5ne",
+        None,
+        ats="teamtailor",
+    ),
+    Site("career.investorab.com", "investorab.com", "Investor AB", None, ats="teamtailor"),
+    Site("latourindustriesab", "latour.se", "Latour", None, ats="teamtailor"),
+    Site("eqtpartners", "eqtgroup.com", "EQT", None, ats="greenhouse"),
+    Site("storebrand|wd3|SPP_Careers", "spp.se", "SPP", None, ats="workday"),
+    Site("1843", "amf.se", "AMF", None, ats="jobylon"),
+    Site("953", "soderbergpartners.se", "S\u00f6derberg & Partners", None, ats="jobylon"),
+    Site("g468", "lansforsakringar.se", "L\u00e4nsf\u00f6rs\u00e4kringar", None, ats="jobylon"),
+    Site(
+        "web103.reachmee.com|I007|625|2",
+        "fi.se",
+        "Finansinspektionen",
+        None,
+        ats="reachmee",
+    ),
+    Site("web103.reachmee.com|I009|943|6", "riksgalden.se", "Riksg\u00e4lden", None, ats="reachmee"),
+    Site("web103.reachmee.com|I003|295|5", "riksbank.se", "Riksbanken", None, ats="reachmee"),
+    Site("web103.reachmee.com|I021|1833|9", "folksam.se", "Folksam", None, ats="reachmee"),
+    Site("klarna", "klarna.com", "Klarna", None, ats="deel"),
+    Site("careers.vattenfall.com/global/jobs", "vattenfall.com", "Vattenfall", None, ats="attrax"),
     Site(
         "jobs.standardchartered.com",
         "sc.com",
@@ -1376,7 +1414,15 @@ SITES: tuple[Site, ...] = (
 # of postings as having no board. `register` writes these into `domain_lookups`,
 # and each domain below already holds the firm's tier A row.
 ROSTER_BOARDS: dict[str, str] = {
+    "ABG Sundal Collier": "abgsc.com",
     "DBS": "dbs.com",
+    "Landshypotek": "landshypotek.se",
+    "Nordnet": "nordnetab.com",
+    "Norion": "norionbank.se",
+    "Pareto Securities": "paretosec.com",
+    "Resurs": "resursbank.se",
+    "Svea": "svea.com",
+    "Swedbank Robur": "swedbankrobur.se",
     "HSBC": "hangseng.com",  # the `hsbc` Eightfold board, filed under its subsidiary
     "LSEG": "lseg.com",
     "Nomura": "instinet.com",  # careers.nomura.com, likewise

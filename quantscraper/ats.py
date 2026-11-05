@@ -149,6 +149,7 @@ ATS_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     # is anchored and bounded, because a page can hold long runs of these
     # characters and an unanchored `+` before a literal goes quadratic on them.
     ("refline", re.compile(r"apply\.refline\.ch/(\d{3,12})/", re.I)),
+    ("deel", re.compile(r"jobs\.deel\.com/(?:job-boards/)?([a-z0-9-]{1,63})", re.I)),
     (
         "paylocity",
         re.compile(
@@ -254,6 +255,16 @@ ATS_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     # *past* the id. `ATS_PATTERNS` is checked in order, so ordering is how
     # this is expressed.
     ("jobylon", re.compile(r"jobylon\.com/jobs/companies/(\d{1,9})/embed", re.I)),
+    # A group is one widget over several companies, and the widget either names
+    # the embed or sets `jbl_group_id` for its loader.
+    (
+        "jobylon",
+        re.compile(
+            r"jobylon\.com/jobs/company-groups/(?P<group>\d{1,9})/embed"
+            r"|jbl_group_id\s*=\s*(?P<variable>\d{1,9})",
+            re.I,
+        ),
+    ),
     ("jobylon", re.compile(_HOST_LABEL + r"\.jobylon\.com|jobylon\.com/jobs/([a-z0-9-]+)", re.I)),
     # Emply serves each customer from `{board}.career.emply.com`, so the label
     # immediately before the vendor's own `career` host is the board -- not the
@@ -662,7 +673,18 @@ def _reachmee_token(match: re.Match[str]) -> str | None:
     )
 
 
+def _jobylon_token(match: re.Match[str]) -> str | None:
+    """`g{id}` for a company group, otherwise the first group as usual."""
+    parts = match.groupdict()
+    group = parts.get("group") or parts.get("variable")
+    if group:
+        return f"g{group}"
+    found = [piece for piece in match.groups() if piece]
+    return found[0] if found else None
+
+
 _TOKEN_BUILDERS = {
+    "jobylon": _jobylon_token,
     "oleeo": _oleeo_token,
     "reachmee": _reachmee_token,
     "workday": _workday_token,
