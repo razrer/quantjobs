@@ -387,11 +387,12 @@ Requested: fix the audit's overstatement, then build the unbuilt readers.
 - It also read `jobs.domain` alone, but one board shared by several domains is
   filed under the first, so Danske's 500 postings looked like nothing. It now asks
   the board. `sites.ROSTER_BOARDS` names firms read under another domain, such as
-  DBS and Swedbank. Together: 116/254.
+  DBS and Swedbank.
 - New vendors: `radancy` (BlackRock 281) and `oleeo` (Jefferies 50), both
   fingerprinted for future probes. New reader: `gresearch` (64). Pinned on existing
   readers: Optiver, Qube, JPMorgan, Citi, Mirabaud, LGT, Lloyds, Standard Chartered.
-  Result: 130/254 have a board, 128 producing, 47 more seen only on a portal.
+  With the roster names above: 107/254 → 130/254 have a board, 128 producing,
+  47 more seen only on a portal. The split between the two was not measured.
 - Real corpus, classifier version 67 unchanged: 4,739 → 5,660 cards, 939 added, 18
   removed, 2 changed; 315 → 362 worth reading. 17 of the removals are JPMorgan's
   MyCareersFuture adverts, each matched by title on its own board. The other is an
