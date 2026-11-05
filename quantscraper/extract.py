@@ -31,7 +31,7 @@ import urllib.error
 import urllib.parse
 import xml.etree.ElementTree as ElementTree
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from collections.abc import Callable
 
 from . import db, http, parsing
@@ -2396,6 +2396,241 @@ def oleeo(token: str) -> list[Job]:
     return jobs
 
 
+_REFLINE_ROW = re.compile(r"<tr>([\s\S]{0,3000}?)</tr>", re.I)
+_REFLINE_LINK = re.compile(
+    r'<td class="position">\s*<a href="(https://apply\.refline\.ch/\d+/(\d+)/pub/\d+)"'
+    r"[^>]{0,100}>([\s\S]{1,400}?)</a>",
+    re.I,
+)
+_REFLINE_CELL = r'<td class="{}">([\s\S]{{0,400}}?)</td>'
+
+
+def refline(token: str) -> list[Job]:
+    """Refline, a Swiss vendor. `token` is the customer number.
+
+    `search.html` renders every opening into one table and sorts it in the
+    browser, so there is no paging and no stated total to audit against.
+
+    **A page with no results table raises.** The id is the requisition number;
+    the `pub/N` after it is a publication number, so it stays in the URL only.
+    """
+    markup = http.get_text(
+        f"https://apply.refline.ch/{token}/search.html", timeout=25, retries=2
+    )
+    if "searchResult" not in markup:
+        raise ValueError(f"refline/{token}: no results table on search.html")
+    jobs: list[Job] = []
+    seen: set[str] = set()
+    for row in _REFLINE_ROW.findall(markup):
+        link = _REFLINE_LINK.search(row)
+        if link is None or link.group(2) in seen:
+            continue
+        seen.add(link.group(2))
+        place = re.search(_REFLINE_CELL.format("workplace"), row, re.I)
+        area = re.search(_REFLINE_CELL.format("operationArea"), row, re.I)
+        jobs.append(
+            Job(
+                ats="refline",
+                token=token,
+                job_id=link.group(2),
+                title=_text(link.group(3)) or "",
+                url=link.group(1),
+                location=(_text(place.group(1)) or None) if place else None,
+                department=(_text(area.group(1)) or None) if area else None,
+            )
+        )
+    return jobs
+
+
+_PAYLOCITY_DATA = re.compile(r"window\.pageData\s*=\s*(\{[\s\S]*?\});?\s*</script>")
+
+
+def paylocity(token: str) -> list[Job]:
+    """Paylocity's public job list. `token` is the company GUID.
+
+    The page embeds its whole list as `window.pageData`. The `Description` there
+    is cut at about 110 characters, so it is not stored: the classifier would
+    read a teaser as if it were the posting. `bodies` fetches the real one.
+    """
+    markup = http.get_text(
+        f"https://recruiting.paylocity.com/recruiting/jobs/All/{token}",
+        timeout=25,
+        retries=2,
+    )
+    data = _PAYLOCITY_DATA.search(markup)
+    if data is None:
+        raise ValueError(f"paylocity/{token}: page has no pageData")
+    return [
+        Job(
+            ats="paylocity",
+            token=token,
+            job_id=str(job["JobId"]),
+            title=job.get("JobTitle") or "",
+            url=f"https://recruiting.paylocity.com/Recruiting/Jobs/Details/{job['JobId']}",
+            location=job.get("LocationName"),
+            department=job.get("HiringDepartment"),
+            posted_at=job.get("PublishedDate"),
+        )
+        for job in json.loads(data.group(1))["Jobs"]
+        if not job.get("IsInternal")
+    ]
+
+
+_APPLICANTPRO_SITE = re.compile(r'"domain_id"\s*:\s*"(\d+)"')
+
+
+def applicantpro(token: str) -> list[Job]:
+    """ApplicantPro, now isolved. `token` is the subdomain.
+
+    The list page mounts a component that asks `/core/jobs/{site}`, and the site
+    number is printed on the list page. The endpoint errors without `getParams`,
+    so an empty one is sent. No total is stated.
+    """
+    base = f"https://{token}.applicantpro.com"
+    site = _APPLICANTPRO_SITE.search(
+        http.get_text(f"{base}/jobs/", timeout=25, retries=2)
+    )
+    if site is None:
+        raise ValueError(f"applicantpro/{token}: list page names no site number")
+    payload = _json(
+        f"{base}/core/jobs/{site.group(1)}?getParams=%7B%7D",
+        headers={"Accept": "application/json"},
+    )
+    if not payload.get("success"):
+        raise ValueError(f"applicantpro/{token}: {payload.get('message')}")
+    jobs = []
+    for job in payload["data"]["jobs"]:
+        posted = None
+        try:
+            posted = datetime.strptime(
+                job.get("startDateRef") or "", "%b %d, %Y"
+            ).date().isoformat()
+        except ValueError:
+            pass
+        jobs.append(
+            Job(
+                ats="applicantpro",
+                token=token,
+                job_id=str(job["id"]),
+                title=job.get("title") or "",
+                url=job.get("jobUrl"),
+                location=job.get("jobLocation"),
+                department=job.get("orgTitle"),
+                posted_at=posted,
+            )
+        )
+    return jobs
+
+
+_REACHMEE_VALIDATOR = re.compile(r"var validator = '([0-9a-f]{16,64})'")
+_REACHMEE_LANG = re.compile(r"var langDef = '([A-Za-z]{2})'")
+_REACHMEE_ROW = re.compile(
+    r"<a href='([^']{1,400}[?&]job_id=(\d+)[^']{0,100})'[^>]{0,100}>([\s\S]{1,400}?)</a>"
+    r"([\s\S]{0,400}?)</tr>",
+    re.I,
+)
+_REACHMEE_DATE = re.compile(r"\b(20\d\d-\d\d-\d\d)\b")
+
+
+def reachmee(token: str) -> list[Job]:
+    """ReachMee, a Nordic vendor. `token` is `host|installation|customer|site`.
+
+    Customers embed a script holding the validator the list page requires, so
+    the script is read on every poll and a rotated validator costs nothing.
+    `mainjoblist` is the anchor, and its absence raises rather than reading as a
+    firm with no openings.
+    """
+    host, installation, customer, site = token.split("|")
+    script = http.get_text(
+        f"https://{host}/customerjs/{installation}-{customer}-{site}.js",
+        timeout=25,
+        retries=2,
+    )
+    validator = _REACHMEE_VALIDATOR.search(script)
+    if validator is None:
+        raise ValueError(f"reachmee/{token}: script holds no validator")
+    language = _REACHMEE_LANG.search(script)
+    markup = http.get_text(
+        f"https://{host}/ext/{installation}/{customer}/main?site={site}"
+        f"&validator={validator.group(1)}"
+        f"&lang={language.group(1) if language else 'SE'}",
+        timeout=25,
+        retries=2,
+    )
+    if "mainjoblist" not in markup:
+        raise ValueError(f"reachmee/{token}: no job list on the page")
+    jobs: list[Job] = []
+    seen: set[str] = set()
+    for url, job_id, title, rest in _REACHMEE_ROW.findall(markup):
+        if job_id in seen:
+            continue
+        seen.add(job_id)
+        closing = _REACHMEE_DATE.search(rest)
+        jobs.append(
+            Job(
+                ats="reachmee",
+                token=token,
+                job_id=job_id,
+                title=_text(title) or "",
+                url=html.unescape(url),
+                deadline=closing.group(1) if closing else None,
+            )
+        )
+    return jobs
+
+
+_HEARTPACE_DATA = re.compile(
+    r'<script id="__NEXT_DATA__"[^>]{0,100}>([\s\S]+?)</script>'
+)
+_HEARTPACE_PAGES = 50
+
+
+def heartpace(token: str) -> list[Job]:
+    """Heartpace Hiring. `token` is the client slug.
+
+    The careers page embeds its list, descriptions included, in `__NEXT_DATA__`,
+    and states `jobs_count`, so a walk that stops short raises. Its
+    `published_date` is prose ("Posted 1 day(s) ago"), so no date is stored.
+    """
+    jobs: list[Job] = []
+    seen: set[str] = set()
+    advertised = None
+    for page in range(1, _HEARTPACE_PAGES + 1):
+        markup = http.get_text(
+            f"https://{token}.hiring.heartpace.com/careers"
+            + (f"?page={page}" if page > 1 else ""),
+            timeout=25,
+            retries=2,
+        )
+        data = _HEARTPACE_DATA.search(markup)
+        if data is None:
+            raise ValueError(f"heartpace/{token}: page has no __NEXT_DATA__")
+        board = json.loads(data.group(1))["props"]["pageProps"]["job_data"]
+        advertised = board["jobs_count"]
+        fresh = 0
+        for job in board["jobs"]:
+            slug = job["slug"]
+            if slug in seen:
+                continue
+            seen.add(slug)
+            fresh += 1
+            jobs.append(
+                Job(
+                    ats="heartpace",
+                    token=token,
+                    job_id=slug,
+                    title=job.get("job_title") or "",
+                    url=f"https://jobs.hiring.heartpace.com/{token}/{slug}/view-job",
+                    location=job.get("city_country"),
+                    description=_text(job.get("description")),
+                )
+            )
+        if not fresh or not board.get("next_page"):
+            break
+    _shortfall("heartpace", token, advertised, jobs)
+    return jobs
+
+
 EXTRACTORS: dict[str, Callable[[str], list[Job]]] = {
     "greenhouse": greenhouse,
     "lever": lever,
@@ -2427,6 +2662,11 @@ EXTRACTORS: dict[str, Callable[[str], list[Job]]] = {
     "join": join,
     "radancy": radancy,
     "oleeo": oleeo,
+    "refline": refline,
+    "paylocity": paylocity,
+    "applicantpro": applicantpro,
+    "reachmee": reachmee,
+    "heartpace": heartpace,
     # Layer 3C: firms with no ATS at all, read from their own website. One
     # entry here, dispatched by token -- see `sites.py` for why the list is
     # deliberately short.

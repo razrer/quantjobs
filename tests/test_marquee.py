@@ -385,6 +385,11 @@ class MarqueeRegistrationTest(unittest.TestCase):
             ("jefferies.com", "oleeo", "jefferies.tal.net|4"),
             ("gresearch.com", "site", "gresearch"),
             ("mirabaud.com", "smartrecruiters", "MirabaudCieSA"),
+            ("zkb.ch", "refline", "792841"),
+            ("xrtrading.com", "paylocity", "5c109104-7c4d-415c-9ee4-54e3af55f9e7"),
+            ("group1.com", "applicantpro", "group1"),
+            ("alecta.se", "reachmee", "web103.reachmee.com|I005|1018|6"),
+            ("ap2.se", "heartpace", "ap2"),
         ):
             with self.subTest(domain=domain):
                 self.assertEqual(by_domain[domain].ats, ats_name)

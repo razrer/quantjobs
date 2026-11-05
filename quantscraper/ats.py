@@ -145,6 +145,36 @@ ATS_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     # names a board only within one instance, so this is its own `ats` rather
     # than a fallback that could land on another firm's board of the same name.
     ("lever_eu", re.compile(r"jobs\.eu\.lever\.co/([a-z0-9_-]+)", re.I)),
+    # Five smaller vendors, each read through its public list. Every host pattern
+    # is anchored and bounded, because a page can hold long runs of these
+    # characters and an unanchored `+` before a literal goes quadratic on them.
+    ("refline", re.compile(r"apply\.refline\.ch/(\d{3,12})/", re.I)),
+    (
+        "paylocity",
+        re.compile(
+            r"recruiting\.paylocity\.com/recruiting/jobs/all/([0-9a-f-]{36})", re.I
+        ),
+    ),
+    (
+        "applicantpro",
+        re.compile(r"(?<![a-z0-9-])(?!www\.)([a-z0-9-]{1,63})\.applicantpro\.com", re.I),
+    ),
+    (
+        "reachmee",
+        re.compile(
+            r"(?P<host>web\d{1,4}\.reachmee\.com)/customerjs/"
+            r"(?P<installation>I\d{1,6})-(?P<customer>\d{1,8})-(?P<site>\d{1,6})\.js",
+            re.I,
+        ),
+    ),
+    (
+        "heartpace",
+        re.compile(
+            r"jobs\.hiring\.heartpace\.com/([a-z0-9-]{1,63})"
+            r"|(?<![a-z0-9-])(?!jobs\.)([a-z0-9-]{1,63})\.hiring\.heartpace\.com",
+            re.I,
+        ),
+    ),
     # Oleeo's token is compound: one host publishes per brand, and the brand
     # number is part of every public path.
     (
@@ -409,7 +439,7 @@ _NOT_A_TOKEN = {
 # with `any` instead.
 # The two vendors whose board identifier is genuinely a number -- see the
 # `token.isdigit()` guard in `fingerprint`.
-_NUMERIC_TOKEN_OK = {"workday", "jobylon"}
+_NUMERIC_TOKEN_OK = {"workday", "jobylon", "refline"}
 
 _NEVER_A_PIECE = {
     "assets", "cdn", "static", "staticfe", "errors", "sentry",
@@ -623,8 +653,18 @@ def _oleeo_token(match: re.Match[str]) -> str | None:
     return f"{match.group('host').casefold()}|{match.group('brand')}"
 
 
+def _reachmee_token(match: re.Match[str]) -> str | None:
+    """`host|installation|customer|site`, which together name the script."""
+    parts = match.groupdict()
+    return "|".join(
+        (parts["host"].casefold(), parts["installation"].upper(),
+         parts["customer"], parts["site"])
+    )
+
+
 _TOKEN_BUILDERS = {
     "oleeo": _oleeo_token,
+    "reachmee": _reachmee_token,
     "workday": _workday_token,
     "oracle_hcm": _oracle_hcm_token,
     "ukg": _ukg_token,

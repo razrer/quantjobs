@@ -113,6 +113,138 @@ class FingerprintTest(unittest.TestCase):
             self.assertIn(name, extract.EXTRACTORS)
 
 
+def _patched(*pages):
+    return mock.patch.object(extract.http, "get_text", side_effect=list(pages))
+
+
+class ReflineTest(unittest.TestCase):
+    PAGE = (
+        '<table class="searchResult"><tbody><tr>'
+        '<td class="position"><a href="https://apply.refline.ch/9/11/pub/3" '
+        'target="_blank">Quant &amp; Analyst</a></td>'
+        '<td class="operationArea">Risk</td><td class="workplace">Zürich</td>'
+        "</tr></tbody></table>"
+    )
+
+    def test_a_row_becomes_a_posting(self):
+        with _patched(self.PAGE):
+            job = extract.refline("9")[0]
+        self.assertEqual((job.job_id, job.title), ("11", "Quant & Analyst"))
+        self.assertEqual((job.location, job.department), ("Zürich", "Risk"))
+        self.assertEqual(job.url, "https://apply.refline.ch/9/11/pub/3")
+
+    def test_an_empty_table_is_an_answer_and_no_table_is_not(self):
+        with _patched('<table class="searchResult"></table>'):
+            self.assertEqual(extract.refline("9"), [])
+        with _patched("<div>moved</div>"), self.assertRaises(ValueError):
+            extract.refline("9")
+
+
+class PaylocityTest(unittest.TestCase):
+    def _page(self, jobs):
+        return f"<script>window.pageData = {json.dumps({'Jobs': jobs})};</script>"
+
+    def test_the_teaser_is_not_stored_and_internal_jobs_are_skipped(self):
+        page = self._page([
+            {"JobId": 5, "JobTitle": "Trader", "LocationName": "Chicago",
+             "PublishedDate": "2026-10-08T10:20:24-05:00", "Description": "XR is a pro",
+             "IsInternal": False},
+            {"JobId": 6, "JobTitle": "Internal", "IsInternal": True},
+        ])
+        with _patched(page):
+            jobs = extract.paylocity("guid")
+        self.assertEqual([j.job_id for j in jobs], ["5"])
+        self.assertIsNone(jobs[0].description)
+        self.assertTrue(jobs[0].url.endswith("/Recruiting/Jobs/Details/5"))
+
+    def test_a_changed_page_raises(self):
+        with _patched("<html></html>"), self.assertRaises(ValueError):
+            extract.paylocity("guid")
+
+
+class ApplicantProTest(unittest.TestCase):
+    def test_the_site_number_comes_from_the_list_page(self):
+        api = json.dumps({"success": True, "data": {"jobs": [
+            {"id": 4, "title": "Quant", "jobLocation": "Chicago, IL",
+             "startDateRef": "Sep 24, 2026", "orgTitle": "Trading",
+             "jobUrl": "https://x.applicantpro.com/jobs/4"},
+        ]}})
+        with _patched('{"domain_id":"489"}', api) as get:
+            jobs = extract.applicantpro("x")
+        self.assertIn("/core/jobs/489?getParams=", get.call_args_list[1].args[0])
+        self.assertEqual(jobs[0].posted_at, "2026-09-24")
+        self.assertEqual(jobs[0].location, "Chicago, IL")
+
+    def test_a_page_with_no_site_number_raises(self):
+        with _patched("<html></html>"), self.assertRaises(ValueError):
+            extract.applicantpro("x")
+
+
+class ReachMeeTest(unittest.TestCase):
+    SCRIPT = "var validator = 'abcdef0123456789'; var langDef = 'SE';"
+    PAGE = (
+        "<div id='mainjoblist'><table><tr><td><a href='https://w.reachmee.com/ext/I1/2/"
+        "job?site=6&lang=SE&validator=abc&job_id=241' class='btn'>Testare</a></td>"
+        "<td><span>2026-11-15</span></td></tr></table></div>"
+    )
+
+    def test_the_validator_is_read_from_the_script(self):
+        with _patched(self.SCRIPT, self.PAGE) as get:
+            job = extract.reachmee("w.reachmee.com|I1|2|6")[0]
+        self.assertIn("validator=abcdef0123456789", get.call_args_list[1].args[0])
+        self.assertEqual((job.job_id, job.title), ("241", "Testare"))
+        self.assertEqual(job.deadline, "2026-11-15")
+
+    def test_a_missing_validator_or_list_raises(self):
+        with _patched("nothing"), self.assertRaises(ValueError):
+            extract.reachmee("w.reachmee.com|I1|2|6")
+        with _patched(self.SCRIPT, "<html></html>"), self.assertRaises(ValueError):
+            extract.reachmee("w.reachmee.com|I1|2|6")
+
+
+class HeartpaceTest(unittest.TestCase):
+    def _page(self, jobs, count, next_page=None):
+        data = {"props": {"pageProps": {"job_data": {
+            "jobs": jobs, "jobs_count": count, "next_page": next_page}}}}
+        return f'<script id="__NEXT_DATA__" type="application/json">{json.dumps(data)}</script>'
+
+    JOB = {"slug": "quant", "job_title": "Quant", "city_country": "Gothenburg",
+           "description": "<p>The role</p>", "published_date": "Posted 1 day(s) ago"}
+
+    def test_a_posting_keeps_its_description(self):
+        with _patched(self._page([self.JOB], 1)):
+            job = extract.heartpace("ap2")[0]
+        self.assertEqual((job.job_id, job.description), ("quant", "The role"))
+        self.assertIsNone(job.posted_at)
+        self.assertEqual(job.url, "https://jobs.hiring.heartpace.com/ap2/quant/view-job")
+
+    def test_a_short_walk_raises(self):
+        with _patched(self._page([self.JOB], 40)), self.assertRaises(ValueError):
+            extract.heartpace("ap2")
+
+    def test_a_changed_page_raises(self):
+        with _patched("<html></html>"), self.assertRaises(ValueError):
+            extract.heartpace("ap2")
+
+
+class SmallVendorFingerprintTest(unittest.TestCase):
+    def test_each_vendor_yields_its_token(self):
+        for markup, ats_name, token in (
+            ("https://apply.refline.ch/792841/search.html", "refline", "792841"),
+            ("https://recruiting.paylocity.com/recruiting/jobs/All/"
+             "5c109104-7c4d-415c-9ee4-54e3af55f9e7/XR", "paylocity",
+             "5c109104-7c4d-415c-9ee4-54e3af55f9e7"),
+            ("https://group1.applicantpro.com/jobs/4221876", "applicantpro", "group1"),
+            ("https://web103.reachmee.com/customerjs/I005-1018-6.js", "reachmee",
+             "web103.reachmee.com|I005|1018|6"),
+            ("https://jobs.hiring.heartpace.com/ap2/x/view-job", "heartpace", "ap2"),
+            ("https://ap2.hiring.heartpace.com/careers", "heartpace", "ap2"),
+        ):
+            with self.subTest(ats=ats_name):
+                self.assertEqual(ats.fingerprint(markup)[:2], (ats_name, token))
+                self.assertIn(ats_name, extract.EXTRACTORS)
+
+
 def _gresearch_card(slug, title, place="London"):
     return (
         f'<a href="https://www.gresearch.com/vacancies/{slug}/" class="c-vacancy-result">'

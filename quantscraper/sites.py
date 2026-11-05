@@ -1350,6 +1350,17 @@ SITES: tuple[Site, ...] = (
         ats="workday",
     ),
     Site("lbg|wd3|lbg_Careers", "lloydsbankinggroup.com", "Lloyds", None, ats="workday"),
+    Site("792841", "zkb.ch", "Zürcher Kantonalbank", None, ats="refline"),
+    Site(
+        "5c109104-7c4d-415c-9ee4-54e3af55f9e7",
+        "xrtrading.com",
+        "XR Trading",
+        None,
+        ats="paylocity",
+    ),
+    Site("group1", "group1.com", "Group One", None, ats="applicantpro"),
+    Site("web103.reachmee.com|I005|1018|6", "alecta.se", "Alecta", None, ats="reachmee"),
+    Site("ap2", "ap2.se", "AP2", None, ats="heartpace"),
     Site(
         "jobs.standardchartered.com",
         "sc.com",
