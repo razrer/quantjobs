@@ -807,6 +807,11 @@ def breezy_body(row) -> Fetched:
     return _ld_body(row["url"])
 
 
+def radancy_body(row) -> Fetched:
+    """Radancy's posting page, whose URL the results fragment gave us."""
+    return _ld_body(row["url"])
+
+
 FETCHERS = {
     "workday": workday_body,
     "jobbsafari": jobbsafari_body,
@@ -817,6 +822,7 @@ FETCHERS = {
     "iesjobs": iesjobs_body,
     "jobvite": jobvite_body,
     "breezy": breezy_body,
+    "radancy": radancy_body,
 }
 
 # The fetchers that can answer *where*, which is a strict subset: Jobbsafari

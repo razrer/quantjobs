@@ -376,3 +376,36 @@ Lever EU, Greenhouse's regional hosts and the roster firms on the wrong domain.
   unverified. A card's hub can read a city from its title: Zurich's Köln role
   shows Switzerland.
 - 1,217 tests pass.
+
+## Stage 62 — an honest pipeline audit, and the boards it exposed
+
+Requested: fix the audit's overstatement, then build the unbuilt readers.
+
+- `audit --pipeline` counted a national portal's adverts as reaching a firm, and
+  counted withdrawn postings. Portal adverts now sit in their own column and never
+  count as a board; only open postings count. 171/254 reached became 107/254.
+- It also read `jobs.domain` alone, but one board shared by several domains is
+  filed under the first, so Danske's 500 postings looked like nothing. It now asks
+  the board. `sites.ROSTER_BOARDS` names firms read under another domain, such as
+  DBS and Swedbank. Together: 116/254.
+- New vendors: `radancy` (BlackRock 281) and `oleeo` (Jefferies 50), both
+  fingerprinted for future probes. New reader: `gresearch` (64). Pinned on existing
+  readers: Optiver, Qube, JPMorgan, Citi, Mirabaud, LGT, Lloyds, Standard Chartered.
+  Result: 130/254 have a board, 128 producing, 47 more seen only on a portal.
+- Real corpus, classifier version 67 unchanged: 4,739 → 5,660 cards, 939 added, 18
+  removed, 2 changed; 315 → 362 worth reading. 17 of the removals are JPMorgan's
+  MyCareersFuture adverts, each matched by title on its own board. The other is an
+  Atos posting, and the changes are a dup count and a posted date; none come from
+  this work.
+- Left closed: HiBob answers 401, and these answered 403 to our client: Goldman's
+  careers page, UBS jobs, Julius Baer, Wells Fargo, Fidelity, Temasek, NatWest,
+  Swiss Life, EFG, Edmond de Rothschild, Jyske, BNP. `nb.com` answered 429.
+- Not done: Refline, ReachMee (Alecta), Heartpace (AP2), Paylocity, ApplicantPro,
+  PGGM's vendor, and own-site boards at APG, ABN AMRO, Deutsche Bank, Vanguard,
+  Balyasny, PEAK6. Many careers-page guesses 404ed, so those firms' vendors are
+  unknown, not absent. Radancy and Oleeo are title-only until the tagger asks: the
+  body queue takes only `unknown` rows, and Oleeo has no fetcher. Oleeo's job pages
+  held no description in the one fetched.
+- To check: Citi's Radancy site lists 3,112 and its Workday board 2,017, unexplained.
+  The Workday token holds 9,174 rows marked live, many unseen since September. One
+  Standard Chartered card is dated 2026-12-10, in the future.

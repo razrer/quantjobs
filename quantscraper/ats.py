@@ -145,6 +145,16 @@ ATS_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     # names a board only within one instance, so this is its own `ats` rather
     # than a fallback that could land on another firm's board of the same name.
     ("lever_eu", re.compile(r"jobs\.eu\.lever\.co/([a-z0-9_-]+)", re.I)),
+    # Oleeo's token is compound: one host publishes per brand, and the brand
+    # number is part of every public path.
+    (
+        "oleeo",
+        re.compile(
+            r"(?<![a-z0-9-])(?P<host>[a-z0-9-]{1,63}\.tal\.net)"
+            r"/vx/[^\s\"'<]{0,120}?brand-(?P<brand>\d+)",
+            re.I,
+        ),
+    ),
     # Workday needs three things to be pollable -- tenant, data-centre number
     # and site -- so the token is compound. Capturing the tenant alone reads
     # like success and leaves the board unreachable.
@@ -461,6 +471,8 @@ class Resolution:
 # `OpenRoles` and Avature's own default is `SearchJobs`. A wrong name answers
 # 404, so trying each costs one request and can never invent a board.
 _VENDOR_ASSETS: tuple[tuple[str, str, tuple[str, ...], str], ...] = (
+    # Radancy's TalentBrew, on the firm's own hostname: BlackRock, Citi.
+    ("radancy", "tbcdn.talentbrew.com", ("/search-jobs",), "data-total-job-results"),
     ("teamtailor", "teamtailor-cdn.com", ("/jobs.rss",), "<channel"),
     ("avature", "avacdn.net", extract.AVATURE_LIST_PATHS, "article--result"),
     # iCIMS' career-site product, formerly Jibe, served from the firm's own
@@ -606,7 +618,13 @@ def _ukg_token(match: re.Match[str]) -> str | None:
     return f"{code}|{board}"
 
 
+def _oleeo_token(match: re.Match[str]) -> str | None:
+    """`host|brand`, the two things every public Oleeo path needs."""
+    return f"{match.group('host').casefold()}|{match.group('brand')}"
+
+
 _TOKEN_BUILDERS = {
+    "oleeo": _oleeo_token,
     "workday": _workday_token,
     "oracle_hcm": _oracle_hcm_token,
     "ukg": _ukg_token,

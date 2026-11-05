@@ -909,6 +909,58 @@ def hkma() -> list[Job]:
 # --------------------------------------------------------------------------
 
 
+# --------------------------------------------------------------------------
+# G-Research
+
+
+_GRESEARCH_JOB = re.compile(
+    r'<a href="(https://www\.gresearch\.com/vacancies/([a-z0-9-]{1,200})/)"'
+    r'\s+class="c-vacancy-result">\s*'
+    r'<span class="c-vacancy-result__title">([^<]{1,300})</span>\s*'
+    r'<span class="c-vacancy-result__location">([^<]{0,200})</span>',
+    re.I,
+)
+_GRESEARCH_PAGES = 20
+
+
+def gresearch() -> list[Job]:
+    """G-Research, whose vacancies are server-rendered on its own site.
+
+    **Each page is read until one adds nothing**, because `/vacancies/page/N/`
+    is linked from the markup yet was observed serving the same list as page
+    one. Each posting's description comes from its own JSON-LD island.
+    """
+    from . import bodies  # local: `bodies` is heavy and only this reader needs it
+
+    jobs: list[Job] = []
+    seen: set[str] = set()
+    for page in range(1, _GRESEARCH_PAGES + 1):
+        path = "" if page == 1 else f"page/{page}/"
+        body = http.get_text(
+            f"https://www.gresearch.com/vacancies/{path}", timeout=25, retries=2
+        )
+        cards = _GRESEARCH_JOB.findall(body)
+        if page == 1 and not cards:
+            raise SiteChanged("gresearch: no c-vacancy-result card on /vacancies/")
+        fresh = [card for card in cards if card[1] not in seen]
+        if not fresh:
+            break
+        for url, slug, title, place in fresh:
+            seen.add(slug)
+            jobs.append(
+                Job(
+                    ats="site",
+                    token="gresearch",
+                    job_id=slug,
+                    title=_text(title) or "",
+                    url=url,
+                    location=_text(place) or None,
+                    description=bodies._ld_body(url).description,
+                )
+            )
+    return jobs
+
+
 @dataclass(frozen=True, slots=True)
 class Site:
     """One hand-written reader, and the domain its postings belong to.
@@ -1271,7 +1323,61 @@ SITES: tuple[Site, ...] = (
         None,
         ats="personio",
     ),
+    # ---- boards found once the audit stopped counting portal adverts ----
+    #
+    # Each was tier B or C here while running a vendor this project already
+    # reads, or one of the two added beside this list. Every token was read
+    # through its extractor before being recorded.
+    Site("optiverus", "optiver.com", "Optiver", None, ats="greenhouse"),
+    Site("quberesearchandtechnologies", "qube-rt.com", "Qube", None, ats="greenhouse"),
+    Site(
+        "jpmc.fa.oraclecloud.com|CX_1001",
+        "jpmorganchase.com",
+        "JPMorgan",
+        None,
+        ats="oracle_hcm",
+    ),
+    Site("citi|wd5|2", "citi.com", "Citigroup", None, ats="workday"),
+    Site("careers.blackrock.com", "blackrock.com", "BlackRock", None, ats="radancy"),
+    Site("jefferies.tal.net|4", "jefferies.com", "Jefferies", None, ats="oleeo"),
+    Site("gresearch", "gresearch.com", "G-Research", gresearch),
+    Site("MirabaudCieSA", "mirabaud.com", "Mirabaud", None, ats="smartrecruiters"),
+    Site(
+        "lgtcp|wd502|lgtcpcurrentvacancies",
+        "lgtcp.com",
+        "LGT Capital Partners",
+        None,
+        ats="workday",
+    ),
+    Site("lbg|wd3|lbg_Careers", "lloydsbankinggroup.com", "Lloyds", None, ats="workday"),
+    Site(
+        "jobs.standardchartered.com",
+        "sc.com",
+        "Standard Chartered",
+        None,
+        ats="successfactors",
+    ),
 )
+
+# Roster spellings of boards already being read under another domain. The fuzzy
+# fallback in `discover._domain_for` attached these to `thedbscompanies.com`,
+# `swedbank.lt` and `schonfeldwm.com`, so the audit reported firms with hundreds
+# of postings as having no board. `register` writes these into `domain_lookups`,
+# and each domain below already holds the firm's tier A row.
+ROSTER_BOARDS: dict[str, str] = {
+    "DBS": "dbs.com",
+    "HSBC": "hangseng.com",  # the `hsbc` Eightfold board, filed under its subsidiary
+    "LSEG": "lseg.com",
+    "Nomura": "instinet.com",  # careers.nomura.com, likewise
+    "Nomura International": "instinet.com",
+    "Nordea DK": "nordea.com",
+    "Qube Research & Technologies": "qube-rt.com",
+    "Schonfeld": "schonfeld.com",
+    "Schroders": "schroders.com",
+    "Schroder Investment Management Switzerland": "schroders.com",
+    "Squarepoint": "squarepoint-capital.com",
+    "Swedbank": "swedbank.com",
+}
 
 BY_TOKEN = {site.token: site for site in SITES}
 
@@ -1316,6 +1422,10 @@ def register(connection: sqlite3.Connection) -> int:
             [
                 (site.label, site.domain, f"hand-written reader in sites.py", timestamp)
                 for site in SITES
+            ]
+            + [
+                (name, domain, "existing board named in sites.py", timestamp)
+                for name, domain in ROSTER_BOARDS.items()
             ],
         )
         connection.executemany(

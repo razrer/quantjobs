@@ -2263,6 +2263,139 @@ def _site(token: str) -> list[Job]:
     return sites.read(token)
 
 
+# Radancy's TalentBrew results fragment. The card markup is the customer's own
+# template, so only the `/job/` link and its id are relied on, and the fields
+# inside each card are looked up separately. Bounded like every pattern here.
+_RADANCY_CARD = re.compile(
+    r'<a\b[^>]{0,300}?href="(/job/[^"]{1,300})"[^>]{0,300}?data-job-id="(\d+)"'
+    r"[^>]{0,300}>([\s\S]{0,3000}?)</a>",
+    re.I,
+)
+_RADANCY_TITLE = re.compile(r"<h[1-6][^>]{0,200}>([\s\S]{1,400}?)</h[1-6]>", re.I)
+_RADANCY_PLACE = re.compile(
+    r'class="[^"]{0,80}job-location[^"]{0,80}"[^>]{0,200}>([\s\S]{1,300}?)</span>', re.I
+)
+_RADANCY_TOTAL = re.compile(r'data-total-job-results="(\d+)"')
+_RADANCY_PAGE = 100
+_RADANCY_PAGES = 200
+
+
+def radancy(token: str) -> list[Job]:
+    """Radancy's TalentBrew career sites. `token` is the site's host.
+
+    The page's own results request, which answers JSON holding an HTML fragment
+    and states the board's size, so a truncated walk is caught by `_shortfall`.
+
+    **A fragment with no stated size raises.** A redesigned template and a firm
+    that is not hiring are opposite facts, and an empty one still states zero.
+    """
+    jobs: list[Job] = []
+    seen: set[str] = set()
+    advertised = None
+    for page in range(1, _RADANCY_PAGES + 1):
+        payload = _json(
+            f"https://{token}/search-jobs/results?ActiveFacetID=0"
+            f"&CurrentPage={page}&RecordsPerPage={_RADANCY_PAGE}&Distance=50"
+            "&SearchResultsModuleName=Search+Results"
+            "&SearchFiltersModuleName=Search+Filters"
+            "&SortCriteria=0&SortDirection=0&SearchType=5&ResultsType=0",
+            headers={
+                "X-Requested-With": "XMLHttpRequest",
+                "Accept": "application/json",
+            },
+        )
+        markup = payload.get("results") or ""
+        total = _RADANCY_TOTAL.search(markup)
+        if total is None:
+            raise ValueError(f"radancy/{token}: results state no board size")
+        advertised = int(total.group(1))
+        fresh = 0
+        for href, job_id, card in _RADANCY_CARD.findall(markup):
+            if job_id in seen:
+                continue
+            title = _RADANCY_TITLE.search(card)
+            place = _RADANCY_PLACE.search(card)
+            seen.add(job_id)
+            fresh += 1
+            jobs.append(
+                Job(
+                    ats="radancy",
+                    token=token,
+                    job_id=job_id,
+                    title=_text(title.group(1) if title else card) or "",
+                    url=urllib.parse.urljoin(f"https://{token}/", href),
+                    location=_text(place.group(1)) if place else None,
+                )
+            )
+        # A page adding nothing ends the walk, whatever its length: the iCIMS
+        # rule, which also survives a site that ignores `CurrentPage`.
+        if not fresh or len(jobs) >= advertised:
+            break
+    _shortfall("radancy", token, advertised, jobs)
+    return jobs
+
+
+_OLEEO_BOARD = re.compile(r"/candidate/jobboard/vacancy/(\d+)/adv/")
+_OLEEO_TILE = re.compile(
+    r'data-oppid="(\d+)"[^>]{0,300}?data-title="([^"]{1,400})"', re.I
+)
+_OLEEO_LINK = re.compile(r'href="([^"]{1,500}/opp/(\d+)-[^"]{0,400})"', re.I)
+_OLEEO_PAGE = 50
+_OLEEO_PAGES = 100
+
+
+def oleeo(token: str) -> list[Job]:
+    """Oleeo, formerly TAL. `token` is `host|brand`, as `jefferies.tal.net|4`.
+
+    One tenant publishes several numbered boards and their pages link to each
+    other, so the first page names the rest: Jefferies has an events board and a
+    programmes board, and only the second has anything on it today.
+
+    **A page naming no board raises**, because a moved tenant must not read as
+    a firm with no openings. The list states no total, so paging stops on a page
+    adding nothing new.
+    """
+    host, _, brand = token.partition("|")
+    base = (
+        f"https://{host}/vx/lang-en-GB/mobile-0/appcentre-ext/brand-{brand}"
+        "/candidate/jobboard/vacancy"
+    )
+    first = http.get_text(f"{base}/1/adv/", timeout=25, retries=2)
+    boards = sorted({int(n) for n in _OLEEO_BOARD.findall(first)})
+    if not boards:
+        raise ValueError(f"oleeo/{token}: page names no job board")
+
+    jobs: list[Job] = []
+    seen: set[str] = set()
+    for board in boards:
+        for page in range(_OLEEO_PAGES):
+            url = f"{base}/{board}/adv/"
+            if page:
+                url += f"?start={page * _OLEEO_PAGE}"
+            markup = first if board == 1 and not page else http.get_text(
+                url, timeout=25, retries=2
+            )
+            links = {job_id: href for href, job_id in _OLEEO_LINK.findall(markup)}
+            fresh = 0
+            for job_id, title in _OLEEO_TILE.findall(markup):
+                if job_id in seen:
+                    continue
+                seen.add(job_id)
+                fresh += 1
+                jobs.append(
+                    Job(
+                        ats="oleeo",
+                        token=token,
+                        job_id=job_id,
+                        title=_text(title) or "",
+                        url=html.unescape(links[job_id]) if job_id in links else url,
+                    )
+                )
+            if not fresh:
+                break
+    return jobs
+
+
 EXTRACTORS: dict[str, Callable[[str], list[Job]]] = {
     "greenhouse": greenhouse,
     "lever": lever,
@@ -2292,6 +2425,8 @@ EXTRACTORS: dict[str, Callable[[str], list[Job]]] = {
     "jobylon": jobylon,
     "eightfold": eightfold,
     "join": join,
+    "radancy": radancy,
+    "oleeo": oleeo,
     # Layer 3C: firms with no ATS at all, read from their own website. One
     # entry here, dispatched by token -- see `sites.py` for why the list is
     # deliberately short.

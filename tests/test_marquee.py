@@ -18,6 +18,7 @@ Run with: python -m unittest discover -s tests
 from __future__ import annotations
 
 import json
+import sqlite3
 import unittest
 from unittest import mock
 
@@ -372,6 +373,32 @@ class MarqueeRegistrationTest(unittest.TestCase):
             with self.subTest(domain=domain):
                 self.assertEqual(by_domain[domain].ats, ats_name)
                 self.assertEqual(by_domain[domain].token, token)
+
+    def test_gap_firms_found_by_the_honest_audit_are_pinned(self):
+        by_domain = {site.domain: site for site in sites.SITES}
+        for domain, ats_name, token in (
+            ("optiver.com", "greenhouse", "optiverus"),
+            ("qube-rt.com", "greenhouse", "quberesearchandtechnologies"),
+            ("jpmorganchase.com", "oracle_hcm", "jpmc.fa.oraclecloud.com|CX_1001"),
+            ("citi.com", "workday", "citi|wd5|2"),
+            ("blackrock.com", "radancy", "careers.blackrock.com"),
+            ("jefferies.com", "oleeo", "jefferies.tal.net|4"),
+            ("gresearch.com", "site", "gresearch"),
+            ("mirabaud.com", "smartrecruiters", "MirabaudCieSA"),
+        ):
+            with self.subTest(domain=domain):
+                self.assertEqual(by_domain[domain].ats, ats_name)
+                self.assertEqual(by_domain[domain].token, token)
+
+    def test_a_named_roster_board_reaches_domain_lookups(self):
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        sites.register(connection)
+        for name, domain in (("DBS", "dbs.com"), ("Swedbank", "swedbank.com")):
+            row = connection.execute(
+                "SELECT domain FROM domain_lookups WHERE query = ?", (name,)
+            ).fetchone()
+            self.assertEqual(row["domain"], domain)
 
     def test_the_marquee_firms_are_all_present(self):
         by_domain = {site.domain: site for site in sites.SITES}
