@@ -33,6 +33,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .lexicon import NOT_A_BOARD
 from .resolve import country_code as _iso_country
 from .resolve import normalize_name
 
@@ -296,7 +297,7 @@ def format_report(results: list[Result], verbose: bool = False) -> str:
 
 @dataclass(slots=True)
 class PipelineResult:
-    """One roster *line*, and how many postings the firm behind it contributes.
+    """One roster *line*, and what the firm behind it contributes.
 
     Per line, not per firm, and that is deliberate: Jane Street occupies four
     roster lines because it hires in four hubs, and "is Hong Kong covered?" has
@@ -307,12 +308,16 @@ class PipelineResult:
 
     entry: Entry
     domain: str | None
+    # Open postings read from the firm's own board.
     postings: int
-    # How the postings were found. `domain` is the normal path -- the board was
-    # reached from the firm's own host. `employer` is the path for the sources
-    # whose board is not one firm's own (JobStream, MyCareersFuture), where the
-    # advertiser's name is the only handle there is.
-    via: str | None = None
+    # Open adverts that a national portal attributes to the firm. **Never added
+    # to `postings`.** A portal shows what somebody chose to advertise there,
+    # and most of it is found by a substring of the advertiser's name, so it
+    # says the firm is visible -- not that its board is read. Counting the two
+    # together reported firms as reached while nothing read their boards, which
+    # hid the very list this report exists to produce. Reported beside the board
+    # count, as evidence of how much the missing reader would be worth.
+    portal: int = 0
     # Whether a board exists that Layer 3 can actually poll. This is a
     # different question from `postings` and the gap between them is the whole
     # point: Captor's careers page says "For tillfallet har vi inga lediga
@@ -326,11 +331,15 @@ class PipelineResult:
     def polled(self) -> bool:
         return self.postings > 0
 
+    @property
+    def reached(self) -> bool:
+        return self.polled or self.board
+
 
 def pipeline(
     connection: sqlite3.Connection, targets, roster: list[Entry]
 ) -> list[PipelineResult]:
-    """Postings per roster line, given `discover.roster_targets`.
+    """Board and portal postings per roster line, given `discover.roster_targets`.
 
     `targets` is passed in rather than built here so this module keeps its one
     promise: it reads, and it imports nothing that writes.
@@ -340,19 +349,27 @@ def pipeline(
     postings several hundred times over and takes minutes. The distinct
     employer names are a few thousand rows; scanning those is instant, and the
     answer is identical.
+
+    Withdrawn postings are kept forever and count for nothing here: a firm whose
+    last opening closed a year ago does not "produce postings today".
     """
-    by_domain = {
-        row["domain"]: row["n"]
-        for row in connection.execute(
-            "SELECT domain, COUNT(*) AS n FROM jobs"
-            " WHERE domain IS NOT NULL GROUP BY domain"
-        )
-    }
+    portals = ", ".join("?" for _ in NOT_A_BOARD)
+    own_board: dict[str, int] = {}
+    portal_domain: dict[str, int] = {}
+    for row in connection.execute(
+        f"SELECT domain, ats IN ({portals}) AS portal, COUNT(*) AS n FROM jobs"
+        " WHERE domain IS NOT NULL AND removed_at IS NULL"
+        " GROUP BY domain, portal",
+        NOT_A_BOARD,
+    ):
+        (portal_domain if row["portal"] else own_board)[row["domain"]] = row["n"]
     by_employer = [
         (row["employer"].casefold(), row["n"])
         for row in connection.execute(
             "SELECT employer, COUNT(*) AS n FROM jobs"
-            " WHERE employer IS NOT NULL GROUP BY employer"
+            " WHERE employer IS NOT NULL AND removed_at IS NULL"
+            f" AND ats IN ({portals}) GROUP BY employer",
+            NOT_A_BOARD,
         )
     ]
     # Domains with a board Layer 3 can address. Guarded because this module is
@@ -362,33 +379,45 @@ def pipeline(
     if connection.execute(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ats_resolution'"
     ).fetchone():
-        pollable = {
-            row["domain"]
+        # **A posting is filed under one domain even when several share the
+        # board.** `extract.targets` polls each (ats, token) once and files it
+        # under the alphabetically first domain, so Danske Bank's 500 postings
+        # sit under `danica.dk` and reading `jobs.domain` alone reported Danske
+        # as having nothing posted. The board is the identity; ask the board.
+        by_board = {
+            (row["ats"], row["token"]): row["n"]
             for row in connection.execute(
-                "SELECT domain FROM ats_resolution"
-                " WHERE tier = 'A' AND token IS NOT NULL"
+                "SELECT ats, token, COUNT(*) AS n FROM jobs"
+                " WHERE removed_at IS NULL GROUP BY ats, token"
             )
         }
+        for row in connection.execute(
+            "SELECT domain, ats, token FROM ats_resolution"
+            f" WHERE tier = 'A' AND token IS NOT NULL AND ats NOT IN ({portals})",
+            NOT_A_BOARD,
+        ):
+            pollable.add(row["domain"])
+            own_board[row["domain"]] = max(
+                own_board.get(row["domain"], 0),
+                by_board.get((row["ats"], row["token"]), 0),
+            )
 
     counted = {}
     for target in targets:
-        postings, via = by_domain.get(target.domain or "", 0), None
-        if postings:
-            via = "domain"
-        else:
+        portal = portal_domain.get(target.domain or "", 0)
+        if not portal:
             # Best spelling first, and the first that hits wins -- the same
-            # order `discover` builds tokens in, so a firm reported as reached
-            # by name was reached under a name it actually publishes.
+            # order `discover` builds tokens in, so a firm seen by name was seen
+            # under a name it actually publishes.
             for name in target.names:
                 folded = name.casefold()
-                hits = sum(n for employer, n in by_employer if folded in employer)
-                if hits:
-                    postings, via = hits, "employer"
+                portal = sum(n for employer, n in by_employer if folded in employer)
+                if portal:
                     break
         counted[normalize_name(target.label) or target.label] = (
             target.domain,
-            postings,
-            via,
+            own_board.get(target.domain or "", 0),
+            portal,
             target.domain in pollable,
         )
 
@@ -396,10 +425,10 @@ def pipeline(
     for entry in roster:
         if entry.expected_absent:
             continue
-        domain, postings, via, board = counted.get(
-            normalize_name(entry.name) or entry.name, (None, 0, None, False)
+        domain, postings, portal, board = counted.get(
+            normalize_name(entry.name) or entry.name, (None, 0, 0, False)
         )
-        results.append(PipelineResult(entry, domain, postings, via, board))
+        results.append(PipelineResult(entry, domain, postings, portal, board))
     return results
 
 
@@ -412,22 +441,26 @@ def format_pipeline(results: list[PipelineResult]) -> str:
     """
     firms = {normalize_name(r.entry.name) or r.entry.name: r for r in results}
     producing = [r for r in firms.values() if r.polled]
-    reached = [r for r in firms.values() if r.polled or r.board]
+    reached = [r for r in firms.values() if r.reached]
+    seen = [r for r in firms.values() if not r.reached and r.portal]
     lines = [
-        f"job pipeline -- {len(reached)}/{len(firms)} roster firms are reached,"
-        f" {len(producing)} produce postings today",
+        f"job pipeline -- {len(reached)}/{len(firms)} roster firms have a board we"
+        f" read, {len(producing)} produce postings today,"
+        f" {len(seen)} more seen only on a national portal",
         "",
         "present (the universe) and polled (the pipeline) are different",
         "properties. `audit` alone measures the first, and every focus hub",
         "reported 100% present while the second was 16/163.",
         "",
-        "  reached   = a board Layer 3 can poll, or postings already in hand",
-        "  producing = that board has an opening on it right now",
+        "  reached     = a board Layer 3 can poll, or postings read from one",
+        "  producing   = that board has an opening on it right now",
+        "  portal only = no board read; a national portal names the firm, mostly",
+        "                by a substring of its name, so treat it as a lead",
         "",
-        "The gap between them is not a gap in coverage. Captor's careers page",
-        "says it has no vacancies -- read, understood, and empty. No amount of",
-        "engineering makes a firm advertise a job it does not have; a reader",
-        "buys that the day it does, the posting arrives unasked.",
+        "The gap between reached and producing is not a gap in coverage. Captor's",
+        "careers page says it has no vacancies -- read, understood, and empty. No",
+        "amount of engineering makes a firm advertise a job it does not have; a",
+        "reader buys that the day it does, the posting arrives unasked.",
         "",
         "Hub rates count roster lines, so a firm hiring in four hubs is",
         "counted in four -- the question is whether the hub is covered.",
@@ -443,15 +476,19 @@ def format_pipeline(results: list[PipelineResult]) -> str:
         if not chosen:
             continue
         lines.append(f"{priority} hubs")
-        lines.append(f"  {'':14s}{'reached':^13s}{'producing':^13s} postings")
+        lines.append(
+            f"  {'':14s}{'reached':^13s}{'producing':^13s}"
+            f" postings  portal only"
+        )
         for hub, rows in sorted(chosen.items(), key=lambda kv: -len(kv[1])):
             got = [r for r in rows if r.polled]
-            have = [r for r in rows if r.polled or r.board]
+            have = [r for r in rows if r.reached]
+            only = [r for r in rows if not r.reached and r.portal]
             lines.append(
                 f"  {hub:<14s}"
                 f"{len(have):3d}/{len(rows):<3d}({100 * len(have) / len(rows):4.0f}%)"
                 f"  {len(got):3d}/{len(rows):<3d}({100 * len(got) / len(rows):4.0f}%)"
-                f"  {sum(r.postings for r in got):7,d}"
+                f"  {sum(r.postings for r in got):7,d}  {len(only):11d}"
             )
         lines.append("")
 
@@ -461,13 +498,18 @@ def format_pipeline(results: list[PipelineResult]) -> str:
     missing = {
         (r.entry.hub, r.entry.name): r
         for r in results
-        if not r.polled and not r.board and r.entry.priority == FOCUS
+        if not r.reached and r.entry.priority == FOCUS
     }
     if missing:
-        lines.append("focus-hub firms with no pollable board -- each is a piece of work")
+        lines.append(
+            "focus-hub firms with no pollable board -- each is a piece of work"
+            " (the count is open adverts on a national portal)"
+        )
         for (hub, name), result in sorted(missing.items()):
+            seen_on_portal = f"{result.portal:6,d}" if result.portal else " " * 6
             lines.append(
-                f"  {hub:<14s}{name:<32s} {result.domain or '(no domain)'}"
+                f"  {hub:<14s}{name:<32s} {seen_on_portal}"
+                f"  {result.domain or '(no domain)'}"
             )
         lines.append("")
 

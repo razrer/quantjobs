@@ -31,10 +31,20 @@ class _Target:
 
 
 def _jobs(rows):
+    """(domain, employer), or (domain, employer, ats, removed_at) to say more."""
     connection = sqlite3.connect(":memory:")
     connection.row_factory = sqlite3.Row
-    connection.execute("CREATE TABLE jobs (domain TEXT, employer TEXT)")
-    connection.executemany("INSERT INTO jobs VALUES (?, ?)", rows)
+    connection.execute(
+        "CREATE TABLE jobs"
+        " (domain TEXT, employer TEXT, ats TEXT, removed_at TEXT, token TEXT)"
+    )
+    connection.executemany(
+        "INSERT INTO jobs VALUES (?, ?, ?, ?, ?)",
+        [
+            (*row, *(("greenhouse", None) if len(row) == 2 else ()), row[0])
+            for row in rows
+        ],
+    )
     return connection
 
 
@@ -61,7 +71,7 @@ class HubCountingTest(unittest.TestCase):
 
         report = audit.format_pipeline(results)
         # ...and the headline dedupes again, so it stays a count of firms.
-        self.assertIn("1/1 roster firms are reached", report)
+        self.assertIn("1/1 roster firms have a board", report)
         self.assertIn("1 produce postings today", report)
 
     def test_a_stale_roster_line_is_not_a_miss(self):
@@ -70,41 +80,92 @@ class HubCountingTest(unittest.TestCase):
         self.assertEqual(results, [])
 
 
-class ReachedByTest(unittest.TestCase):
-    def test_a_firm_reached_through_its_own_domain_reports_that(self):
+class BoardVersusPortalTest(unittest.TestCase):
+    """A national portal naming a firm is not a board we read.
+
+    The two were netted together, and firms reported as reached while nothing
+    read their boards -- which emptied the one list this report exists to
+    produce.
+    """
+
+    def test_postings_on_the_firms_own_board_count(self):
         roster = [_entry("Copenhagen", "Danske Bank")]
         targets = [_Target("Danske Bank", ("Danske Bank",), "danskebank.dk")]
-        results = audit.pipeline(_jobs([("danskebank.dk", None)] * 3), targets, roster)
-        self.assertEqual((results[0].postings, results[0].via), (3, "domain"))
+        connection = _jobs([("danskebank.dk", None, "oracle_hcm", None)] * 3)
+        result = audit.pipeline(connection, targets, roster)[0]
+        self.assertEqual((result.postings, result.portal), (3, 0))
+        self.assertTrue(result.reached)
 
-    def test_a_firm_reached_only_by_advertiser_name_still_counts(self):
-        """JobStream and MyCareersFuture publish somebody else's board.
-
-        Half of JobStream's ads have no resolvable employer URL, so `domain` is
-        NULL and the advertiser name is the only handle there is. A firm
-        visible only that way is polled, and reporting it as missing would send
-        someone to build a board that already exists.
-        """
+    def test_a_firm_seen_only_by_advertiser_name_is_not_reached(self):
         roster = [_entry("Stockholm", "Lynx")]
         targets = [_Target("Lynx", ("Lynx Asset Management",), None)]
-        connection = _jobs([(None, "Lynx Asset Management AB")] * 2)
-        results = audit.pipeline(connection, targets, roster)
-        self.assertEqual((results[0].postings, results[0].via), (2, "employer"))
+        connection = _jobs([(None, "Lynx Asset Management AB", "jobtech", None)] * 2)
+        result = audit.pipeline(connection, targets, roster)[0]
+        self.assertEqual((result.postings, result.portal), (0, 2))
+        self.assertFalse(result.reached)
 
-    def test_the_domain_is_preferred_over_a_name_match(self):
-        """A name match is a substring test, so it is the looser of the two.
+        report = audit.format_pipeline([result])
+        self.assertIn("0/1 roster firms have a board", report)
+        self.assertIn("1 more seen only on a national portal", report)
+        self.assertIn("no pollable board", report)
 
-        `domains.py` learned this one layer down: "Millennium" matches
-        *Millennium New Horizons Management*. Where both would answer, the
-        domain is the evidence.
-        """
+    def test_a_portal_advert_carrying_the_firms_domain_is_not_its_board(self):
+        """Some portal adverts resolve a URL, so `domain` alone proves nothing."""
+        roster = [_entry("Stockholm", "Nordkinn")]
+        targets = [_Target("Nordkinn", ("Nordkinn",), "nordkinn.se")]
+        connection = _jobs([("nordkinn.se", None, "jobtech", None)] * 4)
+        result = audit.pipeline(connection, targets, roster)[0]
+        self.assertEqual((result.postings, result.portal), (0, 4))
+        self.assertFalse(result.reached)
+
+    def test_a_firm_with_both_reports_both_without_adding_them(self):
         roster = [_entry("Stockholm", "Nordea")]
         targets = [_Target("Nordea", ("Nordea",), "nordea.com")]
         connection = _jobs(
-            [("nordea.com", None)] + [(None, "Nordea Bank Abp")] * 9
+            [("nordea.com", None, "site", None)]
+            + [(None, "Nordea Bank Abp", "jobtech", None)] * 9
         )
-        results = audit.pipeline(connection, targets, roster)
-        self.assertEqual((results[0].postings, results[0].via), (1, "domain"))
+        result = audit.pipeline(connection, targets, roster)[0]
+        self.assertEqual((result.postings, result.portal), (1, 9))
+
+    def test_a_withdrawn_posting_counts_for_nothing(self):
+        """Postings are kept forever; "today" has to mean today."""
+        roster = [_entry("Stockholm", "Nordea")]
+        targets = [_Target("Nordea", ("Nordea",), "nordea.com")]
+        connection = _jobs([("nordea.com", None, "site", "2026-01-01")] * 5)
+        self.assertEqual(audit.pipeline(connection, targets, roster)[0].postings, 0)
+
+    def test_postings_filed_under_a_sibling_domain_still_count(self):
+        """One board, several domains: Danske's 500 sit under `danica.dk`."""
+        roster = [_entry("Copenhagen", "Danske Bank")]
+        targets = [_Target("Danske Bank", ("Danske Bank",), "danskebank.dk")]
+        connection = _jobs([])
+        connection.executemany(
+            "INSERT INTO jobs VALUES ('danica.dk', NULL, 'oracle_hcm', NULL, 'danske')",
+            [()] * 7,
+        )
+        connection.execute(
+            "CREATE TABLE ats_resolution (domain TEXT, ats TEXT, token TEXT, tier TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO ats_resolution VALUES"
+            " ('danskebank.dk', 'oracle_hcm', 'danske', 'A')"
+        )
+        result = audit.pipeline(connection, targets, roster)[0]
+        self.assertEqual(result.postings, 7)
+        self.assertTrue(result.polled)
+
+    def test_a_portal_token_is_not_a_pollable_board(self):
+        roster = [_entry("Stockholm", "Nordkinn")]
+        targets = [_Target("Nordkinn", ("Nordkinn",), "nordkinn.se")]
+        connection = _jobs([])
+        connection.execute(
+            "CREATE TABLE ats_resolution (domain TEXT, ats TEXT, token TEXT, tier TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO ats_resolution VALUES ('nordkinn.se', 'jobtech', 'x', 'A')"
+        )
+        self.assertFalse(audit.pipeline(connection, targets, roster)[0].board)
 
 
 class ReportTest(unittest.TestCase):
