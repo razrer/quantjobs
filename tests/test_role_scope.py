@@ -76,6 +76,63 @@ class RoleScopeTest(unittest.TestCase):
         self.assertIsNone(exclusion("Portfolio Analyst", "Responsibilities: Develop and backtest factor models for systematic strategies. Requirements: Python."))
         self.assertIsNone(exclusion("Treasury Analyst", "Your role: Build and calibrate quantitative models for derivatives pricing. Qualifications: MSc."))
 
+    def test_a_quant_flavoured_fund_seat_stays(self):
+        """The user's rule: fund roles only if quant or adjacent."""
+        robur = (
+            "Hos oss får du arbeta med indexnära förvaltning. Använda data, modeller och "
+            "programmering för att systematisera investeringsprocesser. Bidra inom riskanalys "
+            "och optimering. Du har kvantitativa kunskaper och läst matematik."
+        )
+        self.assertIsNone(exclusion("Senior Portföljförvaltare Index till Swedbank Robur", robur))
+        entelios = (
+            "Det här kommer du att arbeta med • använda GenAI och data för att utveckla "
+            "modeller, informationsflöden och beslutsstöd • följa energimarknaden. "
+            "Vi söker dig som har läst matematik, kan Python och har kvantitativ förmåga."
+        )
+        self.assertIsNone(exclusion("Portföljförvaltare - Å Entelios", entelios))
+
+    def test_a_fund_house_risk_or_allocation_seat_is_adjacent(self):
+        self.assertIsNone(exclusion("Riskanalytiker inom kapitalförvaltning"))
+        self.assertIsNone(exclusion("Senior Portfolio Manager – Asset Allocation till AP7"))
+
+    def test_a_fund_house_internship_is_not_a_fund_seat(self):
+        self.assertEqual(exclusion(
+            "Wealth & Asset Management Internship 2027: Risk Analyst Intern"
+        )[0], "non_quant_finance")
+
+    def test_an_engineering_title_is_not_a_fund_seat(self):
+        quantish = "Python and machine learning. Statistics and quantitative methods."
+        for title in ("AI Solution Engineer (Asset Management & Reliability)",
+                      "Software Engineer in Asset Management (m/w/d)"):
+            with self.subTest(title=title):
+                self.assertEqual(exclusion(title, quantish * 40)[0], "generic_it")
+
+    def test_a_conventional_fund_seat_stays_out(self):
+        for title, body in (
+            ("Alecta söker aktieförvaltare inom Financials",
+             "Ansvara för en aktivt förvaltad portfölj och portföljkonstruktion. "
+             "Arbeta ihop med aktieanalytiker vid aktieurval och dialoger med bolag."),
+            ("AP3 söker två globala aktieförvaltare",
+             "Definiera och utveckla strategin för ditt mandat. Du har goda kunskaper i Python."),
+            ("Ränteförvaltare till Swedbank Robur",
+             "Du får en betydande frihet i din förvaltning och ett stort eget ansvar."),
+            ("Kapitalförvaltare", "Ha ett eget affärsansvar för din kundbas."),
+        ):
+            with self.subTest(title=title):
+                self.assertEqual(exclusion(title, body)[0], "non_quant_finance")
+
+    def test_risk_control_outside_a_fund_house_is_still_conventional(self):
+        self.assertEqual(exclusion("Operational Risk Analyst")[0], "non_quant_finance")
+
+    def test_swedish_duties_count_as_duties(self):
+        self.assertIsNone(exclusion(
+            "Treasury Analyst",
+            "Använda statistiska modeller för att mäta likviditeten. Du har en examen.",
+        ))
+        self.assertEqual(exclusion(
+            "Treasury Analyst", "Vi på bolaget har statistiska modeller. Du har en examen.",
+        )[0], "non_quant_finance")
+
     def test_financial_modelling_and_python_are_not_quant_proof(self):
         self.assertEqual(exclusion("Equity Research Analyst", "Responsibilities: Build financial models, DCF valuations and earnings forecasts in Python. Write stock recommendations.")[0], "non_quant_finance")
 

@@ -440,3 +440,34 @@ because a few misses matter more in a small market.
   new site returned almost nothing. Blocked (403): Euroclear. The Teamtailor widget
   key on Kommuninvest's page was not used. A TLS failure stops Atlant and Movestic.
   Portal counts in that list are name substrings, so `Atlant 133` is a lead only.
+
+## Stage 64 — fund seats that are quant or adjacent (tagger 69)
+
+Requested: Swedish portfolio and fund management roles appear only if they are a
+quant job or adjacent to one.
+
+- `role_scope._quant_fund_seat`: a fund title stays if the title itself names risk
+  analysis or asset allocation, or if the body shows three independent kinds of
+  quantitative evidence. Conventional stock-picking seats stay hidden. Internships
+  and engineering titles do not qualify: the first version let through a SEB
+  internship and Yokogawa's industrial "Asset Management & Reliability" roles.
+- `_duties` reads Swedish duty headings and verbs, and splits on `•`. Bullets used to
+  merge into one sentence, so a verb could pair with a term from another bullet.
+- Board: 5,699 → 5,705 cards, 364 worth reading unchanged, Stockholm 136 → 138
+  (Entelios portfolio manager, Pensionsmyndigheten risk analyst). 10 added, 4 removed,
+  1 changed. Removed: three Luxoft business analyst cards and a JPMorgan production
+  engineer, all in Singapore, which had passed only on the bullet merge.
+- Not caused by the classifier: two added Marex cards and one changed one depend
+  only on Marex counting as a quant board, which is measured afresh on every `tag`.
+- Now pass the fund rule but stay off the board as too senior: Swedbank Robur's index
+  manager, AP7's asset allocation manager. Swedbank's model auditor stays under
+  `audit_tax`.
+- The Pensionsmyndigheten advert was last seen on 2026-08-22 with no deadline, so it
+  may have closed. Not checked.
+- Open: SEB's 2027 internships remain on the board, several rated `strong`, although
+  the scope excludes student roles. They predate this stage.
+- Open: `tag` hung on its first run. A pipe write to the pool failed with WinError
+  1450 on 7.7 GB of RAM with 918,000 postings pending, and the pool waited
+  indefinitely. Committed chunks survive, so re-running resumes. Both full re-tags
+  here ran with `--limit 100000` in a loop, without failure. `tagging.run` still sizes
+  chunks by corpus and needs a cap.

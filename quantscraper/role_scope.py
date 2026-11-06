@@ -58,6 +58,49 @@ FINANCE_TITLES = (
     "gestion de portefeuille", "gestionnaire de portefeuille", "gerant de portefeuille",
 )
 
+# Fund and portfolio management seats. Most are conventional: a stock-picker's
+# day holds no modelling. The user's rule is that one belongs on the board only
+# when it is a quant job or adjacent to one, so these answer to `QUANT_FAMILIES`
+# as well as to the duty sentences every other finance title answers to.
+FUND_TITLES = (
+    "portfolio manager", "portfolio management", "portfolio analyst",
+    "investment manager", "investment management", "asset management",
+    "fund manager", "fund management", "fund analyst",
+    "portfoljforvaltare", "portfoljforvaltning", "portfoljanalytiker",
+    "kapitalforvaltare", "kapitalforvaltning", "fondforvaltare",
+    "aktieforvaltare", "ranteforvaltare",
+)
+
+# Work inside a fund house that is adjacent to quant whatever the rest of the
+# posting says. Only consulted once `FUND_TITLES` has matched, so "Operational
+# Risk Analyst" is still judged as the risk-control role it is.
+FUND_ADJACENT_TITLES = (
+    "risk analyst", "riskanalytiker", "riskanalys",
+    "asset allocation", "tillgangsallokering", "allokeringsstrateg",
+)
+
+# Independent kinds of quantitative evidence. Counted by family, so that
+# "kvantitativ" and "kvantitativa" are one signal and not two.
+QUANT_FAMILIES = (
+    ("python", "matlab", "programmering", "programming"),
+    ("kvantitativ", "kvantitativa", "kvantitativt", "kvantitativ analys",
+     "quantitative"),
+    ("matematik", "mathematics", "statistik", "statistics", "statistical",
+     "ekonometri", "econometrics"),
+    ("optimering", "optimization", "optimisation", "portfoljoptimering"),
+    ("machine learning", "maskininlarning"),
+)
+# One word proves nothing in a fund house, where an equity manager also "works
+# with portfolio optimisation" and a skills list may mention Python. Three
+# independent kinds were measured to separate Swedbank Robur's index manager and
+# Entelios' power portfolio manager from AP3's and Alecta's stock-pickers.
+QUANT_FAMILIES_REQUIRED = 3
+
+# An internship is not a seat in the fund: the user has graduated and has ruled
+# student internships out. Without this a dated SEB internship with no body read
+# as adjacent on its title alone.
+FUND_INTERN_TITLES = ("intern", "internship", "praktik", "praktikant", "praktikplats")
+
 QUANT_TITLES = (
     "quant", "quants", "quantitative", "kvantitativ", "kvantitativa",
     "kvantitative", "kwantitatief", "quantitatif", "quantitativ",
@@ -126,6 +169,11 @@ MODEL_WORK = (
     "statistical modeling", "statistical modelling", "backtesting", "backtest",
     "execution algorithms", "volatility surface", "monte carlo",
     "utveckla modeller", "validera modeller", "kvantitativa modeller",
+    "kvantitativ modellering", "kvantitativa metoder", "riskmodeller", "prismodeller",
+    # Twice where a letter differs: `body` is folded to ASCII by the tagger, while
+    # the duty sentences come through `lexicon.normalize`, which keeps it.
+    "statistiska modeller", "portfoljoptimering", "portföljoptimering",
+    "quantitative methodologies", "quantitative data models",
 )
 
 WORK_VERBS = (
@@ -134,12 +182,14 @@ WORK_VERBS = (
     "validating", "backtest", "backtesting", "research", "researching",
     "optimise", "optimising", "optimize", "optimizing", "enhance", "enhancing",
     "maintain", "maintaining", "construct", "constructing", "test", "testing",
-    "utveckla", "utveckling", "validera", "validering",
+    "challenge",
+    "utveckla", "utveckling", "validera", "validering", "anvanda", "använda", "bidra", "bygga",
+    "analysera", "optimera", "modellera", "ta fram", "granska", "utvardera", "utvärdera",
 )
 
 SECTION_PATTERNS = (
-    r"(?im)\b(?:responsibilities|what you(?:['’]ll| will) do|your (?:role|responsibilities)|role summary|position duties|key duties|arbetsuppgifter)\b|^\s*(?:role|the role)\s*[:\n]",
-    r"(?im)(?:^\s*|(?<=[.!?:])\s*)(?:qualifications|requirements|skills you|what (?:we offer|you(?:['’]ll)? bring)|the position requires|about (?:us|the company)|benefits|equal opportunity|vi söker dig|din profil|det är meriterande)\b|\b(?-i:REQUIREMENTS|QUALIFICATIONS)\b",
+    r"(?im)\b(?:responsibilities|what you(?:['’]ll| will) do|your (?:role|responsibilities)|role summary|position duties|key duties|arbetsuppgifter|det här kommer du att arbeta med|i rollen kommer du att|du kommer att)\b|^\s*(?:role|the role)\s*[:\n]",
+    r"(?im)(?:^\s*|(?<=[.!?:])\s*)(?:qualifications|requirements|skills you|what (?:we offer|you(?:['’]ll)? bring)|the position requires|about (?:us|the company)|benefits|equal opportunity|vi söker dig|din profil|det är meriterande|vem är du|vi tror att du|din bakgrund)\b|\b(?-i:REQUIREMENTS|QUALIFICATIONS)\b",
 )
 RESEARCH_DATA = ("data pipelines", "features", "feature engineering", "datasets",
                  "research data", "data validation")
@@ -171,7 +221,7 @@ def _duties(description: str) -> tuple[list[str], str]:
             text = text[:stop.start()]
     statements = []
     inherited_action = False
-    for part in re.split(r"[\n;]+|(?<=[.!?])\s+", text):
+    for part in re.split(r"[\n;•]+|(?<=[.!?])\s+", text):
         normalized = lexicon.normalize(part)
         # Without a responsibilities section, require a sentence assigning
         # work to the applicant or a verb-led duty, not "our firm develops...".
@@ -189,6 +239,16 @@ def _duties(description: str) -> tuple[list[str], str]:
         elif part.rstrip().endswith((".", "!", "?")):
             inherited_action = False
     return statements, lexicon.normalize(text) if start else " "
+
+
+def _quant_fund_seat(title: str, body: str) -> bool:
+    """Whether a fund or portfolio title is quant or adjacent to it."""
+    if not _hit(title, FUND_TITLES) or _hit(title, FUND_INTERN_TITLES):
+        return False
+    if _hit(title, FUND_ADJACENT_TITLES):
+        return True
+    found = sum(1 for family in QUANT_FAMILIES if _hit(body, family))
+    return found >= QUANT_FAMILIES_REQUIRED
 
 
 def exclusion(title: str, body: str, description: str) -> tuple[str, str] | None:
@@ -213,6 +273,10 @@ def exclusion(title: str, body: str, description: str) -> tuple[str, str] | None
     finance = _hit(title, FINANCE_TITLES)
     tech = _hit(title, TECH_TITLES)
     if not finance and not tech:
+        return None
+    # Not for engineering titles: "asset management" also names industrial plant
+    # (Yokogawa), and a developer's skills list always reads as quantitative.
+    if finance and not tech and _quant_fund_seat(title, body):
         return None
     # A specialised trading/research engineering title is evidence of the job,
     # whereas a markets firm's self-description is not.
