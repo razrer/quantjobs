@@ -365,6 +365,7 @@ _SINGLE = {
     "experience_floor": "yrs",
     "code_depth": "cd",
     "contract": "ct",
+    "student_role": "stu",
 }
 
 TEASER = 260

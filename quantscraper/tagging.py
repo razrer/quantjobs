@@ -42,7 +42,7 @@ from . import db, lexicon, role_scope
 # classifier improved" from "the market moved". **Forgetting is now loud** --
 # see `fingerprint`, which records what wrote each version's tags so that
 # `alerts` can say when the two have parted company.
-TAGGER = 69
+TAGGER = 71
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS job_tags (
@@ -1021,6 +1021,50 @@ _CONTRACT = {
                   "vast contract", "tillsvidareanstallning", "fast stilling",
                   "fastansaettelse", "fast ansaettelse"),
 }
+
+# **The student/internship category, read from the title alone, at the user's
+# request so that these can be filtered out with one click.** It removes nothing
+# and rates nothing: `fit` is untouched, because a few internships are open to
+# non-students and those must stay findable.
+#
+# Not `contract: internship`, which reads the body as well, so one mention of
+# interns marked SBAB's `Erfaren Riskanalytiker` and Jane Street's `Quantitative
+# Researcher`. Not `hard_gates: student_only` either, which also fires on bodies
+# describing who *may* apply. Graduate and trainee programmes are deliberately
+# absent: a reader who has already graduated can hold them.
+_STUDENT_TITLES = _terms(
+    "intern", "interns", "internship", "internships", "praktik", "praktikant",
+    "praktikanten", "praktikantin", "praktikum", "praktikplats", "sommarpraktik",
+    "student", "students", "studentmedarbetare", "studentmedhjaelper",
+    "studentermedhjaelper", "studentjobb", "studiejob", "studenterjob",
+    "studentassistent", "werkstudent", "werkstudentin", "stagiaire",
+    "summer analyst", "summer associate", "sommarjobb", "co op", "thesis",
+    "examensarbete", "exjobb", "degree project", "placement year",
+    "industrial placement", "placement analyst", "spring week", "insight week",
+    "vacation scheme", "summer programme", "summer program", "winternship",
+    "apprenticeship", "apprenticeships",
+)
+# Swedish and German build these into one word, and new ones keep appearing:
+# `Juriststudent`, `Masterstudent`, `Schuelerpraktikum`. Not bare `praktik`:
+# `Reifenpraktik/in` is a tyre fitter.
+_STUDENT_COMPOUNDS = ("student", "studentin", "praktikum")
+# Swedish `intern` means *internal*: `Riskanalytiker med fokus pa intern kontroll`
+# and `Senior Intern Varderare` are full jobs. `student` can name the customer.
+_NOT_A_STUDENT_ROLE = re.compile(
+    r"\bintern (?:styrning|kontroll|revis\w*|konsult\w*|reception\w*|varderare"
+    r"|kommunikation|service|support|utbildning|rekrytering|radgiv\w*|handlaggare"
+    r"|logistik|transport|administration)\b"
+    r"|\bstudent (?:living|housing|accommodation|loans?|recruitment|services|success)\b"
+)
+
+
+def _student_title(folded_title: str) -> str | None:
+    """The word in a folded title that makes it a student or internship role."""
+    title = f" {_NOT_A_STUDENT_ROLE.sub(' ', folded_title)} "
+    return next((word for word in _STUDENT_TITLES if f" {word} " in title), None) or next(
+        (word for word in title.split() if word.endswith(_STUDENT_COMPOUNDS)), None
+    )
+
 
 # The exclude list, one tag each, so it is auditable by category. `crypto` and
 # `heavy_systems` down-rank; the rest reject.
@@ -3360,6 +3404,9 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
     for dimension, mapping in (("code_depth", _CODE_DEPTH), ("contract", _CONTRACT)):
         found = _first(mapping, text)
         add(dimension, found[0] if found else "unknown", f"{found[1]!r}" if found else None)
+
+    if student := _student_title(just_title):
+        add("student_role", "student_internship", repr(student))
 
     for language in _LANGUAGES:
         if f" {language} " in text:

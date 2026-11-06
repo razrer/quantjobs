@@ -464,10 +464,31 @@ quant job or adjacent to one.
   `audit_tax`.
 - The Pensionsmyndigheten advert was last seen on 2026-08-22 with no deadline, so it
   may have closed. Not checked.
-- Open: SEB's 2027 internships remain on the board, several rated `strong`, although
-  the scope excludes student roles. They predate this stage.
+- SEB's 2027 internships remained on the board, several rated `strong`, although the
+  scope excludes student roles. Closed by Stage 65.
 - Open: `tag` hung on its first run. A pipe write to the pool failed with WinError
   1450 on 7.7 GB of RAM with 918,000 postings pending, and the pool waited
   indefinitely. Committed chunks survive, so re-running resumes. Both full re-tags
   here ran with `--limit 100000` in a loop, without failure. `tagging.run` still sizes
   chunks by corpus and needs a cap.
+
+## Stage 65 — a student / internship category (tagger 71)
+
+Requested: student and internship roles get their own category and are easy to filter
+out. Some internships are open to non-students, so the board does not remove them.
+
+- `tagging._student_title` adds a `student_role` tag, read from the title only. The
+  `Contract` facet could not serve: it reads bodies, and labels SBAB's Erfaren
+  Riskanalytiker and Jane Street's Quantitative Researcher as internships.
+- The tag does not touch `fit`, gates or exclusions. The board gains a `Student /
+  internship` facet and a `Hide student / internship` toggle, off by default.
+- Words ending in `student` or `praktikum` count, for compounds such as
+  `Juriststudent`. Swedish `intern` meaning internal, and `student housing`, stay out.
+  Graduate and trainee programmes stay out because a graduate can hold them.
+- Board: 5,705 cards before and after, none added, removed or re-rated. 494 are in the
+  category. Stockholm 14 of 138: the SEB internships and student roles, plus Alecta,
+  Fairlo, Lynx, Vattenfall, Citi and Soderberg & Partners.
+- The rail counts cards still open, the toggle counts all of them. The 25 cards apart
+  at tagger 70 were past their closing date, which the board hides by default.
+- Open: `Contract: internship` still reads bodies and stays unreliable. `MBA Value
+  Summer Research Associate` at Invesco is a title the word list misses.

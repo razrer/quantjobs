@@ -1249,6 +1249,11 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
                 adjacent: "next to the desk" },
       get: single("rel", "unknown") },
 
+    { key: "stu", label: "Student / internship", open: true,
+      order: ["student_internship", "other"],
+      labels: { student_internship: "student / internship", other: "everything else" },
+      get: single("stu", "other") },
+
     { key: "desk", label: "Desk", open: false,
       order: ["front_office", "middle_office", "back_office", "unstated"],
       get: single("desk", "unstated") },
@@ -1389,6 +1394,10 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     // with credit risk a plus") is not what this hides.
     { key: "credit", label: "Hide credit risk", exclude: true,
       test: (j) => /credit risk|kreditrisk/i.test(j.title) },
+    // Same contract again. The title decides, so a graduate programme stays, and
+    // the few internships open to non-students come straight back on untoggling.
+    { key: "student", label: "Hide student / internship", exclude: true,
+      test: (j) => j.stu === "student_internship" },
     { key: "saved", label: "Saved", only: "saved", test: (j) => saved.has(j.id) },
     { key: "rejected", label: "Rejected", only: "rejected", test: (j) => j.rel === "rejected" },
   ];
@@ -1665,6 +1674,7 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
     if (job.due) rows.push(["closes", `${esc(stamp(job.due))} · ${esc(dueText(job.left))}`]);
     if (job.rel) rows.push(["relevance", esc(label(job.rel))]);
     if (job.ct) rows.push(["contract", esc(label(job.ct))]);
+    if (job.stu) rows.push(["category", "student / internship"]);
     if (job.hz && job.hz.length) rows.push(["horizon", job.hz.map((v) => esc(label(v))).join(", ")]);
     if (job.asset && job.asset.length) rows.push(["assets", job.asset.map((v) => esc(label(v))).join(", ")]);
     if (job.lang && job.lang.length) rows.push(["stack", job.lang.map((v) => esc(label(v))).join(", ")]);

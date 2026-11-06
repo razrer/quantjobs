@@ -2669,6 +2669,68 @@ class SwedishPluralOfAnAccountingTitleTest(unittest.TestCase):
                 self.assertFalse(self._gated(title))
 
 
+class StudentInternshipCategoryTest(unittest.TestCase):
+    """A filter the reader asked for, so it must not catch real jobs."""
+
+    def _student(self, title: str, description: str = "") -> bool:
+        return "student_role" in _tags(title=title, description=description)
+
+    def test_student_titles_are_in_the_category(self):
+        for title in (
+            "Corporate & Investment Banking Summer Internship 2027: FX Quant Trader",
+            "Quantitative Researcher - Intern [2027 Summer]",
+            "Student Analyst SEB Funds at SEB in Stockholm",
+            "Studentmedarbetare inom Portföljanalys & Värdering",
+            "Master Thesis - Open Banking & Credit Risk",
+            "2028 Finance Summer Analyst Program",
+            "Banking, Placement Analyst, Stockholm - Sweden, 2027",
+            "Software Engineer Co-Op",
+            "Juriststudent med intresse för skatterätt",
+            "Masterstudent i finans",
+            "Schülerpraktikum (m/w/d)",
+            "Women's Winternship",
+            "UK Corporate Banking Degree Apprenticeship Programme 2027 London",
+            "2027 Quant Masters Summer Programme - London",
+        ):
+            with self.subTest(title=title):
+                self.assertTrue(self._student(title))
+
+    def test_words_that_only_look_like_it_stay_out(self):
+        for title in ("Reifenpraktik/in",
+                      "Senior Associate, Student Housing / Multifamily",
+                      "Research Associate, Internet",
+                      "Händler*in Bio Rohwaren international w/m/d",
+                      "Ledare för internkontroll och beredskap"):
+            with self.subTest(title=title):
+                self.assertFalse(self._student(title))
+
+    def test_swedish_internal_is_not_an_intern(self):
+        for title in ("Riskanalytiker med fokus på intern kontroll, vikariat",
+                      "Senior Intern Värderare - Lantbruk",
+                      "Specialist inom intern styrning och kontroll",
+                      "Internal Auditor"):
+            with self.subTest(title=title):
+                self.assertFalse(self._student(title))
+
+    def test_programmes_a_graduate_can_hold_stay_out(self):
+        for title in ("2027 Quantitative Trader Graduate",
+                      "Financial Markets Graduate Programme UK 2027",
+                      "GRIT - Risk Analytics & Automation Trainee",
+                      "Campus Full Time 2027 - Quantitative Trader"):
+            with self.subTest(title=title):
+                self.assertFalse(self._student(title))
+
+    def test_a_body_mentioning_interns_does_not_count(self):
+        self.assertFalse(self._student(
+            "Erfaren Riskanalytiker", "Du handleder våra interns. As an intern you will learn."))
+
+    def test_the_category_does_not_change_the_fit(self):
+        title = "Quantitative Researcher - Intern"
+        tags = _tags(title=title)
+        self.assertEqual(tags["student_role"], {"student_internship"})
+        self.assertNotEqual(tags["fit"], {"out_of_scope"})
+
+
 class ApprenticeshipIsAContractInEveryLanguageTest(unittest.TestCase):
     """`Lehrstelle` was already `STUDENT_PROGRAMME`; its four translations
     were not, and one European truck-dealership network put all of them on the
