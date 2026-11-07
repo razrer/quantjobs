@@ -539,6 +539,11 @@ changes. Every change below was checked against the output it replaces.
 - Not done: DuckDB. The costs are throttled network reads and row-by-row writes, where
   it does not help, and it would mean rewriting SQLite-specific SQL across about 14
   modules. Faster fuzzy matchers compute a different score, so they are out.
-- Open: bodies live inline in `jobs`, so any metadata scan reads 10 GB (about 30 s).
-  Moving them to their own table is the next large saving and touches every reader.
+- `jobs_live_titles` covers the quant-board profile's scan, which read every body to
+  get at titles: 54 s → 11.7 s at the top of every `tag`, same 112 boards. It holds
+  no column a poll rewrites, so source reads pay nothing for it. Built in 61 s on
+  first connect, inside the space the rebuild freed.
+- Open: bodies live inline in `jobs` (2.3 GB), so other metadata scans still read
+  them, about 30 s each. The board build's copy is the largest. Covering it means
+  indexing `last_seen`, which every poll rewrites, for about 30 s a build.
   `tag`'s summary tables take about 1.5 min a run.

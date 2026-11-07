@@ -60,6 +60,14 @@ CREATE TABLE IF NOT EXISTS jobs (
 
 CREATE INDEX IF NOT EXISTS jobs_by_domain ON jobs (domain);
 
+-- Everything `tagging.quant_boards` reads, so it scans this instead of the
+-- table. Bodies are 2.3 GB of `jobs` and inline, so a titles-only scan of the
+-- table read all of them: 30 seconds, at the top of every `tag`. Only columns a
+-- routine poll leaves alone -- not `last_seen`, which every poll rewrites on
+-- every posting it reads -- so it costs the source reads nothing to keep.
+CREATE INDEX IF NOT EXISTS jobs_live_titles
+    ON jobs (removed_at, ats, token, title, department);
+
 -- Where a delta feed resumes. Two sources keep a cursor -- JobStream's is epoch
 -- milliseconds and job-room.ch's is a date -- and it is one column because the
 -- *shape* of a cursor is the source's business and the storage is not. It lived
