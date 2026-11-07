@@ -490,5 +490,20 @@ out. Some internships are open to non-students, so the board does not remove the
   Fairlo, Lynx, Vattenfall, Citi and Soderberg & Partners.
 - The rail counts cards still open, the toggle counts all of them. The 25 cards apart
   at tagger 70 were past their closing date, which the board hides by default.
-- Open: `Contract: internship` still reads bodies and stays unreliable. `MBA Value
-  Summer Research Associate` at Invesco is a title the word list misses.
+- `Contract: internship` read bodies and stayed unreliable. Closed by Stage 66.
+- Open: `MBA Value Summer Research Associate` at Invesco is a title the word list
+  misses.
+
+## Stage 66 — `Contract: internship` from the title (tagger 72)
+
+Requested: fix the Contract facet, which marked full-time roles as internships.
+
+- The `internship` row read the body and came first in `_CONTRACT`, so one mention of
+  interns outranked `full time`. It now comes from `_student_title` alone. The other
+  contract values still read the body.
+- Board: 5,705 cards before and after, none added, removed or re-rated; only `ct`
+  changed, on 168 cards. `Contract: internship` and the student / internship category
+  now hold the same 494 cards. 32 former internships read as permanent, among them
+  three Jane Street Quantitative Researcher cards.
+- Stockholm: SBAB's Erfaren Riskanalytiker and Länsförsäkringar's Senior Intern
+  Värderare left `internship`; seven student and thesis cards joined it.

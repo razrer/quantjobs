@@ -2731,6 +2731,32 @@ class StudentInternshipCategoryTest(unittest.TestCase):
         self.assertNotEqual(tags["fit"], {"out_of_scope"})
 
 
+class InternshipContractIsReadFromTheTitleTest(unittest.TestCase):
+    """`contract: internship` read the body and outranked every other contract,
+    so one mention of interns made a full-time seat an internship."""
+
+    def test_a_body_mentioning_interns_is_not_an_internship(self):
+        tags = _tags(title="Erfaren Riskanalytiker - Kreditriskmodeller",
+                     description="Tillsvidareanställning på heltid. Du handleder "
+                                 "våra praktikanter och interns. " * 5)
+        self.assertNotIn("internship", tags["contract"])
+        self.assertEqual(tags["contract"], {"permanent"})
+
+    def test_swedish_internal_control_in_a_body_is_not_an_internship(self):
+        tags = _tags(title="Quantitative Analyst",
+                     description="Arbete med intern kontroll och modellrisk. " * 5)
+        self.assertNotIn("internship", tags["contract"])
+
+    def test_an_internship_title_is_still_an_internship(self):
+        for title in ("Quantitative Researcher - Intern [2027 Summer]",
+                      "Studentmedarbetare inom Portföljanalys",
+                      "Praktikum Private Equity (m/w/d)"):
+            with self.subTest(title=title):
+                tags = _tags(title=title, description="Full time permanent role. " * 5)
+                self.assertEqual(tags["contract"], {"internship"})
+                self.assertEqual(tags["student_role"], {"student_internship"})
+
+
 class ApprenticeshipIsAContractInEveryLanguageTest(unittest.TestCase):
     """`Lehrstelle` was already `STUDENT_PROGRAMME`; its four translations
     were not, and one European truck-dealership network put all of them on the

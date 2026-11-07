@@ -42,7 +42,7 @@ from . import db, lexicon, role_scope
 # classifier improved" from "the market moved". **Forgetting is now loud** --
 # see `fingerprint`, which records what wrote each version's tags so that
 # `alerts` can say when the two have parted company.
-TAGGER = 71
+TAGGER = 72
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS job_tags (
@@ -1002,11 +1002,13 @@ _SPOKEN_REQUIRED = {
 # about its duration. It reaches 126 titles and `timvikarie`, `sommarvikarie`
 # and `barselsvikariat` another 700 between them, almost all care and school
 # work, which the occupation words in `_OFF_INDUSTRY` catch on their own terms.
+#
+# **No `internship` row: that value comes from the title, see `_student_title`.**
+# It used to sit first here and read the body, so it outranked every other row on
+# one mention of interns -- SBAB's `Erfaren Riskanalytiker` ("du handleder vara
+# praktikanter") and Jane Street's `Quantitative Researcher` were internships, and
+# Swedish `intern kontroll` (internal control) counted too.
 _CONTRACT = {
-    "internship": ("intern", "internship", "praktik", "praktikant",
-                   "praktikplats", "studiejob", "studentjobb",
-                   "studentmedhjaelper", "studentermedhjaelper",
-                   "studentmedarbetare"),
     "fixed_term": ("fixed term", "temporary", "vikariat", "tijdelijk",
                    "befristet", "vikarie", "vikarier", "timvikarie",
                    "timvikarier", "sommarvikarie", "sommarvikarier",
@@ -3401,12 +3403,14 @@ def tag_posting(row: sqlite3.Row) -> list[Tag]:
         seniority_value = named
         add("seniority", seniority_value, f"{rank[1]!r}" if rank else None)
 
-    for dimension, mapping in (("code_depth", _CODE_DEPTH), ("contract", _CONTRACT)):
-        found = _first(mapping, text)
-        add(dimension, found[0] if found else "unknown", f"{found[1]!r}" if found else None)
-
-    if student := _student_title(just_title):
+    student = _student_title(just_title)
+    if student:
         add("student_role", "student_internship", repr(student))
+    for dimension, found in (
+        ("code_depth", _first(_CODE_DEPTH, text)),
+        ("contract", ("internship", student) if student else _first(_CONTRACT, text)),
+    ):
+        add(dimension, found[0] if found else "unknown", f"{found[1]!r}" if found else None)
 
     for language in _LANGUAGES:
         if f" {language} " in text:
