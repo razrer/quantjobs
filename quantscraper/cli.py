@@ -9,6 +9,7 @@ import sqlite3
 import subprocess
 import sys
 import threading
+import time
 from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -674,10 +675,21 @@ def _pages(database: str, limit: int, workers: int) -> int:
     return 0
 
 
+# **No cap on a tag pass.** It was 1,000,000, which kept the old whole-corpus
+# fetch inside this machine's memory and left 367,400 of 1,367,400 postings
+# untagged after every `TAGGER` bump, until the following week's pass reached
+# them. `tagging.pending` reads a page at a time now, so the bound protects
+# nothing; this is only larger than any corpus this project will hold.
+TAG_EVERYTHING = 100_000_000
+
+
 def _tag(database: str, limit: int, dimension: str) -> int:
     connection = db.connect(database)
     tagged, written = tagging.run(connection, limit)
     print(f"tagged {tagged:,d} postings, wrote {written:,d} tags")
+    if tagging.PHASES:
+        print("  " + ", ".join(
+            f"{name} {seconds / 60:.1f} min" for name, seconds in tagging.PHASES.items()))
     # A run that stops exactly on its own limit has almost certainly been cut
     # short, and every summary printed below it then describes a partial
     # re-tag while looking like a whole one. The corpus was 157,520 against a
@@ -1159,6 +1171,11 @@ class _ThreadStream:
         return False
 
 
+def _minutes(seconds: float) -> str:
+    """A step's wall time for the run log."""
+    return f"{seconds / 60:.1f} min"
+
+
 def _gather(steps: list[tuple[str, Callable[[], int]]]) -> list[str]:
     """Run independent steps at once. Returns the names that failed.
 
@@ -1187,6 +1204,9 @@ def _gather(steps: list[tuple[str, Callable[[], int]]]) -> list[str]:
     if not steps:
         return []
     reports: dict[str, tuple[int | None, str, str, Exception | None]] = {}
+    # Wall time per source, printed in its heading. The weekly log had none, so
+    # which source holds the gather phase open could only be guessed.
+    took: dict[str, float] = {}
     stream = _ThreadStream(sys.stdout)
     errors = _ThreadStream(sys.stderr)
 
@@ -1196,10 +1216,12 @@ def _gather(steps: list[tuple[str, Callable[[], int]]]) -> list[str]:
         stream.claim(out)
         errors.claim(err)
         error = None
+        started = time.monotonic()
         try:
             code = step()
         except Exception as exc:  # noqa: BLE001 - one source must not stop the rest
             code, error = None, exc
+        took[name] = took.get(name, 0.0) + time.monotonic() - started
         return name, code, out.getvalue(), err.getvalue(), error
 
     previous = sys.stdout, sys.stderr
@@ -1233,6 +1255,7 @@ def _gather(steps: list[tuple[str, Callable[[], int]]]) -> list[str]:
         print(f"\n=== {name} ===", flush=True)
         if out.strip():
             print(out.rstrip())
+        print(f"  took {_minutes(took.get(name, 0.0))}", flush=True)
         if err.strip():
             print(err.rstrip(), file=sys.stderr)
         if code != 0:
@@ -1316,9 +1339,9 @@ def _daily(database: str, full: bool, publish: bool) -> int:
     ]
 
     epilogue: list[tuple[str, Callable[[], int]]] = [
-        ("tag", lambda: _tag(database, 1_000_000, "fit")),
+        ("tag", lambda: _tag(database, TAG_EVERYTHING, "fit")),
         ("bodies", lambda: _bodies(database, 20_000 if full else 2_000, 12)),
-        ("re-tag", lambda: _tag(database, 1_000_000, "fit")),
+        ("re-tag", lambda: _tag(database, TAG_EVERYTHING, "fit")),
         ("alerts", lambda: _alerts(database)),
     ]
 
@@ -1355,12 +1378,14 @@ def _daily(database: str, full: bool, publish: bool) -> int:
     def serially(steps: list[tuple[str, Callable[[], int]]]) -> None:
         for name, step in steps:
             print(f"\n=== {name} ===", flush=True)
+            started = time.monotonic()
             try:
                 if step() != 0:
                     failed.append(name)
             except Exception as exc:  # noqa: BLE001 - one source must not stop the rest
                 print(f"  FAIL {name}: {exc}", file=sys.stderr)
                 failed.append(name)
+            print(f"  took {_minutes(time.monotonic() - started)}", flush=True)
 
     serially(prologue)
     print(f"\n=== gathering {len(gathered)} sources at once ===", flush=True)
@@ -1369,7 +1394,9 @@ def _daily(database: str, full: bool, publish: bool) -> int:
 
     print("\n=== board ===", flush=True)
     script = "publish.py" if publish else "build_data.py"
+    started = time.monotonic()
     done = subprocess.run([sys.executable, str(root / "web" / script)], cwd=root)
+    print(f"  took {_minutes(time.monotonic() - started)}", flush=True)
     if done.returncode != 0:
         failed.append(script)
 
@@ -1555,7 +1582,7 @@ def main(argv: list[str] | None = None) -> int:
     # High enough to cover the whole corpus in one pass. This is a guard
     # against a runaway, not a batch size: a default that silently stops
     # part-way through a re-tag leaves the summaries describing a mixture.
-    tag_command.add_argument("--limit", type=int, default=1_000_000)
+    tag_command.add_argument("--limit", type=int, default=TAG_EVERYTHING)
     tag_command.add_argument(
         "--dimension", default="fit", help="dimension to summarise afterwards"
     )

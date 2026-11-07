@@ -3194,6 +3194,147 @@ class ParallelTaggingAgreesTest(unittest.TestCase):
         finally:
             tagging._QUANT_BOARDS = previous
 
+    def _database(self, directory: str, name: str) -> sqlite3.Connection:
+        connection = db.connect(Path(directory) / name)
+        titles = [row["title"] for row in self.ROWS]
+        for n in range(23):
+            connection.execute(
+                "INSERT INTO jobs (ats, token, job_id, title, description, location,"
+                " first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?, 'x', 'x')",
+                ("greenhouse", f"firm{n % 4}", f"{n:03d}", titles[n % len(titles)],
+                 self.ROWS[n % len(self.ROWS)]["description"], "Stockholm, Sweden"))
+        connection.commit()
+        return connection
+
+    def _written(self, connection) -> list[tuple]:
+        return [tuple(row) for row in connection.execute(
+            "SELECT ats, token, job_id, dimension, value, confidence, evidence, tagger"
+            " FROM job_tags ORDER BY ats, token, job_id, dimension, value")]
+
+    def test_paged_pool_writes_what_the_serial_loop_writes(self):
+        """`run` reads in pages and keeps a few small chunks in flight; across
+        several pages and chunks, through real worker processes, it must write
+        row for row what one serial pass writes."""
+        import tempfile
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as directory:
+            serial = self._database(directory, "serial.sqlite3")
+            pooled = self._database(directory, "pooled.sqlite3")
+            self.assertEqual(tagging.run(serial, 1_000, workers=1)[0], 23)
+            started = []
+
+            class Counted(tagging.ProcessPoolExecutor):
+                def __init__(self, *args, **kwargs):
+                    started.append(kwargs.get("max_workers"))
+                    super().__init__(*args, **kwargs)
+
+            with mock.patch.object(tagging, "_PAGE", 7), \
+                 mock.patch.object(tagging, "_PARALLEL_FLOOR", 5), \
+                 mock.patch.object(tagging, "_CHUNK", 3), \
+                 mock.patch.object(tagging, "ProcessPoolExecutor", Counted):
+                self.assertEqual(tagging.run(pooled, 1_000, workers=2)[0], 23)
+            self.assertEqual(started, [2])
+            self.assertEqual(self._written(pooled), self._written(serial))
+            serial.close()
+            pooled.close()
+
+    def test_a_limit_stops_partway_and_the_next_run_resumes(self):
+        import tempfile
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as directory:
+            whole = self._database(directory, "whole.sqlite3")
+            parts = self._database(directory, "parts.sqlite3")
+            tagging.run(whole, 1_000, workers=1)
+            with mock.patch.object(tagging, "_PAGE", 7):
+                self.assertEqual(tagging.run(parts, 10, workers=1)[0], 10)
+                self.assertEqual(tagging.run(parts, 1_000, workers=1)[0], 13)
+                self.assertEqual(tagging.run(parts, 1_000, workers=1)[0], 0)
+            self.assertEqual(self._written(parts), self._written(whole))
+            whole.close()
+            parts.close()
+
+    _OLD_TABLE = (
+        "CREATE TABLE job_tags (ats TEXT NOT NULL, token TEXT NOT NULL,"
+        " job_id TEXT NOT NULL, dimension TEXT NOT NULL, value TEXT NOT NULL,"
+        " confidence TEXT NOT NULL, evidence TEXT, tagger INTEGER NOT NULL,"
+        " tagged_at TEXT NOT NULL, PRIMARY KEY (ats, token, job_id, dimension, value))"
+    )
+
+    def _history(self, connection) -> None:
+        """What a real table carries into a re-tag: a previous version's row
+        the new one will overwrite, one it will not, and a posting already
+        tagged at this version that the run must leave alone."""
+        connection.executemany(
+            "INSERT INTO job_tags VALUES (?, ?, ?, ?, ?, 'weak', 'old', ?, 'then')",
+            [("greenhouse", "firm0", "000", "fit", "strong", tagging.TAGGER - 1),
+             ("greenhouse", "firm0", "000", "retired_dimension", "x", tagging.TAGGER - 1),
+             ("greenhouse", "firm1", "001", "fit", "plausible", tagging.TAGGER)])
+        connection.commit()
+
+    def test_rebuild_writes_what_replace_writes(self):
+        """`RebuildAgreesWithReplace`: staging and rebuilding must leave the
+        table row for row as `INSERT OR REPLACE` would -- new tags win their
+        key, rows on other keys survive -- through the pool, from an old
+        rowid table, and with the `jobs` trigger still deleting by name."""
+        import tempfile
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as directory:
+            replaced = self._database(directory, "replaced.sqlite3")
+            rebuilt = sqlite3.connect(Path(directory) / "rebuilt.sqlite3")
+            rebuilt.execute(self._OLD_TABLE)
+            rebuilt.commit()
+            rebuilt.close()
+            rebuilt = self._database(directory, "rebuilt.sqlite3")
+            for connection in (replaced, rebuilt):
+                connection.executescript(tagging.SCHEMA)
+                self._history(connection)
+
+            self.assertEqual(tagging.run(replaced, 1_000, workers=1)[0], 22)
+            with mock.patch.object(tagging, "_REBUILD_FLOOR", 1), \
+                 mock.patch.object(tagging, "_PAGE", 7), \
+                 mock.patch.object(tagging, "_PARALLEL_FLOOR", 5), \
+                 mock.patch.object(tagging, "_CHUNK", 3):
+                self.assertEqual(tagging.run(rebuilt, 1_000, workers=2)[0], 22)
+
+            self.assertEqual(self._written(rebuilt), self._written(replaced))
+            self.assertIn(("greenhouse", "firm0", "000", "retired_dimension", "x",
+                           "weak", "old", tagging.TAGGER - 1), self._written(rebuilt))
+            sql = rebuilt.execute(
+                "SELECT sql FROM sqlite_master WHERE name = 'job_tags'").fetchone()[0]
+            self.assertIn("WITHOUT ROWID", sql)
+            self.assertEqual(
+                {row[0] for row in rebuilt.execute(
+                    "SELECT name FROM sqlite_master WHERE tbl_name = 'job_tags'"
+                    " AND type = 'index' AND name NOT LIKE 'sqlite_%'")},
+                {"job_tags_by_value", "job_tags_by_tagger"})
+            self.assertIsNone(rebuilt.execute(
+                "SELECT name FROM sqlite_master WHERE name = 'job_tags_next'").fetchone())
+
+            rebuilt.execute("UPDATE jobs SET title = 'Changed' WHERE job_id = '002'")
+            rebuilt.commit()
+            self.assertEqual(rebuilt.execute(
+                "SELECT COUNT(*) FROM job_tags WHERE job_id = '002'").fetchone()[0], 0)
+            replaced.close()
+            rebuilt.close()
+
+    def test_a_staging_table_left_by_a_crash_is_discarded(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            connection = self._database(directory, "crashed.sqlite3")
+            connection.executescript(tagging.SCHEMA)
+            connection.execute(f"CREATE TABLE job_tags_next ({tagging._TAG_COLUMNS})")
+            connection.execute(
+                "INSERT INTO job_tags_next VALUES"
+                " ('greenhouse', 'firm0', '000', 'fit', 'stale', 'weak', NULL, ?, 'then')",
+                (tagging.TAGGER,))
+            connection.commit()
+            tagging.run(connection, 1_000, workers=1)
+            self.assertEqual(connection.execute(
+                "SELECT COUNT(*) FROM job_tags WHERE value = 'stale'").fetchone()[0], 0)
+            self.assertIsNone(connection.execute(
+                "SELECT name FROM sqlite_master WHERE name = 'job_tags_next'").fetchone())
+            connection.close()
+
     def test_the_floor_keeps_small_runs_serial(self):
         """Spawning eight interpreters to tag a hundred rows is a loss.
 

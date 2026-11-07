@@ -31,8 +31,9 @@ import os
 import re
 import sqlite3
 import sys
+import time
 from collections import Counter
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ALL_COMPLETED, FIRST_COMPLETED, ProcessPoolExecutor, wait
 from dataclasses import dataclass
 
 from . import db, lexicon, role_scope
@@ -42,9 +43,15 @@ from . import db, lexicon, role_scope
 # classifier improved" from "the market moved". **Forgetting is now loud** --
 # see `fingerprint`, which records what wrote each version's tags so that
 # `alerts` can say when the two have parted company.
-TAGGER = 72
+TAGGER = 73
 
-SCHEMA = """
+# **`WITHOUT ROWID`, so a posting's tags sit together in key order.** Every
+# reader here asks for whole postings or whole versions, and a rowid table
+# scatters a posting's sixteen rows wherever they happened to be written. An
+# existing database converts on its first `_rebuild`; until then
+# `CREATE TABLE IF NOT EXISTS` leaves its table as it is, and every statement
+# here reads and writes both forms alike.
+_TAG_TABLE = """
 CREATE TABLE IF NOT EXISTS job_tags (
     ats        TEXT NOT NULL,
     token      TEXT NOT NULL,
@@ -56,15 +63,20 @@ CREATE TABLE IF NOT EXISTS job_tags (
     tagger     INTEGER NOT NULL,
     tagged_at  TEXT NOT NULL,
     PRIMARY KEY (ats, token, job_id, dimension, value)
-);
+) WITHOUT ROWID
+"""
 
-CREATE INDEX IF NOT EXISTS job_tags_by_value ON job_tags (dimension, value);
--- `postings()` asks "is this posting tagged at the current version" as a
--- correlated NOT EXISTS on (ats, token, job_id, tagger). The primary key stops
--- after the first three, so without this SQLite walked every row for the
--- posting -- one per dimension per version still in the table -- to test
--- `tagger`. Measured: 18 seconds to return 50,529 rows, against a seek.
-CREATE INDEX IF NOT EXISTS job_tags_by_tagger ON job_tags (ats, token, job_id, tagger);
+_TAG_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS job_tags_by_value ON job_tags (dimension, value)",
+    # `pending` asks "is this posting tagged at the current version" as a
+    # correlated NOT EXISTS on (ats, token, job_id, tagger). The primary key
+    # stops after the first three, so without this SQLite walked every row for
+    # the posting -- one per dimension per version still in the table -- to test
+    # `tagger`. Measured: 18 seconds to return 50,529 rows, against a seek.
+    "CREATE INDEX IF NOT EXISTS job_tags_by_tagger ON job_tags (ats, token, job_id, tagger)",
+)
+
+SCHEMA = _TAG_TABLE + ";\n" + ";\n".join(_TAG_INDEXES) + """;
 
 -- Which lexicon wrote each version's tags. One row per `TAGGER`, so a version
 -- edited without being bumped is a fact rather than a surprise. See
@@ -3747,22 +3759,152 @@ def load_quant_boards(connection: sqlite3.Connection) -> frozenset[tuple[str, st
     return _QUANT_BOARDS
 
 
+# **Read a page at a time, keys first.** `postings` used to be one query that
+# returned every untagged posting with its body, fetched whole: after a `TAGGER`
+# bump that is 1.37 million descriptions in memory at once on a 7.7 GB machine,
+# and the pool was then handed chunks of tens of thousands of them, pickled down
+# a pipe -- the WinError 1450 that hung a re-tag for ten hours. The weekly run
+# capped the pass at 1,000,000 postings to stay alive, which left the rest of
+# the corpus untagged after every bump until the next week.
+#
+# The keys come from `jobs`'s primary key alone -- an index walk that never
+# touches a body -- and in key order, so the `job_tags_by_tagger` probes run in
+# that index's own order. Only the keys are held, which is what lets `run` know
+# how much there is before it chooses how to write. Which postings are read, and
+# what each is tagged, does not change: the classifier reads one posting at a
+# time and `_QUANT_BOARDS` is fixed for the run.
+_PAGE = 20_000
+"""Untagged postings read per page."""
+
+_COLUMNS = "ats, token, job_id, title, location, department, category, description"
+
+
+def _pending_keys(connection: sqlite3.Connection, limit: int) -> list[tuple[str, str, str]]:
+    """Keys of postings with no tag from the current version, in key order."""
+    keys: list[tuple[str, str, str]] = []
+    after: tuple[str, str, str] = ("", "", "")
+    while len(keys) < limit:
+        page = connection.execute(
+            """
+            SELECT j.ats, j.token, j.job_id
+            FROM jobs j
+            WHERE (j.ats, j.token, j.job_id) > (?, ?, ?)
+              AND NOT EXISTS (
+                SELECT 1 FROM job_tags t
+                WHERE t.ats = j.ats AND t.token = j.token AND t.job_id = j.job_id
+                  AND t.tagger = ?
+            )
+            ORDER BY j.ats, j.token, j.job_id
+            LIMIT ?
+            """,
+            (*after, TAGGER, min(_PAGE, limit - len(keys))),
+        ).fetchall()
+        if not page:
+            break
+        keys.extend(tuple(key) for key in page)
+        after = keys[-1]
+    return keys
+
+
+def _pages(connection: sqlite3.Connection, keys: list[tuple[str, str, str]]):
+    """The postings behind `keys`, a page at a time; any deleted since are skipped."""
+    for start in range(0, len(keys), _PAGE):
+        page = []
+        for key in keys[start:start + _PAGE]:
+            row = connection.execute(
+                f"SELECT {_COLUMNS} FROM jobs WHERE ats = ? AND token = ? AND job_id = ?",
+                key,
+            ).fetchone()
+            if row is not None:
+                page.append(row)
+        if page:
+            yield page
+
+
+def pending(connection: sqlite3.Connection, limit: int):
+    """Postings with no tag from the current lexicon version, a page at a time."""
+    yield from _pages(connection, _pending_keys(connection, limit))
+
+
 def postings(connection: sqlite3.Connection, limit: int) -> list[sqlite3.Row]:
     """Postings with no tag from the current lexicon version."""
-    return connection.execute(
-        """
-        SELECT j.ats, j.token, j.job_id, j.title, j.location, j.department,
-               j.category, j.description
-        FROM jobs j
-        WHERE NOT EXISTS (
-            SELECT 1 FROM job_tags t
-            WHERE t.ats = j.ats AND t.token = j.token AND t.job_id = j.job_id
-              AND t.tagger = ?
+    return [row for page in pending(connection, limit) for row in page]
+
+
+# **A large re-tag writes into a bare table and rebuilds `job_tags` from it.**
+# `INSERT OR REPLACE` into a 22-million-row table with two secondary indexes
+# costs a random walk through three B-trees per row: about an hour of a
+# 70-minute re-tag after a `TAGGER` bump, against about 30 seconds of
+# classification a batch. Measured on a copy of this table: appending the same
+# 22.3 million rows to an unindexed table took 2.7 minutes, and rebuilding the
+# table from them sorted, indexes included, 3.7 more. The rebuilt table is also
+# packed, and the board's full read of it went from 174 seconds to 19.
+#
+# **What the rebuild writes is what the row-by-row path would have written.**
+# For every key the new tag wins, exactly as `INSERT OR REPLACE` lets it; a row
+# whose key this run did not write survives, including an older version's,
+# exactly as it would have. `RebuildAgreesWithReplaceTest` pins the two paths
+# row for row. The table is dropped and recreated under its own name rather than
+# renamed into place, because the `jobs` trigger in `db.py` deletes from it by
+# name.
+#
+# The cost is atomicity at a coarser grain: staged rows survive nothing, so a
+# crash before the rebuild costs the run and the next one starts clean. The
+# rebuild itself is one transaction, which holds the write lock for a few
+# minutes. The floor keeps `daily`'s few thousand postings on the cheap path.
+_REBUILD_FLOOR = 400_000
+"""From this many postings up, stage and rebuild. Break-even measured: about a
+minute of row-by-row writes per 60,000 postings against six or seven fixed."""
+
+_STAGING = "job_tags_next"
+_TAG_COLUMNS = "ats, token, job_id, dimension, value, confidence, evidence, tagger, tagged_at"
+
+
+def _stage_rows(connection: sqlite3.Connection, rows: list[tuple]) -> None:
+    """Append tag tuples to the staging table. See `_rebuild`."""
+    if not rows:
+        return
+    timestamp = db.now()
+    with connection:
+        connection.executemany(
+            f"INSERT INTO {_STAGING} ({_TAG_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [(*row, TAGGER, timestamp) for row in sorted(rows, key=lambda r: r[:5])],
         )
-        LIMIT ?
-        """,
-        (TAGGER, limit),
-    ).fetchall()
+
+
+def _rebuild(connection: sqlite3.Connection) -> None:
+    """Replace `job_tags` with the staged rows plus every row they do not supersede."""
+    connection.commit()
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        connection.execute(
+            f"CREATE INDEX {_STAGING}_key ON {_STAGING} (ats, token, job_id, dimension, value)"
+        )
+        connection.execute(
+            f"INSERT INTO {_STAGING} ({_TAG_COLUMNS}) SELECT {_TAG_COLUMNS} FROM job_tags o"
+            f" WHERE NOT EXISTS (SELECT 1 FROM {_STAGING} s"
+            "   WHERE s.ats = o.ats AND s.token = o.token AND s.job_id = o.job_id"
+            "     AND s.dimension = o.dimension AND s.value = o.value)"
+        )
+        # Dropped before the copy, or the planner reads the staging table in
+        # index order -- a random lookup per row -- instead of sorting it.
+        connection.execute(f"DROP INDEX {_STAGING}_key")
+        connection.execute("DROP TABLE job_tags")
+        connection.execute(_TAG_TABLE)
+        # Later rows win a tie, as the later write does under `INSERT OR
+        # REPLACE`: within one posting's chunk, rows keep their written order.
+        connection.execute(
+            f"INSERT OR REPLACE INTO job_tags ({_TAG_COLUMNS}) SELECT {_TAG_COLUMNS}"
+            f" FROM {_STAGING} ORDER BY ats, token, job_id, dimension, value, rowid"
+        )
+        for statement in _TAG_INDEXES:
+            connection.execute(statement)
+        connection.execute(f"DROP TABLE {_STAGING}")
+        connection.commit()
+    except BaseException:
+        connection.rollback()
+        raise
+    connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
 
 def _record_rows(connection: sqlite3.Connection, rows: list[tuple]) -> None:
@@ -3776,12 +3918,16 @@ def _record_rows(connection: sqlite3.Connection, rows: list[tuple]) -> None:
     if not rows:
         return
     timestamp = db.now()
+    # In key order, which is the order of the primary key and of
+    # `job_tags_by_tagger`: neighbouring rows land on the same pages instead of
+    # scattered ones. The rows written are the same; only the order differs, and
+    # it is one transaction.
     with connection:
         connection.executemany(
             "INSERT OR REPLACE INTO job_tags"
             " (ats, token, job_id, dimension, value, confidence, evidence,"
             "  tagger, tagged_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [(*row, TAGGER, timestamp) for row in rows],
+            [(*row, TAGGER, timestamp) for row in sorted(rows, key=lambda r: r[:5])],
         )
 
 
@@ -3804,6 +3950,11 @@ def record(connection: sqlite3.Connection, tags: list[Tag]) -> None:
 # is threads, and correctly so: those wait on sockets and release the GIL while
 # they do. This one does not wait for anything.
 _PARALLEL_FLOOR = 20_000
+
+_CHUNK = 1_000
+"""Postings per pool task. A few hundred milliseconds of work and a few MB of
+pickle: large enough that shipping it is cheap next to classifying it, small
+enough that no single write to the pipe can fail for size."""
 """Below this, tag serially.
 
 Windows spawns rather than forks, so each worker re-imports this module and
@@ -3915,6 +4066,10 @@ def _stamp(connection: sqlite3.Connection) -> None:
         )
 
 
+PHASES: dict[str, float] = {}
+"""Seconds spent in each phase of the last `run`, for the run log."""
+
+
 def run(
     connection: sqlite3.Connection, limit: int, workers: int | None = None
 ) -> tuple[int, int]:
@@ -3940,47 +4095,93 @@ def run(
     # a row at this version -- so returning early without stamping would leave
     # the one case it exists for unrecorded.
     _stamp(connection)
+    PHASES.clear()
+    started = time.monotonic()
     boards = load_quant_boards(connection)
-    rows = postings(connection, limit)
-    if not rows:
+    PHASES["profile"] = time.monotonic() - started
+    # A staging table left by a run that died before its rebuild is discarded:
+    # those rows were never part of `job_tags`, and a posting edited since may
+    # have made them stale.
+    connection.execute(f"DROP TABLE IF EXISTS {_STAGING}")
+    connection.commit()
+    started = time.monotonic()
+    keys = _pending_keys(connection, limit)
+    PHASES["finding"] = time.monotonic() - started
+    started = time.monotonic()
+    if not keys:
         return 0, 0
+
+    rebuild = len(keys) >= _REBUILD_FLOOR
+    if rebuild:
+        connection.execute(
+            f"CREATE TABLE {_STAGING} ({_TAG_COLUMNS})"
+        )
+        connection.commit()
+    else:
+        # A larger page cache for the row-by-row path: measured 1.4x on these
+        # writes. Set here, on the one writer, rather than in `db.connect`,
+        # which the gather phase opens a dozen times at once.
+        connection.execute("PRAGMA cache_size = -524288")
+    write = _stage_rows if rebuild else _record_rows
 
     if workers is None:
         workers = min(8, os.cpu_count() or 1)
-    if workers <= 1 or len(rows) < _PARALLEL_FLOOR:
-        written = 0
-        batch: list[Tag] = []
-        for row in rows:
-            tags = tag_posting(row)
-            tags.append(_fit(tags))
-            batch.extend(tags)
-            written += len(tags)
-            if len(batch) >= 2_000:
-                record(connection, batch)
-                batch.clear()
-        record(connection, batch)
-        return len(rows), written
+    tagged = written = 0
+    if workers <= 1 or len(keys) < _PARALLEL_FLOOR:
+        batch: list[tuple] = []
+        for page in _pages(connection, keys):
+            for row in page:
+                tags = tag_posting(row)
+                tags.append(_fit(tags))
+                batch.extend(
+                    (t.ats, t.token, t.job_id, t.dimension, t.value, t.confidence, t.evidence)
+                    for t in tags
+                )
+                written += len(tags)
+                if len(batch) >= 2_000:
+                    write(connection, batch)
+                    batch.clear()
+            tagged += len(page)
+        write(connection, batch)
+    else:
+        # Small chunks, and only a few in flight: what crosses the pipe is
+        # bounded by `_CHUNK` rather than by the size of the corpus, and so is
+        # what the parent holds. `sqlite3.Row` does not pickle, and a `dict` is
+        # what `tag_posting`'s `row["field"]` access already expects.
+        with ProcessPoolExecutor(
+            max_workers=workers, initializer=_init_worker, initargs=(boards,)
+        ) as pool:
+            flight: set = set()
 
-    # Chunked rather than mapped one posting at a time: a per-posting round
-    # trip costs more in pickling than the 3 ms it saves. `sqlite3.Row` does
-    # not pickle, and a `dict` is what `tag_posting`'s `row["field"]` access
-    # already expects, so the conversion is free of meaning.
-    chunk = max(500, len(rows) // (workers * 8))
-    chunks = [
-        [dict(row) for row in rows[i:i + chunk]]
-        for i in range(0, len(rows), chunk)
-    ]
-    written = 0
-    with ProcessPoolExecutor(
-        max_workers=workers, initializer=_init_worker, initargs=(boards,)
-    ) as pool:
-        # Written as each chunk lands rather than at the end, for the reason
-        # every long pass here batches: a crash costs the last chunk, not the
-        # whole run.
-        for tags in pool.map(_tag_chunk, chunks):
-            _record_rows(connection, tags)
-            written += len(tags)
-    return len(rows), written
+            def land(block: bool) -> None:
+                nonlocal written
+                if not flight:
+                    return
+                done, rest = wait(
+                    flight, return_when=FIRST_COMPLETED if block else ALL_COMPLETED)
+                flight.intersection_update(rest)
+                # Written as each chunk lands rather than at the end, for the
+                # reason every long pass here batches.
+                for future in done:
+                    tags = future.result()
+                    write(connection, tags)
+                    written += len(tags)
+
+            for page in _pages(connection, keys):
+                for i in range(0, len(page), _CHUNK):
+                    flight.add(pool.submit(
+                        _tag_chunk, [dict(row) for row in page[i:i + _CHUNK]]))
+                    if len(flight) >= workers * 2:
+                        land(block=True)
+                tagged += len(page)
+            land(block=False)
+
+    PHASES["tagging"] = time.monotonic() - started
+    if rebuild:
+        started = time.monotonic()
+        _rebuild(connection)
+        PHASES["rebuild"] = time.monotonic() - started
+    return tagged, written
 
 
 def summary(connection: sqlite3.Connection, dimension: str):

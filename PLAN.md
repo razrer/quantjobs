@@ -507,3 +507,38 @@ Requested: fix the Contract facet, which marked full-time roles as internships.
   three Jane Street Quantitative Researcher cards.
 - Stockholm: SBAB's Erfaren Riskanalytiker and Länsförsäkringar's Senior Intern
   Värderare left `internship`; seven student and thesis cards joined it.
+
+## Stage 67 — speed within exact output (tagger 73)
+
+Requested: speed up every step without trading accuracy, and consider architectural
+changes. Every change below was checked against the output it replaces.
+
+- Measured first. The weekly run is 4 h 50 min, mostly throttled network reads, which
+  stay as they are. Local costs: a full re-tag about 70 min, of which tag writes about
+  60; a board build 8.5–9.7 min; a `tag` with nothing to do about 2 min, twice a week.
+- Board build: the employer profile counts from the tags already read instead of
+  seeking `job_tags` per posting (157 s), and near-duplicate ratios are cached by a
+  hash of both texts (`web/near_scores.json`, gitignored). Build 9 min → 2.5–6 min.
+  Board identical to the baseline.
+- `tag` reads untagged keys first, then rows a page at a time, and keeps a few
+  1,000-posting chunks in flight. This removes the WinError 1450 hang, so `daily` no
+  longer caps a pass at 1,000,000 postings; that cap had left 367,400 untagged after
+  every bump until the following week.
+- From 400,000 postings up, `tag` appends to `job_tags_next` and rebuilds `job_tags`
+  from it, sorted, in one transaction. Measured on a copy: 6.4 min of writes against
+  about 60. Same rows as `INSERT OR REPLACE`: new tags win their key, others survive.
+  The table is now `WITHOUT ROWID`; the conversion happened on this rebuild.
+- Tagger 73 changes no rule. It exists to run that rebuild over the real corpus:
+  all 1,367,400 postings carry exactly their tagger-72 tags (22,246,738 rows), the
+  31,000 rows of older versions are unchanged, and the board is identical. Full
+  re-tag 70 → 29.4 min, much of it the one-off read of the old fragmented table.
+- `daily` prints each step's wall time, and `tag` its phases, so the next run shows
+  where the time goes.
+- The database grew 11.1 → 15.8 GB: the old table's pages are free space SQLite
+  reuses on the next rebuild. `VACUUM` would return them, at the cost of an hour.
+- Not done: DuckDB. The costs are throttled network reads and row-by-row writes, where
+  it does not help, and it would mean rewriting SQLite-specific SQL across about 14
+  modules. Faster fuzzy matchers compute a different score, so they are out.
+- Open: bodies live inline in `jobs`, so any metadata scan reads 10 GB (about 30 s).
+  Moving them to their own table is the next large saving and touches every reader.
+  `tag`'s summary tables take about 1.5 min a run.
