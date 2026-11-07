@@ -60,6 +60,23 @@ from quantscraper import (  # noqa: E402
 
 DB = Path(__file__).resolve().parent.parent / "employers.sqlite3"
 OUT = Path(__file__).resolve().parent / "data.js"
+# `dedup.Scores` between builds. Derived and gitignored: deleting it costs one
+# slower build and changes nothing on the board.
+SCORES = Path(__file__).resolve().parent / "near_scores.json"
+
+
+def _read_scores() -> dict[str, float]:
+    try:
+        known = json.loads(SCORES.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {k: float(v) for k, v in known.items()} if isinstance(known, dict) else {}
+
+
+def _write_scores(used: dict[str, float]) -> None:
+    partial = SCORES.with_suffix(".tmp")
+    partial.write_text(json.dumps(used, sort_keys=True), encoding="utf-8")
+    partial.replace(SCORES)
 
 # Legal forms, stripped only to make a display name readable. This is cosmetic
 # and deliberately separate from `resolve.py`'s normalizer, which decides
@@ -229,7 +246,8 @@ def unread_census(ats: str, relevance: str) -> bool:
 # `lexicon.board_profile` returns None. Kept as a name here because the gate
 # has to fail towards keeping when it cannot judge -- an unprofiled board is
 # not a non-markets one.
-def employer_profiles(connection, tagger: int, table: str = "jobs") -> dict[str, str]:
+def employer_profiles(connection, tagger: int, table: str = "jobs",
+                      relevance: dict | None = None) -> dict[str, str]:
     """`employer -> profile`, for the sources that publish under one token.
 
     `board_profiles` reads `(ats, token)` and that is right for a firm's own
@@ -238,14 +256,30 @@ def employer_profiles(connection, tagger: int, table: str = "jobs") -> dict[str,
     hiring. The employer string is the unit there, and `lexicon.board_profile`
     does not care which it is handed -- it takes three counts.
     """
+    if relevance is None:
+        pairs = connection.execute(
+            f"SELECT j.employer, t.value FROM {table} j"
+            " JOIN job_tags t ON t.ats = j.ats AND t.token = j.token"
+            "   AND t.job_id = j.job_id AND t.dimension = 'relevance' AND t.tagger = ?"
+            " WHERE j.removed_at IS NULL AND TRIM(COALESCE(j.employer, '')) <> ''",
+            (tagger,),
+        )
+    else:
+        # **The same join, against tags the caller has already read.** The SQL
+        # form seeks `job_tags` once per live posting -- 1.27 million seeks,
+        # measured at 157 of the build's 584 seconds -- for rows `_build` had
+        # just read in full. The filter on the posting stays in SQL, so what is
+        # counted is unchanged; `EmployerProfileTest` pins the two forms equal.
+        pairs = (
+            (row[3], value)
+            for row in connection.execute(
+                f"SELECT ats, token, job_id, employer FROM {table}"
+                " WHERE removed_at IS NULL AND TRIM(COALESCE(employer, '')) <> ''"
+            )
+            for value in relevance.get((row[0], row[1], row[2]), ())
+        )
     counts: dict[str, list[int]] = {}
-    for employer, value in connection.execute(
-        f"SELECT j.employer, t.value FROM {table} j"
-        " JOIN job_tags t ON t.ats = j.ats AND t.token = j.token"
-        "   AND t.job_id = j.job_id AND t.dimension = 'relevance' AND t.tagger = ?"
-        " WHERE j.removed_at IS NULL AND TRIM(COALESCE(j.employer, '')) <> ''",
-        (tagger,),
-    ):
+    for employer, value in pairs:
         bucket = counts.setdefault(employer.strip(), [0, 0, 0])
         if value in ("relevant", "less_relevant", "adjacent"):
             bucket[0] += 1
@@ -731,13 +765,18 @@ def _build(connection) -> None:
     # same reason `coverage.py` pins it: `job_tags` keeps retired versions so
     # two can be diffed, and an unpinned read sums them.
     tags: dict[tuple[str, str, str], dict[str, list[str]]] = {}
+    # Every `relevance` row, `unknown` included, which `tags` drops -- the
+    # employer profile counts undecided postings. See `employer_profiles`.
+    relevance: dict[tuple[str, str, str], list[str]] = {}
     for row in connection.execute(
         "SELECT ats, token, job_id, dimension, value FROM job_tags WHERE tagger = ?",
         (tagging.TAGGER,),
     ):
+        key = (row["ats"], row["token"], row["job_id"])
+        if row["dimension"] == "relevance":
+            relevance.setdefault(key, []).append(row["value"])
         if row["value"] in _NOTHING_KNOWN and row["dimension"] != "hub":
             continue
-        key = (row["ats"], row["token"], row["job_id"])
         tags.setdefault(key, {}).setdefault(row["dimension"], []).append(row["value"])
 
     # Measured before the loop, because it needs every board whole -- see
@@ -746,7 +785,7 @@ def _build(connection) -> None:
     # The reader's own rejections, by key and by fingerprint. Read once: the
     # fingerprint of a rejected posting costs a row lookup each and there are
     # a few hundred of them at most.
-    by_employer = employer_profiles(connection, tagging.TAGGER, "board_jobs")
+    by_employer = employer_profiles(connection, tagging.TAGGER, "board_jobs", relevance)
     # One firm per board, before anything reads `domain` -- `firm_key`, the
     # firm tile, the display name and the cross-source fold all hang off it.
     one_domain = board_domains(connection, "board_jobs")
@@ -1059,12 +1098,14 @@ def _build(connection) -> None:
     # pairwise pass over descriptions. Same `rank`, so the survivor is chosen
     # the same way.
     near = len(jobs)
+    scores = dedup.Scores(_read_scores())
     jobs = dedup.collapse_near_duplicates(
         jobs, rank=lambda card: (
             _FIT_RANK.get(card.get("fit"), 0),
             0 if card["ats"] in dedup.PORTALS else 1,
             card["posted"],
-        ))
+        ), scores=scores)
+    _write_scores(scores.used)
     folded_near = near - len(jobs)
     dedup.mark_similar(jobs, firms)
 

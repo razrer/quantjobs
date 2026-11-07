@@ -209,7 +209,36 @@ def collapse_across_sources(cards: list[dict], key: str = "xs", rank=None) -> li
     )
 
 
-def near(left: str, right: str) -> float:
+class Scores:
+    """`ratio()` results kept between builds, keyed on both texts in order.
+
+    **A cache of the exact answer, not an approximation of it.** The full
+    comparison is quadratic without autojunk and the bodies that reach it are
+    the long, nearly identical ones: 65 of them cost 57 of a build's 584
+    seconds, and they are the same pairs every week. The key hashes both texts
+    in call order, because `SequenceMatcher` is not symmetric, so a changed
+    body is a new key and is compared afresh. `used` is what the build keeps,
+    so pairs that have left the board fall out of the file.
+    """
+
+    def __init__(self, known: dict[str, float] | None = None):
+        self.known = known or {}
+        self.used: dict[str, float] = {}
+
+    def ratio(self, left: str, right: str, matcher) -> float:
+        digest = hashlib.blake2b(digest_size=16)
+        digest.update(left.encode())
+        digest.update(b"\0")
+        digest.update(right.encode())
+        key = digest.hexdigest()
+        score = self.known.get(key)
+        if score is None:
+            score = matcher.ratio()
+        self.used[key] = score
+        return score
+
+
+def near(left: str, right: str, scores: Scores | None = None) -> float:
     """SequenceMatcher similarity, with cheap upper-bound rejection below NEAR.
 
     Disable autojunk: frequent characters are meaningful in near-identical prose."""
@@ -218,11 +247,11 @@ def near(left: str, right: str) -> float:
         return 0.0
     if matcher.quick_ratio() < NEAR:
         return 0.0
-    return matcher.ratio()
+    return scores.ratio(left, right, matcher) if scores else matcher.ratio()
 
 
 def collapse_near_duplicates(cards: list[dict], key: str = "nd",
-                             rank=None) -> list[dict]:
+                             rank=None, scores: Scores | None = None) -> list[dict]:
     """Fold similar substantial bodies within the same firm, location, and title.
 
     card[key] holds g=(firm, location, folded title) and b=folded body.
@@ -235,7 +264,7 @@ def collapse_near_duplicates(cards: list[dict], key: str = "nd",
             groups.setdefault(meta["g"], []).append(card)
 
     return _collapse_groups(cards, groups, key, rank,
-                            lambda a, b: near(a["b"], b["b"]) >= NEAR)
+                            lambda a, b: near(a["b"], b["b"], scores) >= NEAR)
 
 
 def fingerprint(

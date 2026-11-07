@@ -27,3 +27,7 @@ logs/
 audit-labels.csv
 docs/history/original-methodology.md
 docs/OUTREACH-FIRMS.md
+
+# Near-duplicate scores cached between builds by `web/build_data.py`.
+web/near_scores.json
+web/near_scores.tmp

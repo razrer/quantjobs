@@ -102,6 +102,24 @@ class EmployerProfileTest(unittest.TestCase):
         connection = _database([("", "rejected", 40), ("   ", "rejected", 40)])
         self.assertEqual(build_data.employer_profiles(connection, 99), {})
 
+    def test_tags_already_read_give_the_same_profiles_as_the_join(self):
+        """The build hands over the tags it has read instead of re-seeking
+        them; the answer must not move, unknowns and blanks included."""
+        connection = _database([
+            ("AGENCY", "rejected", 40), ("BANK", "relevant", 20),
+            ("BANK", "rejected", 10), ("MAYBE", "unknown", 30), ("", "rejected", 40),
+            (" PADDED ", "rejected", 25),
+        ])
+        relevance: dict = {}
+        for ats, token, job_id, value in connection.execute(
+                "SELECT ats, token, job_id, value FROM job_tags"
+                " WHERE dimension = 'relevance' AND tagger = 99"):
+            relevance.setdefault((ats, token, job_id), []).append(value)
+        self.assertEqual(
+            build_data.employer_profiles(connection, 99, relevance=relevance),
+            build_data.employer_profiles(connection, 99))
+        self.assertTrue(build_data.employer_profiles(connection, 99))
+
 
 class TheGateNeedsTwoPiecesOfEvidenceTest(unittest.TestCase):
     """The employer profile alone never removes a posting.

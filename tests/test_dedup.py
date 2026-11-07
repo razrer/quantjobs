@@ -335,6 +335,23 @@ class CollapseNearDuplicatesTest(unittest.TestCase):
         self.assertEqual(len(out), 1)
         self.assertEqual(out[0]["dup"], 2)
 
+    def test_a_cached_score_is_the_score_itself(self):
+        """`Scores` carries `ratio()` between builds; it must answer exactly
+        what the comparison does, and a changed body must be compared afresh."""
+        left, right = BODY + " five years experience 2", BODY + " five years experience 3"
+        first = dedup.Scores()
+        self.assertEqual(dedup.near(left, right, first), dedup.near(left, right))
+        self.assertEqual(len(first.used), 1)
+        again = dedup.Scores(first.used)
+        self.assertEqual(dedup.near(left, right, again), dedup.near(left, right))
+        self.assertEqual(again.used, first.used)
+        changed = dedup.Scores(first.used)
+        dedup.near(left, right + " ", changed)
+        self.assertNotEqual(set(changed.used), set(first.used))
+        out = dedup.collapse_near_duplicates(
+            [_near(left), _near(right)], rank=_near_rank, scores=dedup.Scores(first.used))
+        self.assertEqual(len(out), 1)
+
     def test_one_extra_space_is_still_one_advertisement(self):
         """Invesco's `Senior Engineer Invest Tech` differed by exactly this."""
         out = dedup.collapse_near_duplicates(
