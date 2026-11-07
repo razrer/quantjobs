@@ -343,7 +343,7 @@ class MappingTest(unittest.TestCase):
         connection = _memory(self)
         _install(self, _FakePortal([[_row("a")]]))
         mcf.run(connection)
-        row = connection.execute("SELECT * FROM jobs").fetchone()
+        row = connection.execute(f"SELECT *, {db.body()} AS description FROM jobs").fetchone()
         self.assertEqual(
             row["employer"], "QUBE RESEARCH & TECHNOLOGIES SINGAPORE PTE. LTD."
         )
@@ -492,7 +492,7 @@ class IdempotenceTest(unittest.TestCase):
         mcf.run(connection)
         _install(self, _FakePortal([[_row("r", title="Senior Quant Researcher", description=None)]]))
         mcf.run(connection)
-        row = connection.execute("SELECT title, description FROM jobs").fetchone()
+        row = connection.execute(f"SELECT title, {db.body()} AS description FROM jobs").fetchone()
         self.assertEqual(row["title"], "Senior Quant Researcher")
         self.assertIsNotNone(row["description"], "a silent gap blanked a body we held")
 

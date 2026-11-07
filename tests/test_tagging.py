@@ -2060,11 +2060,13 @@ class LeadershipContainmentTest(unittest.TestCase):
         connection.row_factory = sqlite3.Row
         connection.executescript(db.SCHEMA)
         connection.executemany(
-            "INSERT INTO jobs (ats, token, job_id, title, description, location,"
-            " first_seen, last_seen) VALUES (?, ?, ?, ?, '', 'Stockholm', 't', 't')",
+            "INSERT INTO jobs (ats, token, job_id, title, location,"
+            " first_seen, last_seen) VALUES (?, ?, ?, ?, 'Stockholm', 't', 't')",
             [("gh", "f", "1", "Head of Quantitative Research"),
              ("gh", "f", "2", "Quantitative Researcher")],
         )
+        for job_id in ("1", "2"):
+            db.put_body(connection, "gh", "f", job_id, "")
         connection.commit()
         return connection
 
@@ -3199,10 +3201,12 @@ class ParallelTaggingAgreesTest(unittest.TestCase):
         titles = [row["title"] for row in self.ROWS]
         for n in range(23):
             connection.execute(
-                "INSERT INTO jobs (ats, token, job_id, title, description, location,"
-                " first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?, 'x', 'x')",
+                "INSERT INTO jobs (ats, token, job_id, title, location,"
+                " first_seen, last_seen) VALUES (?, ?, ?, ?, ?, 'x', 'x')",
                 ("greenhouse", f"firm{n % 4}", f"{n:03d}", titles[n % len(titles)],
-                 self.ROWS[n % len(self.ROWS)]["description"], "Stockholm, Sweden"))
+                 "Stockholm, Sweden"))
+            db.put_body(connection, "greenhouse", f"firm{n % 4}", f"{n:03d}",
+                        self.ROWS[n % len(self.ROWS)]["description"])
         connection.commit()
         return connection
 

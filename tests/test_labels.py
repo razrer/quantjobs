@@ -108,11 +108,12 @@ class FrameTest(unittest.TestCase):
 
     def _store(self, job_id, title, description="", url="https://example.test/1"):
         self.connection.execute(
-            "INSERT INTO jobs (ats, token, job_id, title, location, description,"
+            "INSERT INTO jobs (ats, token, job_id, title, location,"
             " url, first_seen, last_seen) VALUES ('greenhouse', 'firm', ?, ?,"
-            " 'Amsterdam', ?, ?, '2026-01-01', '2026-01-01')",
-            (job_id, title, description, url),
+            " 'Amsterdam', ?, '2026-01-01', '2026-01-01')",
+            (job_id, title, url),
         )
+        db.put_body(self.connection, "greenhouse", "firm", job_id, description)
         row = dict(
             ats="greenhouse", token="firm", job_id=job_id, title=title,
             location="Amsterdam", description=description, department=None,
@@ -198,12 +199,13 @@ class FileTest(unittest.TestCase):
 
     def _store(self, job_id, title, description="", token="firm"):
         self.connection.execute(
-            "INSERT INTO jobs (ats, token, job_id, title, location, description,"
+            "INSERT INTO jobs (ats, token, job_id, title, location,"
             " url, first_seen, last_seen) VALUES ('greenhouse', ?, ?, ?,"
-            " 'Amsterdam', ?, ?, '2026-01-01', '2026-01-01')",
-            (token, job_id, title, description,
+            " 'Amsterdam', ?, '2026-01-01', '2026-01-01')",
+            (token, job_id, title,
              f"https://example.test/{token}/{job_id}"),
         )
+        db.put_body(self.connection, "greenhouse", token, job_id, description)
         row = dict(
             ats="greenhouse", token=token, job_id=job_id, title=title,
             location="Amsterdam", description=description, department=None,

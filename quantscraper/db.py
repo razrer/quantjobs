@@ -51,7 +51,6 @@ CREATE TABLE IF NOT EXISTS jobs (
     department   TEXT,
     posted_at    TEXT,
     deadline     TEXT,            -- closing date, only where the source states one
-    description  TEXT,
     removed_at   TEXT,            -- withdrawn by the employer; never deleted
     first_seen   TEXT NOT NULL,
     last_seen    TEXT NOT NULL,
@@ -59,6 +58,26 @@ CREATE TABLE IF NOT EXISTS jobs (
 );
 
 CREATE INDEX IF NOT EXISTS jobs_by_domain ON jobs (domain);
+
+-- **A posting's body, in a table of its own.** Bodies are 2.3 GB of 2.6 and
+-- were inline in `jobs`, so every scan of a posting's metadata read them and
+-- every weekly poll that moved `last_seen` rewrote them: SQLite rewrites the
+-- whole row on an update. A row here exists only once a body has arrived, and
+-- `''` is kept as the source sent it, so "no body" is still exactly
+-- `description IS NULL OR description = ''` read through `body()`.
+CREATE TABLE IF NOT EXISTS job_bodies (
+    ats          TEXT NOT NULL,
+    token        TEXT NOT NULL,
+    job_id       TEXT NOT NULL,
+    description  TEXT NOT NULL,
+    PRIMARY KEY (ats, token, job_id)
+);
+
+-- "Has this posting a body?" without reading it -- see `has_body`. The body
+-- queue and the coverage counts ask it of every posting, and reading 2.3 GB to
+-- answer it cost 77 seconds a pass.
+CREATE INDEX IF NOT EXISTS job_bodies_filled
+    ON job_bodies (ats, token, job_id) WHERE description <> '';
 
 -- Everything `tagging.quant_boards` reads, so it scans this instead of the
 -- table. Bodies are 2.3 GB of `jobs` and inline, so a titles-only scan of the
@@ -173,7 +192,72 @@ _ADDED_COLUMNS = (
 )
 
 
+def body(alias: str = "jobs") -> str:
+    """SQL for the body of the posting `alias` names: text, `''`, or NULL.
+
+    Every reader that used `jobs.description` reads this instead, so the value
+    it sees is the one the column held."""
+    return (
+        f"(SELECT b.description FROM job_bodies b WHERE b.ats = {alias}.ats"
+        f" AND b.token = {alias}.token AND b.job_id = {alias}.job_id)"
+    )
+
+
+def has_body(alias: str = "jobs") -> str:
+    """SQL that is true where the posting holds a non-empty body.
+
+    The same test as `COALESCE(body, '') <> ''`, answered from
+    `job_bodies_filled` without reading the text."""
+    return (
+        # Named, because the planner otherwise takes the primary key -- the same
+        # three columns -- and then reads the row to test the body.
+        f"EXISTS (SELECT 1 FROM job_bodies b INDEXED BY job_bodies_filled"
+        f" WHERE b.ats = {alias}.ats"
+        f" AND b.token = {alias}.token AND b.job_id = {alias}.job_id"
+        " AND b.description <> '')"
+    )
+
+
+def put_body(connection: sqlite3.Connection, ats: str, token: str, job_id: str,
+             description: str | None) -> None:
+    """Store one posting's body, or nothing if it has none -- a NULL column."""
+    if description is not None:
+        connection.execute(
+            "INSERT INTO job_bodies (ats, token, job_id, description) VALUES (?, ?, ?, ?)"
+            " ON CONFLICT (ats, token, job_id) DO UPDATE SET description = excluded.description",
+            (ats, token, job_id, description),
+        )
+
+
+def _move_bodies(connection: sqlite3.Connection) -> None:
+    """Move `jobs.description` into `job_bodies`, once, in one transaction.
+
+    The trigger goes first because SQLite will not drop a column a trigger
+    names; `_install_tag_invalidation` puts back both halves of it afterwards.
+    """
+    columns = {row["name"] for row in connection.execute("PRAGMA table_info(jobs)")}
+    if "description" not in columns:
+        return
+    connection.commit()
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        # Moving a body is not a new body: no tag may be invalidated by it.
+        connection.execute("DROP TRIGGER IF EXISTS job_bodies_invalidate_tags_insert")
+        connection.execute(
+            "INSERT OR REPLACE INTO job_bodies (ats, token, job_id, description)"
+            " SELECT ats, token, job_id, description FROM jobs"
+            " WHERE description IS NOT NULL ORDER BY ats, token, job_id"
+        )
+        connection.execute("DROP TRIGGER IF EXISTS jobs_invalidate_tags")
+        connection.execute("ALTER TABLE jobs DROP COLUMN description")
+        connection.commit()
+    except BaseException:
+        connection.rollback()
+        raise
+
+
 def _migrate(connection: sqlite3.Connection) -> None:
+    _move_bodies(connection)
     for table, column, kind in _ADDED_COLUMNS:
         existing = {
             row["name"] for row in connection.execute(f"PRAGMA table_info({table})")
@@ -199,15 +283,33 @@ def _install_tag_invalidation(connection: sqlite3.Connection) -> None:
         return
     connection.execute("""
         CREATE TRIGGER IF NOT EXISTS jobs_invalidate_tags
-        AFTER UPDATE OF title, department, description, location, employer, category, domain
+        AFTER UPDATE OF title, department, location, employer, category, domain
         ON jobs
         WHEN OLD.title IS NOT NEW.title
           OR OLD.department IS NOT NEW.department
-          OR OLD.description IS NOT NEW.description
           OR OLD.location IS NOT NEW.location
           OR OLD.employer IS NOT NEW.employer
           OR OLD.category IS NOT NEW.category
           OR OLD.domain IS NOT NEW.domain
+        BEGIN
+            DELETE FROM job_tags
+            WHERE ats=NEW.ats AND token=NEW.token AND job_id=NEW.job_id;
+        END
+    """)
+    # The body half of the same rule. A first body is a change from NULL, as it
+    # was when the body lived in `jobs`; a rewrite with the same text is not.
+    connection.execute("""
+        CREATE TRIGGER IF NOT EXISTS job_bodies_invalidate_tags_insert
+        AFTER INSERT ON job_bodies
+        BEGIN
+            DELETE FROM job_tags
+            WHERE ats=NEW.ats AND token=NEW.token AND job_id=NEW.job_id;
+        END
+    """)
+    connection.execute("""
+        CREATE TRIGGER IF NOT EXISTS job_bodies_invalidate_tags_update
+        AFTER UPDATE OF description ON job_bodies
+        WHEN OLD.description IS NOT NEW.description
         BEGIN
             DELETE FROM job_tags
             WHERE ats=NEW.ats AND token=NEW.token AND job_id=NEW.job_id;
@@ -269,6 +371,7 @@ def upsert_jobs(
     connection.create_function("prefer_resolved_location", 2, prefer_resolved_location)
     _install_tag_invalidation(connection)
     timestamp = now()
+    jobs = list(jobs)
     rows = [
         (
             job.ats,
@@ -283,19 +386,25 @@ def upsert_jobs(
             job.department,
             job.posted_at,
             job.deadline,
-            job.description,
             timestamp,
             timestamp,
         )
         for job in jobs
+    ]
+    # `COALESCE(new, old)` as it was on the column: a body that arrives wins, a
+    # source that sent none leaves the stored one alone -- so only the postings
+    # that brought one are written.
+    bodies = [
+        (job.ats, job.token, job.job_id, job.description)
+        for job in jobs if job.description is not None
     ]
     with connection:
         connection.executemany(
             """
             INSERT INTO jobs (ats, token, job_id, domain, employer, category,
                               title, url, location, department, posted_at,
-                              deadline, description, first_seen, last_seen)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                              deadline, first_seen, last_seen)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (ats, token, job_id) DO UPDATE SET
                 employer    = COALESCE(excluded.employer, jobs.employer),
                 category    = COALESCE(excluded.category, jobs.category),
@@ -310,10 +419,14 @@ def upsert_jobs(
                 -- value wins; a source that simply stopped publishing one must
                 -- not silently erase a date we already showed, so NULL loses.
                 deadline    = COALESCE(excluded.deadline, jobs.deadline),
-                description = COALESCE(excluded.description, jobs.description),
                 last_seen   = excluded.last_seen
             """,
             rows,
+        )
+        connection.executemany(
+            "INSERT INTO job_bodies (ats, token, job_id, description) VALUES (?, ?, ?, ?)"
+            " ON CONFLICT (ats, token, job_id) DO UPDATE SET description = excluded.description",
+            bodies,
         )
     return len(rows)
 

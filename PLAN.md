@@ -543,7 +543,29 @@ changes. Every change below was checked against the output it replaces.
   get at titles: 54 s → 11.7 s at the top of every `tag`, same 112 boards. It holds
   no column a poll rewrites, so source reads pay nothing for it. Built in 61 s on
   first connect, inside the space the rebuild freed.
-- Open: bodies live inline in `jobs` (2.3 GB), so other metadata scans still read
-  them, about 30 s each. The board build's copy is the largest. Covering it means
-  indexing `last_seen`, which every poll rewrites, for about 30 s a build.
+- Bodies inline in `jobs` closed by Stage 68.
   `tag`'s summary tables take about 1.5 min a run.
+
+## Stage 68 — bodies in their own table, and the database compacted
+
+Requested: the next structural change, and a check that the database is not keeping
+junk.
+
+- Space audit: 15.8 GB file, of which 5.2 GB free pages left by Stage 67's rebuild.
+  SQLite reuses them, so the file stays bounded, but nothing returned them. Stale
+  tags from older versions are 31,000 rows. Logs 77 MB, rotated. No other junk.
+- `jobs.description` moved to `job_bodies`, one row per posting that has a body, `''`
+  kept as sent. `db.body()` reads it for every former reader; `db.has_body()` answers
+  "non-empty body?" from the partial index `job_bodies_filled`. Writes keep
+  `COALESCE(new, old)`: a body that arrives wins, none leaves the stored one.
+- Tag invalidation moved with it: a first or changed body deletes the posting's tags,
+  the same body again does not. The `jobs` trigger keeps the other six fields.
+- `_move_bodies` migrates on connect in one transaction, without invalidating tags.
+  Checked on the real database against the previous code: all 1,367,400 postings
+  identical in every field and body, the body queue (2,525), body coverage, a
+  34,185-row sample of what `tag` reads, and the board.
+- `VACUUM` afterwards: 15.8 → 10.0 GB.
+- Measured against a compacted copy of the old layout: metadata scan 12.3 → 4.6 s,
+  a poll's `last_seen` update 5.0 → 1.6 s per 100,000 postings, body coverage 96
+  → 23.5 s, body queue 25 → 13 s, board build 149 → 91 s, a `tag` with nothing to do
+  162 → 20 s.

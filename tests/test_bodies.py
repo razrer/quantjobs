@@ -53,11 +53,12 @@ class SecondQueueTest(unittest.TestCase):
 
     def _placeholder(self, connection, job_id, location, *, relevance, body=None):
         connection.execute(
-            "INSERT INTO jobs (ats, token, job_id, title, location, description,"
+            "INSERT INTO jobs (ats, token, job_id, title, location,"
             " url, first_seen, last_seen) VALUES ('workday', 'acme|wd3|X', ?,"
-            " 'Analyst', ?, ?, NULL, '2026-08-20', '2026-08-20')",
-            (job_id, location, body),
+            " 'Analyst', ?, NULL, '2026-08-20', '2026-08-20')",
+            (job_id, location),
         )
+        db.put_body(connection, "workday", "acme|wd3|X", job_id, body)
         connection.execute(
             "INSERT INTO job_tags (ats, token, job_id, dimension, value,"
             " confidence, tagger, tagged_at) VALUES ('workday', 'acme|wd3|X', ?,"
@@ -331,17 +332,18 @@ class WritesEveryPartTest(unittest.TestCase):
         connection = db.connect(":memory:")
         connection.executescript(tagging.SCHEMA)
         connection.execute(
-            "INSERT INTO jobs (ats, token, job_id, title, location, description,"
+            "INSERT INTO jobs (ats, token, job_id, title, location,"
             " first_seen, last_seen) VALUES"
-            " ('workday', 'acme|wd3|X', '/1', 'Analyst', '2 Locations', 'held',"
+            " ('workday', 'acme|wd3|X', '/1', 'Analyst', '2 Locations',"
             "  '2026-01-01', '2026-01-01')")
+        db.put_body(connection, "workday", "acme|wd3|X", "/1", "held")
         return connection
 
     def test_a_location_alone_does_not_blank_the_body(self):
         connection = self._connection()
         bodies._write(connection, [(None, "Boston, MA", None, "workday", "acme|wd3|X", "/1")])
         row = connection.execute(
-            "SELECT description, location FROM jobs").fetchone()
+            f"SELECT {db.body()} AS description, location FROM jobs").fetchone()
         self.assertEqual(row["description"], "held")
         self.assertEqual(row["location"], "Boston, MA")
 
@@ -349,7 +351,7 @@ class WritesEveryPartTest(unittest.TestCase):
         connection = self._connection()
         bodies._write(connection, [("new text", None, None, "workday", "acme|wd3|X", "/1")])
         row = connection.execute(
-            "SELECT description, location FROM jobs").fetchone()
+            f"SELECT {db.body()} AS description, location FROM jobs").fetchone()
         self.assertEqual(row["description"], "new text")
         self.assertEqual(row["location"], "2 Locations")
 
@@ -373,7 +375,7 @@ class RetiresStaleVerdictTest(unittest.TestCase):
         bodies._write(connection, [("a description", None, None, "jobbsafari", "sweden", "1")])
         self.assertEqual(
             connection.execute(
-                "SELECT description FROM jobs WHERE job_id = '1'"
+                f"SELECT {db.body()} AS description FROM jobs WHERE job_id = '1'"
             ).fetchone()["description"],
             "a description",
         )
@@ -868,7 +870,7 @@ class RunMergesBothQueuesTest(unittest.TestCase):
         self.assertIn("harvested", routes)
         stored = dict(
             connection.execute(
-                "SELECT job_id, description FROM jobs ORDER BY job_id"
+                f"SELECT job_id, {db.body()} AS description FROM jobs ORDER BY job_id"
             ).fetchall()
         )
         self.assertEqual(stored["HK1"], "hk body")
@@ -900,7 +902,7 @@ class RunMergesBothQueuesTest(unittest.TestCase):
         # The Hong Kong row it did reach was still committed before the raise.
         self.assertEqual(
             connection.execute(
-                "SELECT description FROM jobs WHERE job_id = 'HK1'"
+                f"SELECT {db.body()} AS description FROM jobs WHERE job_id = 'HK1'"
             ).fetchone()[0],
             "hk body",
         )
@@ -929,13 +931,15 @@ class HongKongQueueIsInvertedTest(unittest.TestCase):
     def _connection(self, rows):
         connection = _memory(self)
         connection.executemany(
-            "INSERT INTO jobs (ats, token, job_id, title, description, employer,"
+            "INSERT INTO jobs (ats, token, job_id, title, employer,"
             " location, category, first_seen, last_seen)"
-            " VALUES (?, ?, ?, ?, ?, ?, 'Kwai Hing', 'Others',"
+            " VALUES (?, ?, ?, ?, ?, 'Kwai Hing', 'Others',"
             " '2026-09-01', '2026-09-01')",
-            [(ats, ats, job_id, "Some Title", body, employer)
+            [(ats, ats, job_id, "Some Title", employer)
              for ats, job_id, body, employer in rows],
         )
+        for ats, job_id, body, _ in rows:
+            db.put_body(connection, ats, ats, job_id, body)
         connection.executemany(
             "INSERT INTO job_tags (ats, token, job_id, dimension, value,"
             " confidence, evidence, tagger, tagged_at)"

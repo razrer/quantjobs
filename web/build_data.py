@@ -50,6 +50,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from quantscraper import (  # noqa: E402
     ats as ats_mod,
+    db,
     dedup,
     extract,
     files,
@@ -325,7 +326,7 @@ def _fingerprints(connection, keys, one_domain) -> set[str]:
     prints: set[str] = set()
     for ats, token, job_id in keys:
         row = connection.execute(
-            "SELECT domain, employer, title, location, description FROM jobs"
+            f"SELECT domain, employer, title, location, {db.body()} AS description FROM jobs"
             " WHERE ats = ? AND token = ? AND job_id = ?", (ats, token, job_id),
         ).fetchone()
         if row is None:
@@ -956,10 +957,11 @@ def _build(connection) -> None:
         # Read large descriptions only for candidates that need a fingerprint
         # or a card. All preceding decisions use stored tags and metadata.
         row = dict(row)
-        row["description"] = connection.execute(
-            "SELECT description FROM jobs WHERE ats=? AND token=? AND job_id=?",
+        held = connection.execute(
+            "SELECT description FROM job_bodies WHERE ats=? AND token=? AND job_id=?",
             (row["ats"], row["token"], row["job_id"]),
-        ).fetchone()[0]
+        ).fetchone()
+        row["description"] = held[0] if held else None
         domain = one_domain.get((row["ats"], row["token"]), row["domain"])
         key = firm_key(domain, row["employer"])
 

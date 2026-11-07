@@ -3776,7 +3776,8 @@ def load_quant_boards(connection: sqlite3.Connection) -> frozenset[tuple[str, st
 _PAGE = 20_000
 """Untagged postings read per page."""
 
-_COLUMNS = "ats, token, job_id, title, location, department, category, description"
+_COLUMNS = ("ats, token, job_id, title, location, department, category, "
+            f"{db.body()} AS description")
 
 
 def _pending_keys(connection: sqlite3.Connection, limit: int) -> list[tuple[str, str, str]]:

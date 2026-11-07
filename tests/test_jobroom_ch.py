@@ -314,7 +314,7 @@ class WriteTest(unittest.TestCase):
         with mock.patch.object(jobroom_ch, "walk", return_value=([_ad("a")], 1, 1)):
             jobroom_ch.run(connection, days=1)
 
-        row = connection.execute("SELECT * FROM jobs").fetchone()
+        row = connection.execute(f"SELECT *, {db.body()} AS description FROM jobs").fetchone()
         self.assertEqual(row["ats"], "jobroom")
         self.assertEqual(row["title"], "Quantitative Analystin a")
         self.assertEqual(row["location"], "Zurich, ZH")

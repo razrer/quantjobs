@@ -477,7 +477,7 @@ def _sweden(database: str, pages: int | None) -> int:
     if not swept.partial:
         print(f"  the board advertised {swept.advertised:,d}")
     _held(connection, jobbsafari.NAME, "Swedish ads",
-          with_a_description="SUM(description IS NOT NULL AND description != '')")
+          with_a_description=f"SUM({db.has_body()})")
     return _shortfall(swept)
 
 

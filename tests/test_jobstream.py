@@ -69,7 +69,7 @@ class WithdrawnAdTest(unittest.TestCase):
             ],
         )
 
-        row = connection.execute("SELECT * FROM jobs").fetchone()
+        row = connection.execute(f"SELECT *, {db.body()} AS description FROM jobs").fetchone()
         self.assertEqual(row["removed_at"], "2026-08-13T09:00:00")
         self.assertEqual(
             row["title"],
@@ -124,7 +124,7 @@ class MappingTest(unittest.TestCase):
     def test_location_and_employer_domain(self):
         connection = _memory(self)
         jobstream.apply(connection, [_ad("77")])
-        row = connection.execute("SELECT * FROM jobs").fetchone()
+        row = connection.execute(f"SELECT *, {db.body()} AS description FROM jobs").fetchone()
         self.assertEqual(row["location"], "Stockholm, Stockholms län")
         self.assertEqual(row["domain"], "lynxhedge.se", "employer URL is the bridge to firms")
         self.assertEqual(row["ats"], "jobtech")

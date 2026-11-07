@@ -931,7 +931,7 @@ def targets(connection: sqlite3.Connection, limit: int) -> list[sqlite3.Row]:
               -- lexicon reads. See the third arm.
               AND j.ats <> 'iesjobs'
               AND j.removed_at IS NULL
-              AND (j.description IS NULL OR j.description = '')
+              AND NOT {db.has_body('j')}
               AND r.value = 'unknown'
               -- Not already gated off the board for being somewhere else or
               -- something else. Those are 50,000 postings and none of them
@@ -1000,7 +1000,7 @@ def targets(connection: sqlite3.Connection, limit: int) -> list[sqlite3.Row]:
             {_UNGATED}
             WHERE j.ats = 'iesjobs'
               AND j.removed_at IS NULL
-              AND (j.description IS NULL OR j.description = ''
+              AND (NOT {db.has_body('j')}
                    OR j.employer IS NULL OR TRIM(j.employer) = '')
               AND r.value IN ('relevant', 'less_relevant', 'adjacent')
               AND x.value IS NULL
@@ -1215,11 +1215,19 @@ def _write(connection: sqlite3.Connection, batch) -> None:
         # not blank a body it already had, and a walk that re-lists the posting
         # tomorrow must not blank the employer this pass just learned.
         connection.executemany(
-            "UPDATE jobs SET description = COALESCE(?, description),"
-            "                location = COALESCE(?, location),"
+            "UPDATE jobs SET location = COALESCE(?, location),"
             "                employer = COALESCE(?, employer)"
             " WHERE ats = ? AND token = ? AND job_id = ?",
-            batch,
+            [row[1:] for row in batch],
+        )
+        # The body, where one came back, and only for a posting `jobs` holds --
+        # the `UPDATE` above touched nothing else either.
+        connection.executemany(
+            "INSERT INTO job_bodies (ats, token, job_id, description)"
+            " SELECT ats, token, job_id, ? FROM jobs"
+            " WHERE ats = ? AND token = ? AND job_id = ?"
+            " ON CONFLICT (ats, token, job_id) DO UPDATE SET description = excluded.description",
+            [row[:1] + row[3:] for row in batch if row[0] is not None],
         )
         connection.executemany(
             "DELETE FROM job_tags"
@@ -1238,10 +1246,10 @@ def coverage(connection: sqlite3.Connection):
     row is still the tell for every *other* source.
     """
     return connection.execute(
-        """
+        f"""
         SELECT ats,
                COUNT(*) AS postings,
-               SUM(description IS NOT NULL AND description != '') AS with_body
+               SUM({db.has_body()}) AS with_body
         FROM jobs
         WHERE removed_at IS NULL
         GROUP BY ats

@@ -592,10 +592,11 @@ class EmployerWriteTest(unittest.TestCase):
         # tag table as well as `jobs`.
         connection.executescript(tagging.SCHEMA)
         connection.execute(
-            "INSERT INTO jobs (ats, token, job_id, title, location, description,"
+            "INSERT INTO jobs (ats, token, job_id, title, location,"
             " employer, first_seen, last_seen) VALUES"
             " ('iesjobs', 'hongkong', '1', 'Analyst', 'Hong Kong, Mong Kok',"
-            "  'held', 'HELD LTD', '2026-01-01', '2026-01-01')")
+            "  'HELD LTD', '2026-01-01', '2026-01-01')")
+        db.put_body(connection, "iesjobs", "hongkong", "1", "held")
         connection.commit()
         return connection
 
@@ -603,7 +604,7 @@ class EmployerWriteTest(unittest.TestCase):
         connection = self._connection()
         bodies._write(connection, [(None, None, "NEW LTD", "iesjobs", "hongkong", "1")])
         row = connection.execute(
-            "SELECT description, location, employer FROM jobs").fetchone()
+            f"SELECT {db.body()} AS description, location, employer FROM jobs").fetchone()
         self.assertEqual(row["description"], "held")
         self.assertEqual(row["location"], "Hong Kong, Mong Kok")
         self.assertEqual(row["employer"], "NEW LTD")
@@ -611,7 +612,7 @@ class EmployerWriteTest(unittest.TestCase):
     def test_a_body_alone_does_not_blank_the_employer(self):
         connection = self._connection()
         bodies._write(connection, [("new text", None, None, "iesjobs", "hongkong", "1")])
-        row = connection.execute("SELECT description, employer FROM jobs").fetchone()
+        row = connection.execute(f"SELECT {db.body()} AS description, employer FROM jobs").fetchone()
         self.assertEqual(row["description"], "new text")
         self.assertEqual(row["employer"], "HELD LTD")
 

@@ -19,7 +19,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import files, lexicon, tagging
+from . import db, files, lexicon, tagging
 
 PATH = Path(__file__).with_name("labels.csv")
 AUTO_PATH = Path(__file__).with_name("auto_labels.csv")
@@ -209,9 +209,10 @@ def _candidates(connection: sqlite3.Connection) -> list[dict]:
     - **plausibly in scope** -- see `CONTESTABLE`.
     """
     rows = connection.execute(
-        """
-        SELECT j.ats, j.token, j.job_id, j.title, j.department, j.description,
-               length(j.description) > 200 AS has_body,
+        f"""
+        SELECT j.ats, j.token, j.job_id, j.title, j.department,
+               {db.body('j')} AS description,
+               length({db.body('j')}) > 200 AS has_body,
                (SELECT group_concat(value) FROM job_tags x
                  WHERE x.ats = j.ats AND x.token = j.token AND x.job_id = j.job_id
                    AND x.dimension = 'exclusion_reason' AND x.tagger = ?) AS excluded,
@@ -410,7 +411,7 @@ def _draw_sheet(connection, drawn, path):
     rows = [list(HEADER)]
     for key in ordered:
         row = connection.execute(
-            "SELECT title, department, location, url, description, domain"
+            f"SELECT title, department, location, url, {db.body()} AS description, domain"
             " FROM jobs WHERE ats = ? AND token = ? AND job_id = ?", key,
         ).fetchone()
         if row is None:
@@ -730,7 +731,8 @@ def containment(connection, labels: list[Label], gates, tag_posting):
         if not label.seniority:
             continue
         row = connection.execute(
-            "SELECT * FROM jobs WHERE ats = ? AND token = ? AND job_id = ?",
+            f"SELECT *, {db.body()} AS description FROM jobs"
+            " WHERE ats = ? AND token = ? AND job_id = ?",
             (label.ats, label.token, label.job_id),
         ).fetchone()
         if row is None:
