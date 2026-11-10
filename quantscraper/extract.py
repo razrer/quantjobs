@@ -2270,6 +2270,13 @@ def _site(token: str) -> list[Job]:
     return sites.read(token)
 
 
+def _jsonld(token: str) -> list[Job]:
+    """A tier-B careers page promoted by `structured.py`. Imported late, likewise."""
+    from . import structured
+
+    return structured.read(token)
+
+
 # Radancy's TalentBrew results fragment. The card markup is the customer's own
 # template, so only the `/job/` link and its id are relied on, and the fields
 # inside each card are looked up separately. Bounded like every pattern here.
@@ -2805,6 +2812,9 @@ EXTRACTORS: dict[str, Callable[[str], list[Job]]] = {
     # entry here, dispatched by token -- see `sites.py` for why the list is
     # deliberately short.
     "site": _site,
+    # Layer 3B, read: schema.org `JobPosting` on a careers page or the pages
+    # its sitemap lists. Token is the careers URL. See `structured.py`.
+    "jsonld": _jsonld,
 }
 
 
