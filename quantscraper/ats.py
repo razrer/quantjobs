@@ -902,15 +902,23 @@ def resolve_domain(domain: str) -> Resolution:
 
 
 def targets(connection: sqlite3.Connection, limit: int) -> list[str]:
-    """Domains with no tier yet, most-corroborated firm first."""
+    """Domains with no tier yet, most-corroborated firm first.
+
+    A domain cached under a name that is no firm's -- a roster spelling, which
+    `discover.resolve_roster_domains` writes -- comes first rather than not at
+    all. An inner join on `firms` left those untiered for good, so a corrected
+    roster domain was never walked.
+    """
     rows = connection.execute(
         """
-        SELECT DISTINCT d.domain
+        SELECT d.domain
         FROM domain_lookups d
-        JOIN firms f ON f.name = d.query
+        LEFT JOIN firms f ON f.name = d.query
         LEFT JOIN ats_resolution a ON a.domain = d.domain
         WHERE d.domain IS NOT NULL AND a.domain IS NULL
-        ORDER BY f.source_count DESC, f.row_count DESC
+        GROUP BY d.domain
+        ORDER BY MAX(f.firm_id IS NULL) DESC,
+                 MAX(f.source_count) DESC, MAX(f.row_count) DESC
         LIMIT ?
         """,
         (limit,),

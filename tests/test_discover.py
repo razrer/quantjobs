@@ -12,6 +12,7 @@ Run with: python -m unittest discover -s tests
 
 from __future__ import annotations
 
+import sqlite3
 import unittest
 from unittest import mock
 
@@ -492,3 +493,49 @@ class OneWordFirmNameTest(unittest.TestCase):
         self.assertIsNotNone(
             discover.corroborate("old mission capital", jobs, None)
         )
+
+
+class RosterWeakMatchTest(unittest.TestCase):
+    """A weak row is taken for a roster line only if it names that firm.
+
+    "SEK" matched the share class *Class C-sek h*, whose weak row says
+    `class-c.com` names "class"; Morgan Stanley's branch weakly matched
+    `morgan.se` on "morgan". Coeli's weak `coeli.com` names "coeli", and is
+    the only domain its live board has.
+    """
+
+    def test_the_matched_phrase_must_cover_the_spelling(self):
+        from quantscraper.discover import names_entry
+
+        self.assertTrue(names_entry("https://coeli.com/ names 'coeli'", ("Coeli",)))
+        self.assertTrue(names_entry(
+            "https://www.marginalen.se/ names 'marginalen'", ("Marginalen Bank",)))
+        self.assertTrue(names_entry(
+            "https://gsa-coral.com/ names 'gsa coral', but no sca", ("GSA",)))
+        self.assertFalse(names_entry(
+            "https://www.class-c.com/ names 'class'", ("Svensk Exportkredit", "SEK")))
+        self.assertFalse(names_entry("https://morgan.se/ names 'morgan'", ("Morgan Stanley",)))
+        self.assertFalse(names_entry(None, ("Coeli",)))
+
+    def test_domain_for_skips_a_weak_row_that_names_another_firm(self):
+        from types import SimpleNamespace
+
+        from quantscraper import discover, domains
+
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        connection.executescript(domains.SCHEMA)
+        connection.executemany(
+            "INSERT INTO domain_lookups VALUES (?, ?, 'name-weak', ?, 'then')",
+            [("Class C-sek h", "class-c.com", "https://www.class-c.com/ names 'class'"),
+             ("Coeli European AB", "coeli.com", "https://coeli.com/ names 'coeli'")],
+        )
+
+        def result(name, aliases, firm):
+            entry = SimpleNamespace(name=name, candidates=(name, *aliases))
+            return SimpleNamespace(entry=entry, firms={"f": firm})
+
+        self.assertIsNone(discover._domain_for(
+            connection, result("Svensk Exportkredit", ("SEK",), "Class C-sek h")))
+        self.assertEqual(discover._domain_for(
+            connection, result("Coeli", (), "Coeli European AB")), "coeli.com")

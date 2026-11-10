@@ -72,6 +72,15 @@ _PLATFORM_DOMAINS = {
     "facebook.com", "instagram.com", "linkedin.com", "medium.com",
     "spotify.com", "tiktok.com", "twitter.com", "vimeo.com", "x.com",
     "youtube.com",
+    # Link-in-bio and site-builder hosts: the subdomain or path is somebody's
+    # page, the registrable host is everybody's. `eastasiachristmas.wixsite.com`
+    # was accepted as the Bank of East Asia's domain.
+    "linktr.ee", "linkin.bio", "sites.google.com", "wixsite.com",
+    # Misspelt social hosts, as Form ADV filers typed them, each with a profile
+    # path behind it. `instragram.com/ubstrending/` was UBS Financial Services'
+    # registry website, and so the domain UBS's roster line resolved to.
+    "instragram.com", "linedin.com", "lindedin.com", "llinkedin.com",
+    "linked.com", "linked.in",
 }
 
 
@@ -207,16 +216,10 @@ def non_identifying_domains(rows: list[sqlite3.Row]) -> set[str]:
         if domain:
             names_by_domain.setdefault(domain, set()).add(normalize_name(row["name"]))
 
-    def is_platform(domain: str) -> bool:
-        return any(
-            domain == known or domain.endswith(f".{known}")
-            for known in _PLATFORM_DOMAINS
-        )
-
     return {
         domain
         for domain, names in names_by_domain.items()
-        if is_platform(domain) or len(names) > _MAX_FIRMS_PER_DOMAIN
+        if is_platform_domain(domain) or len(names) > _MAX_FIRMS_PER_DOMAIN
     }
 
 

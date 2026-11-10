@@ -49,6 +49,7 @@ just guessed.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor
@@ -62,6 +63,7 @@ from . import ats, db, extract, http
 # out of several proves nothing. A second copy of either would drift, and the
 # whole failure mode here is two sides of a comparison drifting apart.
 from .domains import _labels, _needles, _token_sets, fold_text
+from . import domains
 from .models import Job
 from .resolve import is_platform_domain, normalize_name
 
@@ -572,20 +574,119 @@ def _domain_for(connection: sqlite3.Connection, result) -> str | None:
     left a live eight-posting board with no domain to attach itself to. The
     fuzziness is tolerable precisely because `record` refuses to overwrite a
     working board with it.
+
+    **A weak row must name the roster's firm, not just the registry's.** The
+    weak grade was earned against a registry name the audit matched fuzzily,
+    so it can prove nothing about the firm the roster means. "SEK" matched the
+    fund share class *Class C-sek h*, whose page names "class"; Morgan Stanley's
+    Stockholm branch weakly matched `morgan.se`. A weak row is taken only when
+    the words it matched cover every distinctive word of a roster spelling --
+    `coeli.com` names "coeli", which is the whole of "Coeli".
     """
     sources = (result.entry.candidates, tuple(result.firms.values()))
     for weak_allowed in (False, True):
         for source in sources:
             for name in source:
                 row = connection.execute(
-                    "SELECT domain FROM domain_lookups"
+                    "SELECT domain, evidence FROM domain_lookups"
                     " WHERE query = ? AND domain IS NOT NULL"
-                    + ("" if weak_allowed else " AND method NOT LIKE '%weak%'"),
+                    + (
+                        # A roster spelling's own weak guess is never taken:
+                        # "Trivest Advisors" weakly found `trivest.com`, a US
+                        # private-equity firm, and "Legal & General" `legal.com`.
+                        " AND method <> 'roster-weak'"
+                        if weak_allowed
+                        else " AND method NOT LIKE '%weak%'"
+                    ),
                     (name,),
                 ).fetchone()
-                if row and not is_platform_domain(row["domain"]):
-                    return row["domain"]
+                if not row or is_platform_domain(row["domain"]):
+                    continue
+                if weak_allowed and not names_entry(
+                    row["evidence"], result.entry.candidates
+                ):
+                    continue
+                return row["domain"]
     return None
+
+
+_MATCHED = re.compile(r""" names (['"])(.+?)\1""")
+
+
+def names_entry(evidence: str | None, spellings: tuple[str, ...]) -> bool:
+    """Whether the phrase a weak match found covers one of `spellings`.
+
+    The phrase is read back out of the evidence `domains.verify` wrote
+    ("https://coeli.com/ names 'coeli'"). A spelling is covered when each of
+    its distinctive words is in the phrase, or any two of them are: one word
+    of "Morgan Stanley" is a surname, while "nordic growth" is two of the
+    three in "Nordic Growth Market". One with no distinctive word needs all
+    its words.
+    """
+    match = _MATCHED.search(evidence or "")
+    if not match:
+        return False
+    found = set(match.group(2).split())
+    for spelling in spellings:
+        tokens = normalize_name(spelling).split()
+        if not tokens:
+            continue
+        identity, distinctive = _token_sets(tokens)
+        wanted = set(distinctive or identity or tokens)
+        if wanted <= found or len(wanted & found) >= 2:
+            return True
+    return False
+
+
+ROSTER_RETRY_DAYS = 28
+
+
+def resolve_roster_domains(
+    connection: sqlite3.Connection, roster, workers: int = 12
+) -> list[domains.Lookup]:
+    """Guess a domain from the roster's own spellings, where nothing else can.
+
+    Only for lines `_domain_for` leaves with no domain, so a guess never
+    displaces a registry-published or verified one: "Carnegie" alone would
+    find somebody's `carnegie.com`, while the register already gives
+    `dnbcarnegie.com`. Each spelling's answer is cached under it. A miss is
+    asked again after `ROSTER_RETRY_DAYS`, because `morganstanley.com` timing
+    out once is not evidence that Morgan Stanley has no domain. Returns what
+    was recorded.
+    """
+    from . import audit
+
+    connection.executescript(domains.SCHEMA)
+    wanted: list[tuple[str, str | None]] = []
+    seen: set[str] = set()
+    for result in audit.run(connection, [e for e in roster if not e.expected_absent]):
+        if _domain_for(connection, result):
+            continue
+        country = audit.HUB_COUNTRY.get(result.entry.hub)
+        for spelling in result.entry.candidates:
+            if spelling in seen or not normalize_name(spelling):
+                continue
+            seen.add(spelling)
+            asked = connection.execute(
+                "SELECT 1 FROM domain_lookups WHERE query = ?"
+                " AND NOT (domain IS NULL AND method LIKE 'roster-%'"
+                "          AND checked_at < datetime('now', ?))",
+                (spelling, f"-{ROSTER_RETRY_DAYS} days"),
+            ).fetchone()
+            if not asked:
+                wanted.append((spelling, country))
+
+    def work(item: tuple[str, str | None]) -> domains.Lookup:
+        spelling, country = item
+        found = domains.resolve_name(normalize_name(spelling), country, curated=True)
+        method = "roster-" + found.method.removeprefix("name-")
+        return domains.Lookup(spelling, found.domain, method, found.evidence)
+
+    recorded: list[domains.Lookup] = []
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        recorded = list(pool.map(work, wanted))
+    domains.record(connection, recorded)
+    return recorded
 
 
 def run(

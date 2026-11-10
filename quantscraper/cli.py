@@ -155,6 +155,9 @@ def _domains(database: str, limit: int, workers: int, regrade: bool = False) -> 
         checked, demoted = domains.regrade(connection, limit, workers)
         print(f"re-checked {checked:,d} strong matches, {demoted:,d} demoted to weak")
     else:
+        purged = domains.purge_platform_rows(connection)
+        if purged:
+            print(f"dropped {purged:,d} platform pages cached as domains; re-queued")
         seeded = domains.harvest_registry_domains(connection)
         print(f"seeded {seeded:,d} domains from registry websites")
 
@@ -163,6 +166,13 @@ def _domains(database: str, limit: int, workers: int, regrade: bool = False) -> 
             print(f"probed {attempted:,d} firms, {resolved:,d} strong matches")
         else:
             print("nothing left to probe in the focus sources")
+
+        # The roster's own spellings, for lines no registry name resolves.
+        # A handful of names, each asked once.
+        for found in discover.resolve_roster_domains(
+            connection, audit.load_roster(), workers
+        ):
+            print(f"  roster {found.query[:32]:32s} {found.domain or '-':28s} {found.method}")
 
     print("\ndomain coverage by focus registry")
     print(f"  {'':18s} {'known':>13s}   registry   fca   strong   weak   unresolved")

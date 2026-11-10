@@ -67,9 +67,9 @@ class CorroborationTest(unittest.TestCase):
 
     def _verify(self, page: str, normalized: str):
         with mock.patch.object(
-            domains.http, "get_with_url", return_value=(_page(page), "https://x.com/")
+            domains.http, "get_with_url", return_value=(_page(page), "https://example.org/")
         ):
-            return domains.verify("x.com", normalized)
+            return domains.verify("example.org", normalized)
 
     def test_a_fragment_alone_is_not_strong(self):
         """The page that owns *brown brothers* is a paint distributor PPG
@@ -256,3 +256,106 @@ class RegradeConvergesTest(unittest.TestCase):
             domains.regrade(connection, 1, workers=1)
 
         self.assertEqual(self._pending(connection), ["Next Ltd"])
+
+
+class PlatformDomainTest(unittest.TestCase):
+    """A social profile or site-builder page is not a firm's domain.
+
+    UBS Financial Services' registry website is `instragram.com/ubstrending/`,
+    and that was the domain UBS's roster line resolved to. 6,700 firms sat
+    behind `linkedin.com` and its kin in the cache, where the guesser never
+    looked at them again.
+    """
+
+    def _connection(self, *rows):
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        connection.executescript(domains.SCHEMA)
+        connection.execute(
+            "CREATE TABLE firms (firm_id TEXT, name TEXT, country TEXT, website TEXT)"
+        )
+        for name, website, method in rows:
+            connection.execute(
+                "INSERT INTO firms VALUES (?, ?, NULL, ?)", (name, name, website)
+            )
+            if method:
+                connection.execute(
+                    "INSERT INTO domain_lookups VALUES (?, ?, ?, ?, 'then')",
+                    (name, domain_of(website), method, website),
+                )
+        return connection
+
+    def test_misspelt_and_link_in_bio_hosts_are_platforms(self):
+        from quantscraper.resolve import is_platform_domain
+
+        for host in ("instragram.com", "lindedin.com", "linktr.ee",
+                     "eastasiachristmas.wixsite.com", "sites.google.com"):
+            self.assertTrue(is_platform_domain(host), host)
+        self.assertFalse(is_platform_domain("google.com"))
+        self.assertFalse(is_platform_domain("ubs.com"))
+
+    def test_harvest_skips_a_profile_and_purge_requeues_the_firm(self):
+        connection = self._connection(
+            ("UBS FINANCIAL SERVICES INC.", "https://www.instragram.com/ubstrending/", "registry"),
+            ("Acme Capital", "https://www.linkedin.com/company/acme", "registry"),
+            ("Real Fund", "https://realfund.com", None),
+            ("Hand Firm", "https://linkedin.com/x", "site"),
+        )
+
+        self.assertEqual(domains.purge_platform_rows(connection), 2)
+        self.assertEqual(domains.harvest_registry_domains(connection), 1)
+
+        rows = dict(connection.execute("SELECT query, domain FROM domain_lookups"))
+        self.assertEqual(rows, {"Real Fund": "realfund.com", "Hand Firm": "linkedin.com"})
+        # The registry's own field is evidence and stays as published.
+        self.assertEqual(
+            connection.execute(
+                "SELECT website FROM firms WHERE name = 'Acme Capital'"
+            ).fetchone()[0],
+            "https://www.linkedin.com/company/acme",
+        )
+
+    def test_a_redirect_onto_a_site_builder_proves_nothing(self):
+        with mock.patch.object(domains.http, "get_with_url", return_value=(
+                _page("East Asia Christmas fair"),
+                "https://eastasiachristmas.wixsite.com/mysite")):
+            self.assertIsNone(domains.verify("eastasia.com", "east asia"))
+
+
+class CuratedSpellingTest(unittest.TestCase):
+    """The roster's three-letter names, which a register name never earns."""
+
+    def test_a_three_letter_name_is_tried_with_its_country_first(self):
+        self.assertEqual(domains.curated_candidates("sek", "SE")[:2], ["sek.se", "sek.com"])
+        self.assertEqual(domains.candidates("sek", "SE"), [])
+
+    def test_a_three_letter_needle_is_accepted_only_when_curated(self):
+        with mock.patch.object(domains.http, "get_with_url", return_value=(
+                _page("UBS Group careers"), "https://www.ubs.com/")):
+            self.assertIsNone(domains.verify("ubs.com", "ubs"))
+            self.assertEqual(domains.verify("ubs.com", "ubs", 3)[:2], ("ubs.com", "strong"))
+
+
+class HandRowsSurviveHarvestTest(unittest.TestCase):
+    """A registry firm called "Two Sigma" must not replace the verified row."""
+
+    def test_harvest_leaves_a_sites_row_alone(self):
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        connection.executescript(domains.SCHEMA)
+        connection.execute(
+            "CREATE TABLE firms (firm_id TEXT, name TEXT, country TEXT, website TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO firms VALUES ('f', 'Two Sigma', NULL, 'https://www.twosigma.cn/')"
+        )
+        connection.execute(
+            "INSERT INTO domain_lookups VALUES"
+            " ('Two Sigma', 'twosigma.com', 'site', 'hand-written reader', 'then')"
+        )
+
+        self.assertEqual(domains.harvest_registry_domains(connection), 0)
+        self.assertEqual(
+            connection.execute("SELECT domain FROM domain_lookups").fetchone()[0],
+            "twosigma.com",
+        )

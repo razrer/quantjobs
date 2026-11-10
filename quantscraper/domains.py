@@ -31,7 +31,7 @@ from dataclasses import dataclass
 
 from . import db, http
 from .resolve import country_code as _country_code
-from .resolve import domain_of, normalize_name
+from .resolve import domain_of, is_platform_domain, normalize_name
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS domain_lookups (
@@ -160,7 +160,7 @@ def _page_text(body: bytes) -> str:
     return fold_text(_TAG.sub(" ", body.decode("utf-8", errors="replace")))
 
 
-def _needles(normalized: str) -> list[tuple[str, str]]:
+def _needles(normalized: str, min_len: int = 4) -> list[tuple[str, str]]:
     """Phrases that would convince us, as (needle, strength).
 
     A single word is only convincing when it is the firm's whole name. Accepting
@@ -188,7 +188,11 @@ def _needles(normalized: str) -> list[tuple[str, str]]:
     if len(distinctive) > 1:
         needles.append((" ".join(distinctive[:2]), "strong"))
     needles.append((distinctive[0], "strong" if len(tokens) == 1 else "weak"))
-    return [(needle, strength) for needle, strength in needles if len(needle) > 3]
+    # `min_len` is 4 for registry names, where "ii" or "abc" is chance. A
+    # curated spelling may lower it to 3: the roster says
+    # "UBS", and no rule that reads only register names should decide that a
+    # three-letter bank cannot be found.
+    return [(needle, strength) for needle, strength in needles if len(needle) >= min_len]
 
 
 def _corroborators(normalized: str, needle: str) -> list[str]:
@@ -222,7 +226,9 @@ def _corroborators(normalized: str, needle: str) -> list[str]:
 REJECTED_MATCHES = {("starfish bay", "starfishbay.com")}
 
 
-def verify(candidate: str, normalized: str) -> tuple[str, str, str] | None:
+def verify(
+    candidate: str, normalized: str, min_len: int = 4
+) -> tuple[str, str, str] | None:
     """Fetch `candidate` and decide whether it belongs to this firm.
 
     Returns (domain, strength, evidence) or None. The bar is that the page names
@@ -242,11 +248,16 @@ def verify(candidate: str, normalized: str) -> tuple[str, str, str] | None:
 
         if (name, domain_of(landed)) in REJECTED_MATCHES:
             continue
+        # A redirect onto a site builder or a social profile proves somebody
+        # made a page, not that the host is the firm's. The Bank of East Asia
+        # "resolved" to `eastasiachristmas.wixsite.com` this way.
+        if is_platform_domain(domain_of(landed)):
+            continue
         text = _page_text(body)
         if not text or _PARKED.search(text):
             continue
 
-        for needle, strength in _needles(normalized):
+        for needle, strength in _needles(normalized, min_len):
             # Padded, so "marex" does not match "marexpo".
             if f" {needle} " not in text:
                 continue
@@ -273,12 +284,36 @@ def verify(candidate: str, normalized: str) -> tuple[str, str, str] | None:
     return None
 
 
-def resolve_name(normalized: str, country: str | None) -> Lookup:
+def curated_candidates(normalized: str, country: str | None) -> list[str]:
+    """`candidates`, for a spelling a human wrote rather than a register.
+
+    The whole name run together comes first even at three letters, and the
+    country's own TLD before `.com`: the roster's "UBS" is `ubs.com` and its
+    "SEK" `sek.se`, and `_labels` drops both for being too short to be
+    evidence when they come from a register.
+    """
+    joined = "".join(normalized.split())
+    tlds = (*COUNTRY_TLDS.get((country or "").upper(), ()), "com")
+    found = [f"{joined}.{tld}" for tld in tlds] if len(joined) == 3 else []
+    for candidate in [*found, *candidates(normalized, country)]:
+        if candidate not in found:
+            found.append(candidate)
+    return found
+
+
+def resolve_name(
+    normalized: str, country: str | None, curated: bool = False
+) -> Lookup:
     """Best candidate for a name. A strong match wins immediately; a weak one
-    is held in case nothing better turns up."""
+    is held in case nothing better turns up.
+
+    `curated` is for the audit roster's own spellings: three-letter names are
+    tried and accepted as needles, which a register name never earns.
+    """
     weak: Lookup | None = None
-    for candidate in candidates(normalized, country):
-        hit = verify(candidate, normalized)
+    plan = (curated_candidates if curated else candidates)(normalized, country)
+    for candidate in plan:
+        hit = verify(candidate, normalized, 3 if curated else 4)
         if not hit:
             continue
         domain, strength, evidence = hit
@@ -333,6 +368,10 @@ def record(connection: sqlite3.Connection, lookups: list[Lookup]) -> None:
         )
 
 
+# Methods whose rows a person wrote. Nothing automatic removes them.
+_HAND_METHODS = ("site", "hand-verified")
+
+
 def harvest_registry_domains(connection: sqlite3.Connection) -> int:
     """Seed the cache from websites the registries already published.
 
@@ -345,13 +384,48 @@ def harvest_registry_domains(connection: sqlite3.Connection) -> int:
     lookups = []
     for row in rows:
         domain = domain_of(row["website"])
-        if domain:
+        # A social profile is where the firm posts, not a domain it hires
+        # from. Seeding one also took the firm out of the guessing queue for
+        # good, since `targets` skips any name with a row: 6,700 firms sat
+        # behind `linkedin.com`, `facebook.com` and `instragram.com` that way.
+        if domain and not is_platform_domain(domain):
             # Keyed on the firm's stored name, the same key `targets` and
             # `coverage` join on. Normalizing here instead would make the cache
             # unjoinable from SQL, which is where it is read.
             lookups.append(Lookup(row["name"], domain, "registry", row["website"]))
+    # **Never over a row a person wrote.** "Two Sigma" and "HSBC" are both a
+    # registry firm's name and a `sites.py` label, and `INSERT OR REPLACE`
+    # put `twosigma.cn` and `hsbc.com` back over the verified boards until
+    # the next `sites.register` -- so a `domains` run on its own took 1,841
+    # Hong Kong postings off the audit.
+    hand = {
+        query for (query,) in connection.execute(
+            "SELECT query FROM domain_lookups"
+            f" WHERE method IN ({','.join('?' * len(_HAND_METHODS))})",
+            _HAND_METHODS,
+        )
+    }
+    lookups = [lookup for lookup in lookups if lookup.query not in hand]
     record(connection, lookups)
     return len(lookups)
+
+
+def purge_platform_rows(connection: sqlite3.Connection) -> int:
+    """Remove cached domains that name a platform rather than a firm.
+
+    Each removal puts the firm back in `targets`, so the guesser tries the
+    firm's own name next. The registry's website stays in `firms.website`
+    untouched; only the derived cache entry goes. Rows a person wrote stay.
+    """
+    rows = connection.execute(
+        "SELECT query, domain FROM domain_lookups WHERE domain IS NOT NULL"
+        f" AND method NOT IN ({','.join('?' * len(_HAND_METHODS))})",
+        _HAND_METHODS,
+    ).fetchall()
+    stale = [(row["query"],) for row in rows if is_platform_domain(row["domain"])]
+    with connection:
+        connection.executemany("DELETE FROM domain_lookups WHERE query = ?", stale)
+    return len(stale)
 
 
 def regrade_targets(connection: sqlite3.Connection, limit: int):
@@ -491,15 +565,17 @@ def coverage(connection: sqlite3.Connection, sources: tuple[str, ...]):
     for source in sources:
         row = connection.execute(
             """
+            -- By the cache's method, not by `f.website`: a website that is
+            -- a LinkedIn profile is in `firms` but is no domain, and counting
+            -- it as known hid 6,700 firms that had none.
             SELECT COUNT(*) AS firms,
-                   SUM(f.website IS NOT NULL) AS registry,
+                   SUM(d.method = 'registry') AS registry,
                    -- FCA domains are published by the regulator, so they rank
                    -- with the registry ones rather than with the guesses.
-                   SUM(f.website IS NULL AND d.method = 'fca') AS fca,
-                   SUM(f.website IS NULL AND d.method = 'name-strong') AS strong,
-                   SUM(f.website IS NULL AND d.method = 'name-weak') AS weak,
-                   SUM(f.website IS NULL
-                       AND d.method IN ('unresolved', 'fca-miss')) AS unresolvable
+                   SUM(d.method = 'fca') AS fca,
+                   SUM(d.method = 'name-strong') AS strong,
+                   SUM(d.method = 'name-weak') AS weak,
+                   SUM(d.method IN ('unresolved', 'fca-miss')) AS unresolvable
             FROM firms f
             LEFT JOIN domain_lookups d ON d.query = f.name
             WHERE EXISTS (
