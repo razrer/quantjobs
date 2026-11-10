@@ -147,6 +147,8 @@ class LinkedinTest(unittest.TestCase):
 
     def test_an_empty_page_ends_a_query_and_a_wall_does_not(self):
         self.assertEqual(linkedin.parse("", "hong-kong"), [])
+        # What the endpoint really sends past the last card, 10 November 2026.
+        self.assertEqual(linkedin.parse("<!DOCTYPE html>\n\n<!---->  ", "hong-kong"), [])
         with self.assertRaises(linkedin.Blocked):
             linkedin.parse("<html><body>Sign in to continue</body></html>", "hong-kong")
 

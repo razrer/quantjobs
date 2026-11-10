@@ -70,6 +70,8 @@ KEYWORDS = (
 STALE_AFTER = timedelta(days=28)
 
 _ID = re.compile(r"urn:li:jobPosting:(\d+)")
+# The end of a query is not an empty body: it is a doctype and an empty comment.
+_SCAFFOLD = re.compile(r"<!DOCTYPE[^>]*>|<!--.*?-->", re.I | re.S)
 
 
 # These hosts are sent a client name only, never a contact address.
@@ -140,7 +142,7 @@ def parse(markup: str, token: str) -> list[Job]:
             location=read(".job-search-card__location"),
             posted_at=when.get("datetime") if when else None,
         ))
-    if not jobs and markup.strip() and "<li" not in markup:
+    if not jobs and _SCAFFOLD.sub("", markup).strip() and "<li" not in markup:
         raise Blocked("the response is neither result cards nor an empty list")
     return jobs
 
