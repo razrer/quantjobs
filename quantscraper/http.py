@@ -81,6 +81,9 @@ HOST_INTERVAL_S = {
     "www2.jobs.gov.hk": 4.0,
     # LinkedIn's guest search: unauthenticated, read weekly, kept slow.
     "www.linkedin.com": 4.0,
+    # Workable's cross-tenant search answered 429 after ~350 pages at one a
+    # second, 10 November 2026. Set to the slow interval, not tuned to a limit.
+    "jobs.workable.com": 4.0,
 }
 
 # How long a 429 is honoured for when the server names no `Retry-After`. A 429

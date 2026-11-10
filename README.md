@@ -68,10 +68,10 @@ corrections in that mode need manual export.
 | Layer | Commands |
 |---|---|
 | Employer universe | `fetch`, `resolve`, `stats`, `audit` |
-| Careers resolution | `domains`, `fca`, `ats`, `discover` |
-| Collection | `jobs`, `pages`, `bodies` |
+| Careers resolution | `domains`, `fca`, `ats`, `discover`, `tenants` |
+| Collection | `jobs`, `pages`, `structured`, `bodies` |
 | National boards | `jobstream`, `switzerland`, `sweden`, `denmark`, `singapore`, `hongkong` |
-| Third-party boards | `efinancial`, `linkedin` |
+| Third-party boards | `efinancial`, `linkedin`, `workable` |
 | Classification | `tag`, `list`, `sample`, `labels`, `corrections` |
 | Operations | `coverage`, `alerts`, `daily` |
 

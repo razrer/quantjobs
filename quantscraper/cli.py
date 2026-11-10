@@ -20,7 +20,7 @@ from . import (
     alerts, ats, audit, bodies, coverage, db, discover, domains, efinancial,
     extract, fca, http, iesjobs, jobbsafari, jobindex, jobroom_ch, jobstream,
     labels, linkedin, mycareersfuture, pages,
-    resolve, sites, tagging,
+    resolve, sites, structured, tagging, vendors,
 )
 from .registries import REGISTRIES
 
@@ -234,6 +234,18 @@ def _ats(database: str, limit: int, workers: int, reprobe: bool = False) -> int:
     return 0
 
 
+def _structured(database: str, limit: int, workers: int) -> int:
+    """Tier-B careers pages that publish schema.org postings, promoted to tier A."""
+    connection = db.connect(database)
+    counts = structured.run(connection, limit, workers)
+    print(
+        f"read {counts['probed']:,d} tier-B careers pages: {counts['page']:,d} publish"
+        f" JobPosting, {counts['sitemap']:,d} more through their sitemap"
+        f" ({counts['postings']:,d} postings proved); promoted to tier A as jsonld"
+    )
+    return 0
+
+
 def _discover(
     database: str, limit: int, roster: bool, workers: int, source: str | None = None
 ) -> int:
@@ -305,6 +317,9 @@ LAYER_TWO_BUDGET = {
     # rows at 1,200 is three.
     "regrade": 800,
     "reprobe": 1_200,
+    # Tier B read for structured postings: about a dozen requests a page, on
+    # the firms' own hosts, so 600 is minutes. 3,600 rows is six weeks a cycle.
+    "structured": 600,
 }
 
 
@@ -334,6 +349,9 @@ def _layer2(database: str, budget: dict[str, int] | None = None) -> int:
     steps: list[tuple[str, Callable[[], int]]] = [
         ("domains", lambda: _domains(database, budget["domains"], 12)),
         ("ats", lambda: _ats(database, budget["ats"], 12)),
+        # SmartRecruiters tenants hiring in a hub, read off the vendor's own
+        # search. A lead list: ten queries, then one board read per new tenant.
+        ("vendor leads", lambda: _vendor_leads(database, 6)),
         # **Scoped per registry, deliberately.** `discover.targets` orders the
         # global queue by how many registries saw a firm, which is the right
         # priority for a mixed queue and acts as a filter inside a `--limit`:
@@ -352,6 +370,9 @@ def _layer2(database: str, budget: dict[str, int] | None = None) -> int:
         # its own. Promotions only in both cases.
         ("regrade", lambda: _domains(database, budget["regrade"], 12, regrade=True)),
         ("reprobe", lambda: _ats(database, budget["reprobe"], 12, reprobe=True)),
+        # After reprobe, so a page a new fingerprint now names a vendor for is
+        # read through that vendor rather than through its markup.
+        ("structured", lambda: _structured(database, budget["structured"], 12)),
     ]
 
     failed = 0
@@ -470,6 +491,27 @@ def _hub_search(database: str, module, only: list[str] | None, pages: int | None
     _held(connection, module.NAME, "ads",
           withdrawn="SUM(removed_at IS NOT NULL)")
     return _shortfall(swept)
+
+
+def _vendor_leads(database: str, workers: int) -> int:
+    """SmartRecruiters tenants found by hub, turned into boards Layer 3 polls."""
+    connection = db.connect(database)
+    found = vendors.sr_leads(connection, workers)
+    print(
+        f"asked {found.asked} hub keyword(s): {found.tenants:,d} tenants,"
+        f" {found.new:,d} not yet settled, {len(found.boards):,d} new boards"
+    )
+    for token, domain, name in sorted(found.boards):
+        print(f"  smartrecruiters  {token:30s} {domain:28s} {name}")
+    if found.windowed:
+        # A lead list, not a census: these keywords had more than one window.
+        print("  hit the result window: " + ", ".join(found.windowed))
+    if found.stranded:
+        print(f"  {len(found.stranded)} relevant tenant(s) with no verified domain,"
+              " so nothing polls them: " + ", ".join(sorted(found.stranded)))
+    for problem in found.problems:
+        print(f"  FAIL {problem}", file=sys.stderr)
+    return 1 if found.problems else 0
 
 
 def _denmark(database: str, since: str | None, only: list[int] | None) -> int:
@@ -1396,6 +1438,8 @@ def _daily(database: str, full: bool, publish: bool) -> int:
         # the slow one, at four seconds a page.
         gathered.append(("efinancial", lambda: _hub_search(database, efinancial, None, None)))
         gathered.append(("linkedin", lambda: _hub_search(database, linkedin, None, None)))
+        # Workable's cross-tenant search, a census of each hub on its own host.
+        gathered.append(("workable", lambda: _hub_search(database, vendors, None, None)))
         # Registry alerts use a 30-day freshness limit. A weekly sweep that
         # never reads registries lets every employer source go stale even
         # while the job board itself is fresh. Refresh the established sources
@@ -1524,6 +1568,20 @@ def main(argv: list[str] | None = None) -> int:
         " whose firms hold a single licence is never reached by --limit",
     )
 
+    structured_command = commands.add_parser(
+        "structured",
+        help="read tier-B careers pages for schema.org JobPosting, directly or"
+        " through their sitemap, and promote those that publish it",
+    )
+    structured_command.add_argument("--limit", type=int, default=200)
+    structured_command.add_argument("--workers", type=int, default=12)
+
+    vendor_command = commands.add_parser(
+        "tenants",
+        help="find SmartRecruiters tenants hiring in a hub and poll their boards",
+    )
+    vendor_command.add_argument("--workers", type=int, default=6)
+
     singapore_command = commands.add_parser(
         "singapore", help="sweep MyCareersFuture, Singapore's statutory portal"
     )
@@ -1536,6 +1594,7 @@ def main(argv: list[str] | None = None) -> int:
     for name, module, text in (
         ("efinancial", efinancial, "sweep eFinancialCareers, every advert in each hub"),
         ("linkedin", linkedin, "sweep LinkedIn's public job search by keyword, per hub"),
+        ("workable", vendors, "sweep Workable's cross-tenant search, every posting in each hub"),
     ):
         hub_command = commands.add_parser(name, help=text)
         hub_command.add_argument(
@@ -1753,6 +1812,10 @@ def main(argv: list[str] | None = None) -> int:
             args.db, efinancial, args.only.split(",") if args.only else None, args.pages),
         "linkedin": lambda: _hub_search(
             args.db, linkedin, args.only.split(",") if args.only else None, args.pages),
+        "workable": lambda: _hub_search(
+            args.db, vendors, args.only.split(",") if args.only else None, args.pages),
+        "tenants": lambda: _vendor_leads(args.db, args.workers),
+        "structured": lambda: _structured(args.db, args.limit, args.workers),
         "denmark": lambda: _denmark(
             args.db, args.since,
             [int(part) for part in args.only.split(",")] if args.only else None),

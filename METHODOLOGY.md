@@ -55,6 +55,14 @@ These reversible display gates preserve raw records and human relevance labels.
    broad keyword. A keyword search is not a census; report the queries that hit
    the result window. Recruiter adverts are kept under the agency's name. These
    hosts receive no contact address. No login, and a refusal ends that hub.
+8. Read the ATS vendors' own cross-tenant search. Workable's is a per-hub
+   census (`workable`), kept under the tenant's name and the domain it states;
+   a tenant hiring for markets work has that domain cached for `ats` to walk.
+   SmartRecruiters' answers only its top 100 a keyword, so it is a lead list
+   (`tenants`): a relevant tenant becomes a board once it has a verified domain.
+9. Read tier-B careers pages for schema.org `JobPosting`, on the page or on
+   the posting pages its sitemap lists (`structured`). A URL counts only when
+   its page carries a `JobPosting`. Promoted boards are `ats = 'jsonld'`.
 
 The weekly sequence is corrections → rebuild firms → concurrent source reads
 (including the employer registries and the Layer 2 chain that resolves domains,

@@ -391,14 +391,14 @@ def _expected() -> set[str]:
     """
     from . import (
         efinancial, iesjobs, jobbsafari, jobindex, jobroom_ch, jobstream,
-        linkedin, mycareersfuture,
+        linkedin, mycareersfuture, vendors,
     )
     from .registries import REGISTRIES
 
     return set(REGISTRIES) | {
         module.NAME for module in
         (jobstream, jobroom_ch, jobindex, jobbsafari, mycareersfuture, iesjobs,
-         efinancial, linkedin)
+         efinancial, linkedin, vendors)
     }
 
 

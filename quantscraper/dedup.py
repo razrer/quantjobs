@@ -30,7 +30,7 @@ NEAR = 0.93
 # *name* and no domain, the firm's own board the reverse.
 PORTALS = frozenset({
     "mycareersfuture", "jobbsafari", "jobroom", "jobindex", "jobtech",
-    "iesjobs", "efinancial", "linkedin",
+    "iesjobs", "efinancial", "linkedin", "workable_jobs",
 })
 
 

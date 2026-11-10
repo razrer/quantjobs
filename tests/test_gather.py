@@ -97,6 +97,13 @@ class Layer2ChainTest(unittest.TestCase):
     In sequence it is one run.
     """
 
+    def setUp(self):
+        # The vendor step reads the network; no test here may.
+        for name in ("_vendor_leads", "_structured"):
+            patcher = mock.patch.object(cli, name, return_value=0)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     def _run(self, **failures):
         calls = []
 
@@ -112,7 +119,9 @@ class Layer2ChainTest(unittest.TestCase):
                 cli, "_domains", side_effect=step("domains", failures.get("domains"))),                 mock.patch.object(
                     cli, "_ats", side_effect=step("ats", failures.get("ats"))),                 mock.patch.object(
                     cli, "_discover",
-                    side_effect=step("discover", failures.get("discover"))),                 contextlib.redirect_stdout(io.StringIO()),                 contextlib.redirect_stderr(io.StringIO()):
+                    side_effect=step("discover", failures.get("discover"))),                 mock.patch.object(
+                    cli, "_vendor_leads",
+                    side_effect=step("tenants", failures.get("tenants"))),                 contextlib.redirect_stdout(io.StringIO()),                 contextlib.redirect_stderr(io.StringIO()):
             code = cli._layer2("test.db")
         return code, calls
 
@@ -124,8 +133,10 @@ class Layer2ChainTest(unittest.TestCase):
         # re-verification -- and `_discover` once per focus registry.
         self.assertEqual(calls[0], "domains")
         self.assertEqual(calls[1], "ats")
+        # Vendor tenants write tier A boards directly, so they follow `ats`.
+        self.assertEqual(calls[2], "tenants")
         self.assertEqual(
-            calls[2:2 + len(cli.FOCUS_SOURCES)],
+            calls[3:3 + len(cli.FOCUS_SOURCES)],
             ["discover"] * len(cli.FOCUS_SOURCES),
         )
         self.assertEqual(calls[-2:], ["domains", "ats"], "re-verification runs last")
@@ -166,7 +177,9 @@ class Layer2ChainTest(unittest.TestCase):
                     cli, "_ats",
                     side_effect=lambda db, limit, workers, **kw: spent.append(limit) or 0),                 mock.patch.object(
                     cli, "_discover",
-                    side_effect=lambda db, limit, *a: spent.append(limit) or 0),                 contextlib.redirect_stdout(io.StringIO()):
+                    side_effect=lambda db, limit, *a: spent.append(limit) or 0),                 mock.patch.object(
+                    cli, "_structured",
+                    side_effect=lambda db, limit, workers: spent.append(limit) or 0),                 contextlib.redirect_stdout(io.StringIO()):
             cli._layer2("test.db")
 
         self.assertEqual(set(spent), set(cli.LAYER_TWO_BUDGET.values()))
