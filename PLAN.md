@@ -608,3 +608,65 @@ manual upkeep, and named Hong Kong, Stockholm and Singapore as priorities.
   Common Crawl and the vendors' own search; the generic JSON-LD and sitemap readers
   for tier B; a re-tag at 74 and a publish. LinkedIn's first full sweep and its
   miss trace are recorded below when complete.
+
+## Stage 70 — Stage 69's open items: domains, vendors, tier B (tagger 75)
+
+Requested: the four items Stage 69 left open.
+
+- **Wrong domains.** Two causes. The registry harvest cached 6,707 social and
+  site-builder pages as firm domains (`linkedin.com` 4,198 rows, misspellings such
+  as `instragram.com`, UBS Financial Services' website), and a firm with a row is
+  never name-guessed. Platform hosts, link-in-bio hosts, site builders and those
+  misspellings are now refused at harvest and at `verify` (a redirect onto
+  `eastasiachristmas.wixsite.com` had been the Bank of East Asia), and the cached
+  rows purged; `firms.website` keeps what the registry published. Second, a roster
+  line took any weak row its fuzzy match found: SEK took the share class
+  *Class C-sek h*'s `class-c.com`, Morgan Stanley `morgan.se`. A weak row must now
+  name the roster's firm (all its distinctive words, or two of them).
+- Roster spellings no registry name resolves are guessed directly, three-letter
+  names included (`ubs.com`, `sek.se`), cached under the spelling, misses re-asked
+  after 28 days. A roster spelling's own weak guess is never taken (`trivest.com`
+  is a US PE firm). `ats.targets` now tiers domains cached under a non-firm name.
+- Found while checking: the harvest's `INSERT OR REPLACE` put registry domains over
+  hand-verified `sites.py` rows ("Two Sigma", "HSBC"); a lone `domains` run took
+  1,841 Hong Kong postings off the audit. It no longer writes over hand rows.
+- Roster audit: 164 → 165 of 306 reached, no hub lower. 24 lines gained a domain
+  (UBS, SEK, APG, ATP, PFA, PostFinance, four Kantonalbanken, Peak6, Quantlab,
+  Tradebot…); most land in tier B. Lost: Morgan Stanley (`morgan.se`, wrong) and
+  Fidelity (`fidelity.com`, tier C). Still unreachable: Morgan Stanley's Eightfold
+  board answers 403; UBS's board is Kenexa BrassRing (`jobs.ubs.com/TGnewUI`,
+  partner 25008), for which there is no reader.
+- **Vendor-first.** Verified live, no key: Workable's `jobs.workable.com/api/v1/jobs`
+  (20 a page, `pageToken`, `totalSize`; Sweden 510/510/510) and SmartRecruiters'
+  `sr-jobs/search` (keyword only, top 100, no working paging parameter).
+- `workable`: a per-hub census, portal `workable_jobs`, employer and domain as the
+  tenant gave them; the same discipline as `efinancial`. First sweep: six hubs,
+  6,901 postings, each equal to its advertised total. The three US hubs got 429
+  after ~350 pages at one a second and wrote nothing; the host is now at the
+  four-second interval (~80 minutes a week). A tenant with a markets title has its
+  domain cached as `vendor`, which `ats` walks first: 14 leads, of which six are
+  Workable boards now polled whole (BMLL, QCP, Moreton Capital, moomoo, BBGC, IBMC),
+  and Polymer Capital, a Hong Kong roster miss, is tier B.
+- `tenants`: SmartRecruiters' hub keywords as a lead list. 167 tenants, 156 neither
+  hiring for markets nor in the universe; one new board (Talan), Vattenfall's domain
+  already polls Attrax, Smartkarma has no verified domain. Nine of ten keywords hit
+  the window. Low yield, but the window rotates weekly. Runs in the Layer 2 chain.
+- Common Crawl's index answered 504 to every query on 10 November, including a
+  single exact URL, so the Common Crawl tenant enumeration is not built.
+- **Tier B.** `structured` reads a tier-B careers page's schema.org `JobPosting`,
+  or the posting pages its sitemap lists (sampled evenly; a sitemap URL counts
+  only when its own page carries one), and promotes the domain to tier A as
+  `jsonld`. Refused: a careers host off the firm's own site (`careers.allianz.com`
+  for Allianz Capital Partners) and postings naming several employers (venture
+  portfolio boards: Accel, 25madison, AgFunder). A full read that fails those
+  raises. First 400 of 3,547 tier-B rows: 9 promoted, 276 postings (Alter Domus
+  200 of 208 at a 200-page cap, since raised to 500). 600 a week in the Layer 2 chain.
+- Re-tag at 75: 17.1 min. Board on the same database, tagger 73 tags against 75:
+  5,705 → 6,660 cards; new sources 864 eFinancialCareers, 88 Workable census, 5
+  `jsonld`, and 14 from the new tenant boards. Of the old sources' cards, 16 left:
+  11 are Jane Street stacks keeping a different representative (counts intact),
+  5 fold into an eFinancialCareers copy that reads at a higher fit, which is the
+  existing cross-source rank (fit first, own board on a tie). None hidden.
+- 1,333 tests pass.
+- Not done: Common Crawl; a BrassRing reader; the US Workable hubs (next weekly).
+  LinkedIn's first sweep (started 15:45) had written no hub by 19:00.
