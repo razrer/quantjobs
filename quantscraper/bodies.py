@@ -75,7 +75,7 @@ from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from typing import NamedTuple
 
-from . import parsing, db, http, iesjobs, jobbsafari, tagging
+from . import parsing, db, http, iesjobs, jobbsafari, linkedin, tagging
 from .models import UNRESOLVED_LOCATION as _UNRESOLVED
 from .iesjobs import ORIGIN
 
@@ -837,7 +837,13 @@ def applicantpro_body(row) -> Fetched:
     return _ld_body(row["url"])
 
 
+def linkedin_body(row) -> Fetched:
+    """LinkedIn's public posting fragment: the description and the place."""
+    return Fetched(*linkedin.body(row["job_id"]))
+
+
 FETCHERS = {
+    "linkedin": linkedin_body,
     "workday": workday_body,
     "jobbsafari": jobbsafari_body,
     "successfactors": successfactors_body,

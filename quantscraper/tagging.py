@@ -43,7 +43,7 @@ from . import db, lexicon, role_scope
 # classifier improved" from "the market moved". **Forgetting is now loud** --
 # see `fingerprint`, which records what wrote each version's tags so that
 # `alerts` can say when the two have parted company.
-TAGGER = 73
+TAGGER = 74
 
 # **`WITHOUT ROWID`, so a posting's tags sit together in key order.** Every
 # reader here asks for whole postings or whole versions, and a rowid table

@@ -1362,6 +1362,7 @@ MIN_BOARD = 10  # below this a share is noise, not a profile
 # of landing one, not an afterthought.
 NOT_A_BOARD = (
     "jobtech", "jobbsafari", "jobindex", "jobroom", "mycareersfuture", "iesjobs",
+    "efinancial", "linkedin",
 )
 
 

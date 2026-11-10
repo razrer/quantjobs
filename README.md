@@ -71,6 +71,7 @@ corrections in that mode need manual export.
 | Careers resolution | `domains`, `fca`, `ats`, `discover` |
 | Collection | `jobs`, `pages`, `bodies` |
 | National boards | `jobstream`, `switzerland`, `sweden`, `denmark`, `singapore`, `hongkong` |
+| Third-party boards | `efinancial`, `linkedin` |
 | Classification | `tag`, `list`, `sample`, `labels`, `corrections` |
 | Operations | `coverage`, `alerts`, `daily` |
 

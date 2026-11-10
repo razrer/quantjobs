@@ -569,3 +569,42 @@ junk.
   a poll's `last_seen` update 5.0 → 1.6 s per 100,000 postings, body coverage 96
   → 23.5 s, body queue 25 → 13 s, board build 149 → 91 s, a `tag` with nothing to do
   162 → 20 s.
+
+## Stage 69 — third-party boards: eFinancialCareers and LinkedIn (tagger 74)
+
+Requested: a methodology review of job-ad exhaustiveness, then whatever it finds
+best. The user put third-party boards in bounds provided they need no regular
+manual upkeep, and named Hong Kong, Stockholm and Singapore as priorities.
+
+- Measured first. 72,254 firms give 1,354 polled boards; the live shortlist comes
+  from 87 employer domains and 25 portal employers; 164 of 306 roster firms have a
+  board we read (Hong Kong 43%, Switzerland 39%, Stockholm 62%). Known firms are
+  lost to wrong domains (UBS stored as `instragram.com`, Morgan Stanley as
+  `morgan.se`, SEK as `class-c.com`), to 403 refusals, and to having no careers
+  page at all. No source read recruiters or any finance-specific board.
+- Verified live, no account or key: eFinancialCareers' search API, LinkedIn's
+  guest job search, Workable's and SmartRecruiters' cross-tenant search, and the
+  Common Crawl URL index. The October review's exclusion of eFinancialCareers as
+  needing an account was wrong.
+- `efinancial`: an empty query per location lists that location's whole board,
+  100 rows a page with descriptions. Nine hub tokens. A hub is written only after
+  its walk matches the advertised total, and only then sets `removed_at` on what
+  it no longer lists. First sweep: 15,245 adverts, 159 requests, under 3 minutes.
+- `linkedin`: guest search per hub over eight broad keywords, ten cards a page,
+  about 1,000 rows a query at most. Queries that hit that window are named in the
+  output, and their hub withdraws a posting only after 28 days unseen. `bodies`
+  fetches descriptions for titles the tagger cannot place. Four seconds a request.
+- Both send a client name only, not the contact address in `http.USER_AGENT`.
+- Both are in `dedup.PORTALS`, `lexicon.NOT_A_BOARD`, `alerts._expected` and
+  `daily --full`. `NOT_A_BOARD` is fingerprinted, hence tagger 74; no rule changed.
+- eFinancialCareers against what we poll, by title pattern rather than the tagger:
+  Hong Kong 240 quant-like adverts at 70 employers, 140 of them at 52 employers we
+  do not poll (recruiters, HKEX, Bank of China, Morgan Stanley, Balyasny, Pinpoint);
+  Singapore 86 at 46; Netherlands 36 at 14; Switzerland 35 at 15. Sweden holds 9
+  adverts and Denmark 6, so LinkedIn is the route that matters there.
+- Recruiter adverts name the agency as employer and are kept as published.
+- 1,299 tests pass.
+- Not done: the wrong-domain fix; vendor-first enumeration of ATS tenants from
+  Common Crawl and the vendors' own search; the generic JSON-LD and sitemap readers
+  for tier B; a re-tag at 74 and a publish. LinkedIn's first full sweep and its
+  miss trace are recorded below when complete.

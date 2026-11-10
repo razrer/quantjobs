@@ -17,9 +17,9 @@ from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 from . import (
-    alerts, ats, audit, bodies, coverage, db, discover, domains, extract,
-    fca, http, iesjobs, jobbsafari, jobindex, jobroom_ch, jobstream, labels,
-    mycareersfuture, pages,
+    alerts, ats, audit, bodies, coverage, db, discover, domains, efinancial,
+    extract, fca, http, iesjobs, jobbsafari, jobindex, jobroom_ch, jobstream,
+    labels, linkedin, mycareersfuture, pages,
     resolve, sites, tagging,
 )
 from .registries import REGISTRIES
@@ -436,6 +436,29 @@ def _hongkong(database: str, max_pages: int) -> int:
         print(f"  the portal advertised {swept.advertised:,d} in total")
     for got in swept.slices:
         print(f"    {got.seen:>5,d} / {got.advertised:<5,d}  {got.name}")
+    return _shortfall(swept)
+
+
+def _hub_search(database: str, module, only: list[str] | None, pages: int | None) -> int:
+    """eFinancialCareers or LinkedIn: one walk per hub, reported per hub."""
+    connection, swept = _sweep(
+        database, module.NAME, lambda c: module.run(c, only=only, pages=pages)
+    )
+    print(
+        f"swept {len(swept.hubs)} hub(s) over {swept.pages:,d} pages: "
+        f"{swept.seen:,d} postings, {swept.written:,d} written"
+    )
+    for hub in swept.hubs:
+        advertised = getattr(hub, "advertised", None)
+        windowed = getattr(hub, "windowed", None)
+        print(
+            f"    {hub.seen:>6,d}"
+            + (f" / {advertised:<6,d}" if advertised is not None else "")
+            + f"  {hub.token}, {hub.withdrawn:,d} withdrawn"
+            + (f"; hit the result window: {', '.join(windowed)}" if windowed else "")
+        )
+    _held(connection, module.NAME, "ads",
+          withdrawn="SUM(removed_at IS NOT NULL)")
     return _shortfall(swept)
 
 
@@ -1359,6 +1382,10 @@ def _daily(database: str, full: bool, publish: bool) -> int:
         # the two and everything else hides underneath them.
         gathered.insert(0, ("singapore", lambda: _singapore(database, None)))
         gathered.insert(1, ("hongkong", lambda: _hongkong(database, iesjobs.MAX_PAGES)))
+        # The two third-party boards. Each is one host of its own; LinkedIn is
+        # the slow one, at four seconds a page.
+        gathered.append(("efinancial", lambda: _hub_search(database, efinancial, None, None)))
+        gathered.append(("linkedin", lambda: _hub_search(database, linkedin, None, None)))
         # Registry alerts use a 30-day freshness limit. A weekly sweep that
         # never reads registries lets every employer source go stale even
         # while the job board itself is fresh. Refresh the established sources
@@ -1495,6 +1522,18 @@ def main(argv: list[str] | None = None) -> int:
         help="only read back to this ISO date -- a top-up between full sweeps,"
         " which are cheap enough (~850 requests) to just do",
     )
+
+    for name, module, text in (
+        ("efinancial", efinancial, "sweep eFinancialCareers, every advert in each hub"),
+        ("linkedin", linkedin, "sweep LinkedIn's public job search by keyword, per hub"),
+    ):
+        hub_command = commands.add_parser(name, help=text)
+        hub_command.add_argument(
+            "--only", help="comma-separated hubs: " + ", ".join(module.HUBS)
+            + ". A subset is a probe and is not recorded as a run")
+        hub_command.add_argument(
+            "--pages", type=int,
+            help="stop each walk after this many pages; marks the sweep partial")
 
     hongkong_command = commands.add_parser(
         "hongkong",
@@ -1700,6 +1739,10 @@ def main(argv: list[str] | None = None) -> int:
         "bodies": lambda: _bodies(args.db, args.limit, args.workers),
         "singapore": lambda: _singapore(args.db, args.since),
         "hongkong": lambda: _hongkong(args.db, args.max_pages),
+        "efinancial": lambda: _hub_search(
+            args.db, efinancial, args.only.split(",") if args.only else None, args.pages),
+        "linkedin": lambda: _hub_search(
+            args.db, linkedin, args.only.split(",") if args.only else None, args.pages),
         "denmark": lambda: _denmark(
             args.db, args.since,
             [int(part) for part in args.only.split(",")] if args.only else None),

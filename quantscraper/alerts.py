@@ -390,13 +390,15 @@ def _expected() -> set[str]:
     one promise -- it reads, and it depends on nothing that writes.
     """
     from . import (
-        iesjobs, jobbsafari, jobindex, jobroom_ch, jobstream, mycareersfuture,
+        efinancial, iesjobs, jobbsafari, jobindex, jobroom_ch, jobstream,
+        linkedin, mycareersfuture,
     )
     from .registries import REGISTRIES
 
     return set(REGISTRIES) | {
         module.NAME for module in
-        (jobstream, jobroom_ch, jobindex, jobbsafari, mycareersfuture, iesjobs)
+        (jobstream, jobroom_ch, jobindex, jobbsafari, mycareersfuture, iesjobs,
+         efinancial, linkedin)
     }
 
 

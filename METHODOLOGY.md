@@ -50,6 +50,12 @@ These reversible display gates preserve raw records and human relevance labels.
    overwrite resolved Workday locations. Changed evidence invalidates derived tags;
    unchanged polls do not need reclassification.
 
+7. Read third-party boards where employers with no careers page advertise:
+   eFinancialCareers as a per-hub census and LinkedIn's public guest search by
+   broad keyword. A keyword search is not a census; report the queries that hit
+   the result window. Recruiter adverts are kept under the agency's name. These
+   hosts receive no contact address. No login, and a refusal ends that hub.
+
 The weekly sequence is corrections → rebuild firms → concurrent source reads
 (including the employer registries and the Layer 2 chain that resolves domains,
 fingerprints boards and discovers the rest) → tag → bodies →
