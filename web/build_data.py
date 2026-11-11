@@ -732,6 +732,25 @@ def firm_key(domain: str | None, employer: str | None) -> str:
     return "~" + (employer or "unknown").casefold()
 
 
+def _survivor(card: dict) -> tuple:
+    """Which copy of one opening the board shows.
+
+    **A portal's copy read from its title alone never wins.** Fit came first
+    here until LinkedIn arrived with titles only: 139 firm-board cards were
+    replaced by a LinkedIn copy rated higher for knowing less -- IMC's
+    "Quantitative Trader Intern 2027", out of scope once its body is read,
+    came back as `plausible` behind a LinkedIn link. Past that, as before:
+    fit, then the firm's own board, then the newer.
+    """
+    portal = card["ats"] in dedup.PORTALS
+    return (
+        0 if portal and "about" not in card else 1,
+        _FIT_RANK.get(card.get("fit"), 0),
+        0 if portal else 1,
+        card["posted"],
+    )
+
+
 def main() -> None:
     with closing(sqlite3.connect(DB)) as connection:
         connection.row_factory = sqlite3.Row
@@ -1086,11 +1105,7 @@ def _build(connection) -> None:
     # source rather than a firm's board against a recruiter's eleven reposts.
     across = len(jobs)
     jobs = dedup.collapse_across_sources(
-        jobs, rank=lambda card: (
-            _FIT_RANK.get(card.get("fit"), 0),
-            0 if card["ats"] in dedup.PORTALS else 1,
-            card["posted"],
-        ))
+        jobs, rank=_survivor)
     folded_across = across - len(jobs)
 
     # **One card per advertisement again, for the copies whose text drifted.**
@@ -1102,11 +1117,7 @@ def _build(connection) -> None:
     near = len(jobs)
     scores = dedup.Scores(_read_scores())
     jobs = dedup.collapse_near_duplicates(
-        jobs, rank=lambda card: (
-            _FIT_RANK.get(card.get("fit"), 0),
-            0 if card["ats"] in dedup.PORTALS else 1,
-            card["posted"],
-        ), scores=scores)
+        jobs, rank=_survivor, scores=scores)
     _write_scores(scores.used)
     folded_near = near - len(jobs)
     dedup.mark_similar(jobs, firms)

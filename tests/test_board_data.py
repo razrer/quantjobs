@@ -393,5 +393,27 @@ class TheBuildRefusesToShipNothingTest(unittest.TestCase):
         self.assertLess(build_data.MIN_CARDS, 4_211 // 4)
 
 
+class SurvivorTest(unittest.TestCase):
+    """Which copy of one opening is shown, measured when LinkedIn arrived."""
+
+    def test_a_portal_copy_read_from_its_title_never_beats_the_firms_board(self):
+        """IMC's intern posting is out of scope once its body is read; the
+        LinkedIn card, a title and nothing else, rated it `plausible` and
+        replaced it, as 139 such cards did on the first build."""
+        own = {"ats": "greenhouse", "posted": "2026-10-01", "about": "…"}
+        linkedin = {"ats": "linkedin", "posted": "2026-11-09", "fit": "plausible"}
+        self.assertGreater(build_data._survivor(own), build_data._survivor(linkedin))
+
+    def test_a_portal_copy_with_a_description_still_wins_on_fit(self):
+        own = {"ats": "workday", "posted": "2026-10-01", "fit": "plausible"}
+        portal = {"ats": "efinancial", "posted": "2026-10-01", "fit": "strong", "about": "…"}
+        self.assertGreater(build_data._survivor(portal), build_data._survivor(own))
+
+    def test_a_tie_still_goes_to_the_firms_board(self):
+        own = {"ats": "workday", "posted": "2026-10-01", "fit": "strong"}
+        portal = {"ats": "efinancial", "posted": "2026-11-01", "fit": "strong", "about": "…"}
+        self.assertGreater(build_data._survivor(own), build_data._survivor(portal))
+
+
 if __name__ == "__main__":
     unittest.main()
