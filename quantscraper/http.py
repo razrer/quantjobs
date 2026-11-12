@@ -79,8 +79,11 @@ HOST_INTERVAL_S = {
     "api.mycareersfuture.gov.sg": 4.0,
     "apply.workable.com": 4.0,
     "www2.jobs.gov.hk": 4.0,
-    # LinkedIn's guest search: unauthenticated, read weekly, kept slow.
-    "www.linkedin.com": 4.0,
+    # LinkedIn's guest search: unauthenticated, read weekly, one connection.
+    # Four seconds made the nine hubs a six-hour sweep. Measured 12 November
+    # 2026: 717 consecutive pages at two seconds, no 429 and no slow answer.
+    # Two is what was measured, not a limit that was probed for.
+    "www.linkedin.com": 2.0,
     # Workable's cross-tenant search answered 429 after ~350 pages at one a
     # second, 10 November 2026. Set to the slow interval, not tuned to a limit.
     "jobs.workable.com": 4.0,

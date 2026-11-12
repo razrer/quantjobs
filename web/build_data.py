@@ -203,7 +203,13 @@ GATES = {
 # **Sources where an unreadable card is measured noise rather than a gap.**
 # A set rather than a literal so the next portal that publishes no employer is
 # one line, and so the reason a source is here stays attached to the name.
-UNREAD_IS_NOISE = frozenset({"iesjobs"})
+# **LinkedIn, measured 12 November 2026.** Its keyword search matches on the
+# description, so most of what it returns has an unplaceable title. Of 1,666
+# such postings whose description was then fetched, 1,456 were out of scope,
+# 156 still unreadable, 54 `plausible` or `stretch` and none higher. `bodies`
+# still fetches every one, so those 54 reach the board rated; what this hides
+# is the card nothing has read yet, 5,951 of them on the first build.
+UNREAD_IS_NOISE = frozenset({"iesjobs", "linkedin"})
 
 
 # **The floor every other source in this project has, on the one step that

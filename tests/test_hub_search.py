@@ -205,7 +205,8 @@ class RegistrationTest(unittest.TestCase):
 
     def test_linkedin_has_a_body_fetcher_and_a_slow_interval(self):
         self.assertIn(linkedin.NAME, bodies.FETCHERS)
-        self.assertGreaterEqual(http.HOST_INTERVAL_S[linkedin.HOST], 4.0)
+        # Two seconds is the measured interval; anything faster is unmeasured.
+        self.assertGreaterEqual(http.HOST_INTERVAL_S[linkedin.HOST], 2.0)
 
     def test_neither_host_is_sent_a_contact_address(self):
         for module in (efinancial, linkedin):
