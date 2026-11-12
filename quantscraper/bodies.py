@@ -838,8 +838,19 @@ def applicantpro_body(row) -> Fetched:
 
 
 def linkedin_body(row) -> Fetched:
-    """LinkedIn's public posting fragment: the description and the place."""
-    return Fetched(*linkedin.body(row["job_id"]))
+    """LinkedIn's public posting fragment: the description and the place.
+
+    A posting taken down since the sweep answers 404 or 410, which is an
+    answer about that posting and ended the first pass 500 rows in. Anything
+    else -- a 429 past its backoff, a 999 -- is the host refusing and is
+    raised, so the pass stops rather than asking 5,000 more times.
+    """
+    try:
+        return Fetched(*linkedin.body(row["job_id"]))
+    except urllib.error.HTTPError as exc:
+        if exc.code in (404, 410):
+            return Fetched(None, None)
+        raise
 
 
 FETCHERS = {

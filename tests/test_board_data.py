@@ -305,6 +305,7 @@ class UnreadCensusCardTest(unittest.TestCase):
 
     def test_an_unreadable_card_from_the_census_is_noise(self):
         self.assertTrue(build_data.unread_census("iesjobs", "unknown"))
+        self.assertTrue(build_data.unread_census("linkedin", "unknown"))
 
     def test_a_rated_card_survives_however_bad_the_source_average_is(self):
         """This is the whole safety argument, and it is the second half.

@@ -208,6 +208,20 @@ class RegistrationTest(unittest.TestCase):
         # Two seconds is the measured interval; anything faster is unmeasured.
         self.assertGreaterEqual(http.HOST_INTERVAL_S[linkedin.HOST], 2.0)
 
+    def test_a_posting_taken_down_is_no_body_and_a_refusal_is_raised(self):
+        import urllib.error
+
+        def answer(code):
+            def body(job_id):
+                raise urllib.error.HTTPError("https://x", code, "", None, None)
+            return body
+
+        with mock.patch.object(linkedin, "body", answer(404)):
+            self.assertIsNone(bodies.linkedin_body({"job_id": "1"}).description)
+        with mock.patch.object(linkedin, "body", answer(429)):
+            with self.assertRaises(urllib.error.HTTPError):
+                bodies.linkedin_body({"job_id": "1"})
+
     def test_neither_host_is_sent_a_contact_address(self):
         for module in (efinancial, linkedin):
             self.assertNotIn("@", module.HEADERS["User-Agent"])
