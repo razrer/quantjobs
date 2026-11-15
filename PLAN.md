@@ -606,8 +606,7 @@ manual upkeep, and named Hong Kong, Stockholm and Singapore as priorities.
 - 1,299 tests pass.
 - Not done: the wrong-domain fix; vendor-first enumeration of ATS tenants from
   Common Crawl and the vendors' own search; the generic JSON-LD and sitemap readers
-  for tier B; a re-tag at 74 and a publish. LinkedIn's first full sweep and its
-  miss trace are recorded below when complete.
+  for tier B; a re-tag at 74 and a publish. LinkedIn's first full sweep is Stage 71.
 
 ## Stage 70 — Stage 69's open items: domains, vendors, tier B (tagger 75)
 
@@ -669,4 +668,49 @@ Requested: the four items Stage 69 left open.
   existing cross-source rank (fit first, own board on a tie). None hidden.
 - 1,333 tests pass.
 - Not done: Common Crawl; a BrassRing reader; the US Workable hubs (next weekly).
-  LinkedIn's first sweep (started 15:45) had written no hub by 19:00.
+  LinkedIn's first sweep failed every hub that evening; see Stage 71.
+
+## Stage 71 — LinkedIn's first sweep, its faults, and what it costs
+
+Requested: finish Stage 69, then look for speed.
+
+- The first sweep failed all nine hubs. Past a query's last card the endpoint
+  sends a 26-byte doctype-and-comment page, which `parse` read as a wall. That
+  scaffold is now an empty page; anything else without cards is still `Blocked`.
+- Second sweep, four seconds a request, no refusal: 31,646 postings over 5,844
+  pages. Sweden 3,740, Hong Kong 2,472, Singapore 3,550, Denmark 3,181,
+  Netherlands 3,799, Switzerland 3,712, New York 3,818, Chicago 3,729, Boston
+  3,645. Every hub had a windowed keyword, so all withdraw on the 28-day rule.
+- Bodies: 6,827 titles the tagger could not place. 6,816 descriptions stored, 11
+  taken down. Read: 375 rated, 5,768 rejected, 672 still unknown (5.5% yield).
+  A 404 or 410 for one posting had ended the whole pass; it is now "no body" for
+  that posting, and any other error still stops the host.
+- Board faults found on the first build. 139 firm-board cards were replaced by
+  LinkedIn's title-only copy of the same job, because the cross-source rank put
+  fit before body. `_survivor` now ranks a title-only portal copy below any card
+  with a body; the eight remaining differences are stack representatives and one
+  unrated eFinancialCareers copy. And 11,308 unread LinkedIn titles reached the
+  board as cards; `linkedin` joined `UNREAD_IS_NOISE`.
+- Board, same tagger: 6,660 → 8,597 cards. LinkedIn 1,920: New York 589, Singapore
+  354, Hong Kong 339, Chicago 225, Switzerland 108, Amsterdam 107, Boston 97,
+  Stockholm 26, Copenhagen 22. Eight old cards left (4 Workday, 3 Greenhouse, 1
+  Eightfold), each folded into a copy. 208 LinkedIn cards carry a body.
+- By employer name against every other source's cards (overstated: JPMorganChase
+  and Goldman Sachs are polled under other spellings): Hong Kong 244 cards at 123
+  names (CITIC Securities, Futu, Huatai, Polymer, AQUMON, Bank of China HK),
+  Singapore 265 at 151 (Metabit, PhillipCapital, Tardis), Stockholm 19 at 14.
+- Sweden: 27 cards, 5 strong (Nordea, Landshypotek, SEB, SBAB quantitative risk
+  and valuation). New employers: SBAB, Landshypotek, Ingrid (power trading), NOBA,
+  EIB. Three are recruiters' or aggregators' copies of an SBAB or DNB Carnegie job.
+- Not cleaned: reposts under the wrong employer ("Greater Boston Chamber of
+  Commerce", "Jobbsafari") are kept as published.
+- Speed. The board build is 75–125 s and a full re-tag 17 min (incremental: 2
+  min); the week's time is network. LinkedIn serves ten cards a request whatever
+  `count` says; the 60-card search page ignores `start`. A Hong Kong probe at two
+  seconds: 717 pages, no 429, no slow answer, so the interval is 2.0 (measured, not
+  a probed limit). No keyword cut: seven of eight found rated postings no other
+  did. No past-week-only read: a fifth of rated postings are over 30 days old.
+  LinkedIn now costs about 3.2 h a week for the sweep and about 1.3 h for bodies.
+- 1,337 tests pass.
+- Not done: a publish; alternating the six non-priority hubs by week (about an
+  hour saved, the user's call); Common Crawl; a BrassRing reader.
