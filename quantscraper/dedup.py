@@ -214,14 +214,152 @@ def _joined(a: tuple[str, ...], b: tuple[str, ...]) -> bool:
         head = one[0]
         if len(head) < _MIN_JOINED_NAME or head in _GENERIC_NAME:
             continue
-        built = ""
-        for word in many:
+        built = many[0]
+        for word in many[1:]:
             built += word
             if built == head:
                 return True
             if not head.startswith(built):
                 break
     return False
+
+
+# --- one firm under several keys --------------------------------------------
+#
+# A card's firm is its board's domain, or `~` and the employer name a portal
+# printed. So SEB is `sebgroup.com` on its own board and `~seb` on Jobbsafari
+# and LinkedIn, and grouping "by firm" shows it twice. `firm_groups` joins the
+# keys for display. It is stricter than `same_company`, which only ever decides
+# with a title and a hub already agreeing: here nothing else agrees, so a lone
+# shared word is not enough and two firms' domains never join on a name alone.
+
+_SECOND_LEVEL = frozenset({"com", "co", "org", "net", "gov", "edu", "ac"})
+
+
+def _domain_label(domain: str) -> str:
+    """`nordea` for `careers.nordea.com`, `dbs` for `dbs.com.sg`."""
+    parts = domain.lower().split(".")
+    if len(parts) >= 3 and parts[-2] in _SECOND_LEVEL:
+        return parts[-3]
+    return parts[-2] if len(parts) >= 2 else parts[0]
+
+
+def _a_name(tokens: tuple[str, ...]) -> bool:
+    return bool(tokens) and not set(tokens) <= _GENERIC_NAME | _NO_NAME
+
+
+def _acronym(short: tuple[str, ...], long: tuple[str, ...]) -> bool:
+    """`SEB` for `Skandinaviska Enskilda Banken`: three or more words, each a
+    word rather than a particle, whose initials are the whole short name."""
+    return (len(short) == 1 and 3 <= len(short[0]) <= 4 and len(long) == len(short[0])
+            and all(len(word) >= 4 for word in long)
+            and "".join(word[0] for word in long) == short[0])
+
+
+def _names_one_firm(a: tuple[str, ...], b: tuple[str, ...], prefix: bool) -> bool:
+    if not (_a_name(a) and _a_name(b)):
+        return False
+    if a == b or _joined(a, b) or _acronym(a, b) or _acronym(b, a):
+        return True
+    if prefix:
+        short, long = (a, b) if len(a) <= len(b) else (b, a)
+        return (long[:len(short)] == short and len(short[0]) >= _MIN_LONE_NAME
+                and short[0] not in _GENERIC_NAME)
+    return False
+
+
+def firm_groups(firms: dict, employers: dict | None = None) -> dict[str, str]:
+    """Map each firm key that is another key's firm onto one key.
+
+    Three joins, in order of how much they can be trusted:
+    - two domains with the same registrable label whose names agree
+      (`careers.nordea.com` and `nordea.com`, `handelsbanken.se` and `.nl`);
+    - a portal name onto the one domain cluster it names -- the same name, a
+      leading run (`Nordea` of `Nordea Bank Abp, filial i Sverige`), one word
+      (`JPMorganChase`) or initials (`SEB`). Naming two clusters joins neither;
+      an exact name wins over a leading run;
+    - portal names left over onto each other when the names are the same.
+    The kept key is the cluster's domain with the most cards.
+    """
+    employers = employers or {}
+
+    def tokens_of(key: str) -> set[tuple[str, ...]]:
+        names = {firms[key].get("name")} | set(employers.get(key, ()))
+        return {company_tokens(name) for name in names if name} - {()}
+
+    parent = {key: key for key in firms}
+
+    def find(key: str) -> str:
+        while parent[key] != key:
+            parent[key] = parent[parent[key]]
+            key = parent[key]
+        return key
+
+    domains = [k for k in firms if not k.startswith("~")]
+    portals = [k for k in firms if k.startswith("~")]
+    tokens = {k: tokens_of(k) for k in firms}
+
+    by_label: dict[str, list[str]] = {}
+    for key in domains:
+        by_label.setdefault(_domain_label(firms[key].get("domain") or key), []).append(key)
+    for keys in by_label.values():
+        for i, a in enumerate(keys):
+            for b in keys[i + 1:]:
+                if find(a) != find(b) and any(
+                        _names_one_firm(x, y, prefix=True)
+                        for x in tokens[a] for y in tokens[b]):
+                    parent[find(a)] = find(b)
+
+    # Candidates by first word, and by every initialism a domain name spells.
+    index: dict[str, set[str]] = {}
+    for key in domains:
+        for t in tokens[key]:
+            index.setdefault(t[0], set()).add(key)
+            if len(t) >= 3:
+                index.setdefault("".join(w[0] for w in t), set()).add(key)
+    for key in portals:
+        candidates = set()
+        for t in tokens[key]:
+            candidates |= index.get(t[0], set())
+            if len(t) >= 3:
+                candidates |= index.get("".join(w[0] for w in t), set())
+            for word in (t[0][:n] for n in range(_MIN_JOINED_NAME, len(t[0]))):
+                candidates |= index.get(word, set())
+        exact, loose = set(), set()
+        for other in candidates:
+            for x in tokens[key]:
+                for y in tokens[other]:
+                    if _names_one_firm(x, y, prefix=False):
+                        exact.add(find(other))
+                    elif _names_one_firm(x, y, prefix=True):
+                        loose.add(find(other))
+        chosen = exact if exact else loose
+        if len(chosen) == 1:
+            parent[find(key)] = chosen.pop()
+
+    left: dict[tuple[str, ...], str] = {}
+    for key in portals:
+        if find(key) != key:
+            continue
+        for t in tokens[key]:
+            if not _a_name(t):
+                continue
+            if t in left and find(left[t]) != find(key):
+                parent[find(key)] = find(left[t])
+            left.setdefault(t, key)
+
+    clusters: dict[str, list[str]] = {}
+    for key in firms:
+        clusters.setdefault(find(key), []).append(key)
+    out: dict[str, str] = {}
+    for members in clusters.values():
+        if len(members) < 2:
+            continue
+        kept = max(members, key=lambda k: (not k.startswith("~"), firms[k].get("n", 0), k))
+        for key in members:
+            if key != kept:
+                out[key] = kept
+    return out
 
 
 def _collapse_groups(cards, groups, key, rank, matches, later=None):

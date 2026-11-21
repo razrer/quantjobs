@@ -1614,7 +1614,9 @@ main { padding: 0.875rem 1rem 6rem; min-width: 0; }
         }
       }
     }
-    const threshold = state.group === "similar" ? 2 : STACK_AT;
+    // A firm with two postings is already a firm to read as one: AP4, Blaq and
+    // Scania each had two cards side by side under "by firm".
+    const threshold = ["similar", "firm", "firm+hub"].includes(state.group) ? 2 : STACK_AT;
     return out.map((u) => (u.list.length >= threshold ? u : u.list.map((job) => ({ job, key: u.key })))).flat();
   }
 

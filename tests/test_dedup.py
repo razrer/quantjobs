@@ -72,6 +72,64 @@ class VisualBundleTest(unittest.TestCase):
         self.assertNotEqual(dedup.bundle_place("London; Hong Kong"), "hong kong")
 
 
+def _firm(name, domain=None, n=1):
+    return {"name": name, "domain": domain, "n": n}
+
+
+class FirmGroupsTest(unittest.TestCase):
+    """One firm under several keys, off the board of 21 November 2026. Unlike
+    the folds, no title or place agrees here, so the refusals matter most."""
+
+    def test_a_portal_name_joins_the_firms_own_board(self):
+        firms = {"sebgroup.com": _firm("Seb", "sebgroup.com", 5), "~seb": _firm("Seb", n=27),
+                 "~skandinaviska enskilda banken ab (publ)":
+                     _firm("Skandinaviska Enskilda Banken AB (Publ)"),
+                 "nordea.com": _firm("Nordea", "nordea.com", 7), "~nordea": _firm("Nordea"),
+                 "careers.nordea.com": _firm("Nordea Bank Abp, filial i Sverige",
+                                             "careers.nordea.com"),
+                 "jpmorganchase.com": _firm("JPMorgan", "jpmorganchase.com", 700),
+                 "~jpmorgan chase & co.": _firm("JPMorgan Chase")}
+        merged = dedup.firm_groups(firms)
+        self.assertEqual(merged["~seb"], "sebgroup.com")
+        self.assertEqual(merged["~skandinaviska enskilda banken ab (publ)"], "sebgroup.com")
+        self.assertEqual(merged["~nordea"], "nordea.com")
+        self.assertEqual(merged["careers.nordea.com"], "nordea.com")
+        self.assertEqual(merged["~jpmorgan chase & co."], "jpmorganchase.com")
+        self.assertNotIn("sebgroup.com", merged)
+
+    def test_one_firm_on_two_country_domains(self):
+        firms = {"handelsbanken.se": _firm("Svenska Handelsbanken", "handelsbanken.se", 2),
+                 "handelsbanken.nl": _firm("Svenska Handelsbanken", "handelsbanken.nl", 1)}
+        self.assertEqual(dedup.firm_groups(firms), {"handelsbanken.nl": "handelsbanken.se"})
+
+    def test_two_portal_spellings_of_one_name(self):
+        firms = {"~swedbank ab": _firm("Swedbank", n=3), "~swedbank": _firm("Swedbank")}
+        self.assertEqual(len(dedup.firm_groups(firms)), 1)
+
+    def test_firms_sharing_a_first_word_stay_apart(self):
+        """`Maverick` is three firms and `Northwestern` a university and an
+        insurer; a lone word only ever named a firm with a title agreeing."""
+        firms = {"maverickderivatives.com": _firm("Maverick Derivatives", "maverickderivatives.com"),
+                 "~maverick currencies": _firm("Maverick Currencies"),
+                 "~maverick trading": _firm("Maverick Trading"),
+                 "capital.northwesternmutual.com": _firm(
+                     "Northwestern Mutual Investment Management", "capital.northwesternmutual.com"),
+                 "~northwestern university": _firm("Northwestern University"),
+                 "citadel.com": _firm("Citadel", "citadel.com"),
+                 "citadelsecurities.com": _firm("Citadel Securities", "citadelsecurities.com"),
+                 "~capital group": _firm("Capital Group"),
+                 "~capital dynamics": _firm("Capital Dynamics"),
+                 "~confidential": _firm("Confidential"),
+                 "~confidential company": _firm("Confidential")}
+        self.assertEqual(dedup.firm_groups(firms), {})
+
+    def test_a_portal_name_naming_two_firms_joins_neither(self):
+        firms = {"keyrock.eu": _firm("Keyrock Europe", "keyrock.eu"),
+                 "keyrock.com": _firm("Keyrock Systems", "keyrock.com"),
+                 "~keyrock": _firm("Keyrock")}
+        self.assertNotIn("~keyrock", dedup.firm_groups(firms))
+
+
 class FingerprintTest(unittest.TestCase):
     def test_the_same_advertisement_twice_is_one_key(self):
         """Anradus reposts `Quant Researcher #77900` every five days under a

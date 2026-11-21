@@ -836,6 +836,8 @@ def _build(connection) -> None:
         )
     }
     firms: dict[str, dict] = {}
+    # Every employer name a firm's cards were published under, for `firm_groups`.
+    employers: dict[str, set[str]] = {}
     jobs = []
     gated: dict[str, int] = {reason: 0 for reason in GATES}
     # What the board-profile gate removed, by employer. It is the only gate
@@ -1015,6 +1017,8 @@ def _build(connection) -> None:
                 "n": 0,
             }
         firms[key]["n"] += 1
+        if row["employer"]:
+            employers.setdefault(key, set()).add(row["employer"])
 
         when, precision = posted(row["posted_at"], row["first_seen"], row["last_seen"])
 
@@ -1128,6 +1132,14 @@ def _build(connection) -> None:
         jobs, rank=_survivor, scores=scores)
     _write_scores(scores.used)
     folded_near = near - len(jobs)
+    # **One firm, one key**, after every fold: the folds and the hand
+    # rejections are keyed on the firm as the source named it, and this only
+    # decides which pile a card is shown in. See `dedup.firm_groups`.
+    merged = dedup.firm_groups(firms, employers)
+    for job in jobs:
+        job["firm"] = merged.get(job["firm"], job["firm"])
+    for key, kept in merged.items():
+        firms[kept]["n"] += firms.pop(key)["n"]
     dedup.mark_similar(jobs, firms)
 
     # **The diagnostics print before anything is written and before anything

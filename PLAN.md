@@ -752,3 +752,33 @@ Requested: fewer duplicate cards before the publish; a nice-to-have.
   Shenzhen, Qube London and Dubai), Citadel and Citadel Securities, and portal
   copies whose places differ inside a territory hub (Weehawken vs Weehawken
   Township; Gland, VD vs Gland, Vaud).
+
+## Stage 73 — one firm, one pile
+
+Requested: the board is fragmented when grouped; AP4, SEB, Svenska Handelsbanken,
+Blaq and Scania did not group.
+
+- Two causes. A card's firm is its board's domain or `~` plus the name a portal
+  printed, so SEB was `sebgroup.com` (5 cards) and `~seb` (27) and "Skandinaviska
+  Enskilda Banken AB (publ)"; Handelsbanken was `.se` and `.nl`; Nordea three
+  keys. And "by firm" stacked only from three cards, so AP4, Blaq and Scania,
+  two cards each, never stacked.
+- `dedup.firm_groups` joins keys for display, after every fold (folds and hand
+  rejections stay keyed on the firm as the source named it). Stricter than
+  `same_company`, since no title agrees here: two domains join only on the same
+  registrable label and agreeing names; a portal name joins the one domain
+  cluster it names (same name, a leading run, one-word brand, initials), never
+  two; leftover portal names join on the same name. A shared first word alone
+  never joins (Maverick Derivatives/Currencies/Trading, Northwestern
+  University/Mutual, Citadel/Citadel Securities stay apart).
+- Found while checking: `_joined` (Stage 72) accepted a match after the first
+  word. It changed no fold, because the lone-word rule already accepted those
+  pairs, but would have joined the Maverick firms here. Fixed.
+- "by firm" and "by firm + place" stack from two cards.
+- 1,350 tests pass.
+- Same cards (8,697, identical ids); firm keys 2,555 → 2,323. SEB 33, Nordea 12,
+  Swedbank 4, Handelsbanken 3 now one firm each.
+- Left: "SBAB Bank AB (publ)" (one card) beside SBAB, a four-letter name being
+  too short to trust alone; "Ernst & Young Aktiebolag" beside "EY". Two registry
+  display names are wrong and now lead merged firms: galaxy.com shows "Galaxy
+  Insurance Consultants" (it is Galaxy Digital), nordiska.se shows a share class.
