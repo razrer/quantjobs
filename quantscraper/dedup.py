@@ -1,7 +1,8 @@
 """Conservative display-only duplicate folding; source rows are never deleted.
 
 Exact fingerprints use firm, place, and a substantial body (or a short title).
-Cross-source folding also requires employer corroboration and a shared hub.
+Cross-source folding also requires employer corroboration and a shared hub;
+two portals fold only as two different sources sharing a city.
 Near-duplicate folding compares substantial bodies within firm/place/title.
 Counts and available deadlines survive. Incident evidence: docs/history/engineering.md."""
 
@@ -34,16 +35,61 @@ PORTALS = frozenset({
 })
 
 
+# How each hub city is written by the sources that write it out in full:
+# LinkedIn's "Hong Kong, Hong Kong SAR", Workday's "New York, NY, United States",
+# Jobtech's "Stockholm, Stockholms lan". A comma part after the city may be
+# dropped only when it is one of that city's own region or country names, so
+# "Solna, Stockholm County" and "London; Dubai" keep their own key.
+_CITY_ALIASES = {
+    "kobenhavn": "copenhagen", "geneve": "geneva", "zuerich": "zurich",
+    "hong kong sar": "hong kong", "new york city": "new york", "nyc": "new york",
+    "new york city metropolitan area": "new york",
+    "greater chicago area": "chicago", "greater boston": "boston",
+}
+_US = {"united states", "united states of america", "usa", "us"}
+_CITY_QUALIFIERS = {
+    "hong kong": {"hong kong", "hong kong sar", "hksar", "hong kong s a r", "china"},
+    "singapore": {"singapore"},
+    "new york": {"ny", "new york"} | _US,
+    "chicago": {"il", "illinois"} | _US,
+    "boston": {"ma", "massachusetts"} | _US,
+    "stockholm": {"stockholm", "stockholm county", "stockholms lan", "sweden", "sverige"},
+    "copenhagen": {"capital region of denmark", "region hovedstaden", "hovedstaden",
+                   "denmark", "danmark"},
+    "amsterdam": {"north holland", "noord holland", "netherlands", "the netherlands",
+                  "nederland"},
+    "zurich": {"zh", "zurich", "switzerland", "schweiz"},
+    "geneva": {"ge", "geneva", "geneve", "switzerland", "suisse"},
+    "london": {"london", "greater london", "england", "united kingdom", "uk"},
+}
+
+
 def bundle_place(location: str) -> str:
     """Normalize documented place variants for reversible visual stacks only."""
-    place = fold(location or "").strip()
+    raw = location or ""
+    place = fold(raw).strip()
     if place in {"stockholm", "stockholm stockholms lan", "stockholm sverige",
                  "stockholm sweden"}:
         return "stockholm"
     if place in {"geneva ge", "geneve ge"}:
-        return "geneve ge"
+        return "geneva"
     if place == "singapore" or re.fullmatch(r"singapore d\d\d .+", place):
         return "singapore"
+    if not re.search(r"[;|/]", raw):
+        parts = [fold(part).strip() for part in raw.split(",")]
+        parts = [part for part in parts if part and not part.isdigit()]
+        # Two city-states: a district before the name is still the one city,
+        # "Central & Western District, Hong Kong SAR" or "Hong Kong, Mong Kok".
+        if parts and (parts[-1] in _CITY_QUALIFIERS["hong kong"] - {"china"}
+                      or parts[0] in {"hong kong", "hong kong sar"}):
+            return "hong kong"
+        if parts and parts[-1] == "singapore":
+            return "singapore"
+        if parts:
+            city = _CITY_ALIASES.get(parts[0], parts[0])
+            allowed = _CITY_QUALIFIERS.get(city)
+            if allowed is not None and all(part in allowed for part in parts[1:]):
+                return city
     return place
 
 
@@ -109,6 +155,14 @@ _GENERIC_NAME = frozenset("""
 # merge deletes an employer.
 _MIN_LONE_NAME = 5
 
+# The one exception to `_MIN_LONE_NAME`: the whole name, spelled the same on
+# both sides, is an identity however short -- `UBS` and `UBS`, `SEB` and `SEB`.
+# Not when the name is no name at all.
+_NO_NAME = frozenset("""
+    anonymous confidential company employer private recruiter undisclosed
+    unknown
+""".split())
+
 
 def company_tokens(name: str | None) -> tuple[str, ...]:
     """A company name cut down to the words that say *which* company it is."""
@@ -129,6 +183,8 @@ def same_company(left, right) -> bool:
         for b in rights:
             if not b:
                 continue
+            if a == b and not set(a) <= _GENERIC_NAME | _NO_NAME:
+                return True
             run = 0
             for x, y in zip(a, b):
                 if x != y:
@@ -136,13 +192,44 @@ def same_company(left, right) -> bool:
                 run += 1
             if run >= 2:
                 return True
-            if run == 1 and len(a[0]) >= _MIN_LONE_NAME and a[0] not in _GENERIC_NAME:
+            if (run == 1 and len(a[0]) >= _MIN_LONE_NAME
+                    and a[0] not in _GENERIC_NAME and a[0] not in _NO_NAME):
+                return True
+            if _joined(a, b):
                 return True
     return False
 
 
-def _collapse_groups(cards, groups, key, rank, matches):
-    """Shared clustering, winner selection, counts, deadlines, and cleanup."""
+# A brand written as one word on one side and two on the other: LinkedIn's
+# `JPMorganChase` against the registry's `JPMorgan Chase & Co.`. The one word
+# has to equal a whole leading run of the other side and be long enough to be
+# a name -- the two-word rule with the space removed.
+_MIN_JOINED_NAME = 8
+
+
+def _joined(a: tuple[str, ...], b: tuple[str, ...]) -> bool:
+    for one, many in ((a, b), (b, a)):
+        if not one or len(many) < 2:
+            continue
+        head = one[0]
+        if len(head) < _MIN_JOINED_NAME or head in _GENERIC_NAME:
+            continue
+        built = ""
+        for word in many:
+            built += word
+            if built == head:
+                return True
+            if not head.startswith(built):
+                break
+    return False
+
+
+def _collapse_groups(cards, groups, key, rank, matches, later=None):
+    """Shared clustering, winner selection, counts, deadlines, and cleanup.
+
+    `later`, when given, is a second match applied after `matches` has formed
+    its clusters. It may join two clusters only when no source has a card in
+    both, so one copy cannot chain two of a source's own openings together."""
     dropped: set[int] = set()
     for group in groups.values():
         if len(group) < 2:
@@ -161,6 +248,19 @@ def _collapse_groups(cards, groups, key, rank, matches):
                     continue
                 if matches(group[i][key], group[j][key]):
                     parent[find(i)] = find(j)
+
+        if later is not None:
+            sources: dict[int, set] = {}
+            for i in range(len(group)):
+                sources.setdefault(find(i), set()).add(group[i][key].get("src"))
+            for i in range(len(group)):
+                for j in range(i + 1, len(group)):
+                    a, b = find(i), find(j)
+                    if a == b or sources[a] & sources[b]:
+                        continue
+                    if later(group[i][key], group[j][key]):
+                        parent[a] = b
+                        sources[b] |= sources.pop(a)
 
         clusters: dict[int, list[int]] = {}
         for i in range(len(group)):
@@ -206,7 +306,33 @@ def collapse_across_sources(cards: list[dict], key: str = "xs", rank=None) -> li
         lambda a, b: a["portal"] != b["portal"]
         and bool(a["hubs"] & b["hubs"])
         and same_company(a["names"], b["names"]),
+        later=_two_portals,
     )
+
+
+# Hubs that are one city. `switzerland`, `us other` and `deprioritized` are
+# whole territories, and one firm's title in Zurich and in Geneva is two
+# openings, so there two portals' places have to agree as well.
+CITY_HUBS = frozenset({
+    "stockholm", "copenhagen", "amsterdam", "hong kong", "singapore",
+    "new york", "chicago", "boston",
+})
+
+
+def _two_portals(a: dict, b: dict) -> bool:
+    """Two different portals carrying one opening: eFinancialCareers and
+    LinkedIn both list most Hong Kong recruiters' adverts. A source's own
+    reposts are `collapse`'s question, so the two sources must differ."""
+    if not (a["portal"] and b["portal"]):
+        return False
+    if not a.get("src") or not b.get("src") or a["src"] == b["src"]:
+        return False
+    shared = a["hubs"] & b["hubs"]
+    if not shared:
+        return False
+    if not shared & CITY_HUBS and (not a.get("place") or a.get("place") != b.get("place")):
+        return False
+    return same_company(a["names"], b["names"])
 
 
 class Scores:

@@ -48,6 +48,29 @@ class VisualBundleTest(unittest.TestCase):
         self.assertNotEqual(dedup.bundle_place("Singapore; Hong Kong"), "singapore")
         self.assertNotEqual(dedup.bundle_place("New York; Toronto"), dedup.bundle_place("New York"))
 
+    def test_a_hub_city_written_out_in_full_is_the_city(self):
+        """How LinkedIn, Workday and Jobtech spell the same place, off the
+        board on 21 November 2026: 43 LinkedIn reposts went unstacked on it."""
+        for city, forms in {
+            "hong kong": ("Hong Kong", "Hong Kong SAR", "Hong Kong, Hong Kong SAR",
+                          "Central & Western District, Hong Kong SAR", "Hong Kong, Mong Kok"),
+            "new york": ("New York", "New York, NY", "New York, NY, United States",
+                         "New York City Metropolitan Area", "New York, NY, US, 10019"),
+            "stockholm": ("Stockholm", "Stockholm, Stockholm County, Sweden"),
+            "copenhagen": ("København", "Copenhagen, Capital Region of Denmark, Denmark"),
+            "zurich": ("Zürich, Zurich, Switzerland", "Zurich, ZH"),
+            "singapore": ("Singapore, Singapore",),
+        }.items():
+            for form in forms:
+                with self.subTest(form=form):
+                    self.assertEqual(dedup.bundle_place(form), city)
+
+    def test_a_suburb_or_a_second_city_keeps_its_own_key(self):
+        self.assertNotEqual(dedup.bundle_place("Solna, Stockholm County"), "stockholm")
+        self.assertNotEqual(dedup.bundle_place("Jersey City, NJ, United States"), "new york")
+        self.assertNotEqual(dedup.bundle_place("Zug, Zug, Switzerland"), "zurich")
+        self.assertNotEqual(dedup.bundle_place("London; Hong Kong"), "hong kong")
+
 
 class FingerprintTest(unittest.TestCase):
     def test_the_same_advertisement_twice_is_one_key(self):
@@ -127,9 +150,10 @@ class CollapseTest(unittest.TestCase):
         self.assertEqual([c["t"] for c in dedup.collapse(cards)], ["new"])
 
 
-def _card(title, hubs, names, portal, **rest):
+def _card(title, hubs, names, portal, src=None, place=None, **rest):
     card = {"t": title, "xs": {"t": title, "hubs": frozenset(hubs),
-                               "names": tuple(names), "portal": portal}}
+                               "names": tuple(names), "portal": portal,
+                               "src": src, "place": place}}
     card.update(rest)
     return card
 
@@ -199,6 +223,19 @@ class SameCompanyTest(unittest.TestCase):
         otherwise every `... Capital Management` is every other."""
         self.assertFalse(dedup.same_company(["Tower Research Capital"],
                                             ["Squarepoint Capital"]))
+
+    def test_a_brand_written_as_one_word(self):
+        """LinkedIn's `JPMorganChase` against the registry's spelling: 47 JPMorgan
+        cards on the board twice."""
+        self.assertTrue(dedup.same_company(["JPMorganChase"], ["JPMorgan Chase & Co."]))
+        self.assertFalse(dedup.same_company(["JPMorganChase"], ["JPMorgan"]))
+
+    def test_a_short_name_spelled_the_same_is_one_employer(self):
+        self.assertTrue(dedup.same_company(["UBS"], ["UBS"]))
+        self.assertTrue(dedup.same_company(["SEB"], ["SEB AB"]))
+        self.assertFalse(dedup.same_company(["UBS"], ["UBP"]))
+        self.assertFalse(dedup.same_company(["Confidential"], ["Confidential"]))
+        self.assertFalse(dedup.same_company(["Capital"], ["Capital"]))
 
     def test_any_name_on_either_side_may_match(self):
         """A firm's own board is known by whatever the registries called its
@@ -286,6 +323,42 @@ class CollapseAcrossSourcesTest(unittest.TestCase):
     def test_a_card_with_no_key_is_never_folded(self):
         cards = [{"t": "a"}, {"t": "b"}]
         self.assertEqual(len(dedup.collapse_across_sources(cards, rank=_rank)), 2)
+
+    def test_two_portals_carrying_one_opening_fold(self):
+        """eFinancialCareers and LinkedIn both list the Hong Kong recruiters'
+        adverts: 173 pairs on the board of 21 November 2026."""
+        cards = [_card("quant researcher", ["hong kong"], ["Bullish"], True, src="efinancial"),
+                 _card("quant researcher", ["hong kong"], ["Bullish"], True, src="linkedin")]
+        out = dedup.collapse_across_sources(cards, rank=_rank)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["dup"], 2)
+
+    def test_one_portal_twice_is_left_to_the_fingerprint(self):
+        cards = [_card("quant researcher", ["hong kong"], ["Bullish"], True, src="linkedin"),
+                 _card("quant researcher", ["hong kong"], ["Bullish"], True, src="linkedin")]
+        self.assertEqual(len(dedup.collapse_across_sources(cards, rank=_rank)), 2)
+
+    def test_two_portals_in_a_territory_must_name_one_place(self):
+        zurich = _card("trader", ["switzerland"], ["Torq"], True, src="jobroom", place="zurich")
+        geneva = _card("trader", ["switzerland"], ["Torq"], True, src="linkedin", place="geneva")
+        self.assertEqual(len(dedup.collapse_across_sources([zurich, geneva], rank=_rank)), 2)
+        zurich = _card("trader", ["switzerland"], ["Torq"], True, src="jobroom", place="zurich")
+        also = _card("trader", ["switzerland"], ["Torq"], True, src="linkedin", place="zurich")
+        self.assertEqual(len(dedup.collapse_across_sources([zurich, also], rank=_rank)), 1)
+
+    def test_one_copy_cannot_chain_two_openings_of_a_source(self):
+        """A recruiter with two `Quantitative Researcher` seats in New York on
+        eFinancialCareers and one LinkedIn copy: the copy joins one of them,
+        and the two seats stay two cards."""
+        cards = [_card("quantitative researcher", ["new york"], ["Anson McCade"], True,
+                       src="efinancial", id="a"),
+                 _card("quantitative researcher", ["new york"], ["Anson McCade"], True,
+                       src="efinancial", id="b"),
+                 _card("quantitative researcher", ["new york"], ["Anson McCade"], True,
+                       src="linkedin", id="l")]
+        out = dedup.collapse_across_sources(cards, rank=_rank)
+        self.assertEqual(len(out), 2)
+        self.assertEqual(sum(c.get("dup", 1) for c in out), 3)
 
     def test_counts_from_the_first_pass_survive_the_second(self):
         """`collapse` runs first and may already have folded reposts into a

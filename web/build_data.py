@@ -1076,6 +1076,8 @@ def _build(connection) -> None:
             "hubs": frozenset(job.get("hub") or ("unstated",)),
             "names": (row["employer"], firms[key]["name"], *names.get(domain, ())),
             "portal": row["ats"] in dedup.PORTALS,
+            "src": row["ats"],
+            "place": dedup.bundle_place(row["location"] or ""),
         }
         # **And what the near-duplicate fold needs**, which is `fingerprint`'s
         # own group with the body kept rather than hashed -- see `dedup`'s

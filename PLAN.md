@@ -714,3 +714,41 @@ Requested: finish Stage 69, then look for speed.
 - 1,337 tests pass.
 - Not done: a publish; alternating the six non-priority hubs by week (about an
   hour saved, the user's call); Common Crawl; a BrassRing reader.
+
+## Stage 72 — fewer duplicates on the board
+
+Requested: fewer duplicate cards before the publish; a nice-to-have.
+
+- Measured as a reader sees it: board units (after the page's own stacking)
+  sharing a folded title, a hub and an employer with another unit. 509 on the
+  21 November database. Three causes made up most of them:
+  - Two portals carrying one opening (eFinancialCareers and LinkedIn 173,
+    LinkedIn with MyCareersFuture, Workable, Jobbsafari, Jobroom, Jobindex,
+    Jobtech). The cross-source fold paired a portal only with a firm's own board.
+  - One brand in one word: LinkedIn's `JPMorganChase` against `JPMorgan Chase &
+    Co.` (47); and short names (`UBS`, `SEB`) below the five-letter lone-word rule.
+  - One city spelled several ways: "Hong Kong, Hong Kong SAR", "Hong Kong SAR",
+    "Central & Western District, Hong Kong SAR" did not stack.
+- `collapse_across_sources` now also folds two portals when they are different
+  sources, share a city hub (or, in a territory hub such as `switzerland`, the
+  same place) and name one employer. This runs after the old fold and may join
+  two clusters only when no source has a card in both, so one copy cannot chain
+  two of a recruiter's openings into one card.
+- `same_company` accepts a one-word brand equal to the other side's leading run
+  (eight letters or more) and an identical whole name however short; placeholder
+  names (`Confidential`) match nothing.
+- `bundle_place` drops a city's own region and country parts after a comma for
+  the hub cities and London, and reads any district of Hong Kong or Singapore as
+  the city. Stacks only; nothing is removed by it.
+- Same database, old code against new: 9,079 → 8,697 cards, 509 → 129 visible
+  duplicates. Every removed card folded into a surviving copy, which carries
+  the count. 382 folds: 333 LinkedIn, 26 eFinancialCareers, 12 Jobbsafari.
+- 1,345 tests pass.
+- In 71 folds the copy kept is rated lower than one folded into it: the kept
+  copy's rating came from its description, the other's from its title alone.
+  Kept, as the Stage 71 rule (a body read beats a title guess) does for firms'
+  boards. Checked by hand: "Staff" and experienced seats read lower once read.
+- Left as two cards on purpose: the same title in two cities (DBS Beijing and
+  Shenzhen, Qube London and Dubai), Citadel and Citadel Securities, and portal
+  copies whose places differ inside a territory hub (Weehawken vs Weehawken
+  Township; Gland, VD vs Gland, Vaud).
